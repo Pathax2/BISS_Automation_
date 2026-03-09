@@ -28,6 +28,13 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.Duration;
 import java.util.logging.Logger;
+import io.github.bonigarcia.wdm.WebDriverManager;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.support.ui.WebDriverWait;
+
+import java.time.Duration;
 
 public class CommonFunctions
 {
@@ -626,4 +633,38 @@ public class CommonFunctions
         return iValue;
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : launchBrowser
+    // Description   : Launches Chrome browser using WebDriverManager which automatically downloads correct ChromeDriver
+    // Parameters    : None
+    // Author        : Aniket Pathare
+    // Date Created  : 09-03-2026
+    // ***************************************************************************************************************************************************************************************
+
+    public static void launchBrowser()
+    {
+        try
+        {
+            if (iDriver == null)
+            {
+                // Automatically downloads correct driver
+                WebDriverManager.chromedriver().setup();
+
+                ChromeOptions iChromeOptions = new ChromeOptions();
+
+                iChromeOptions.addArguments("--start-maximized");
+                iChromeOptions.addArguments("--disable-notifications");
+                iChromeOptions.addArguments("--disable-infobars");
+                iChromeOptions.addArguments("--disable-extensions");
+
+                iDriver = new ChromeDriver(iChromeOptions);
+
+                iWait = new WebDriverWait(iDriver, Duration.ofSeconds(20));
+            }
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Browser launch failed : " + iException.getMessage());
+        }
+    }
 }
