@@ -1,7 +1,8 @@
-Feature: Staff Login
+Feature: Login Into the application
 
   Scenario: Verify user can login
-    Given user launches login page
-    When user enters "Username" into "login.username.id"
-    And user enters "Password" into "login.password.id"
-    And user clicks on "login.button.id"
+    Given User Launches the application
+    When user enters valid "Username"
+    And user enters valid "Password"
+    And user clicks on Login button
+    Then User should be successfully able to login
