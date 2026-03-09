@@ -1,4 +1,4 @@
-package Database;
+package database;
 
-public class CommonFunctions {
+public class DBConnection {
 }
