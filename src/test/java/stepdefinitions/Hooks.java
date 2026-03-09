@@ -1,24 +1,11 @@
 package stepdefinitions;
 
 import commonFunctions.CommonFunctions;
-import io.cucumber.java.After;
 import io.cucumber.java.AfterAll;
-import io.cucumber.java.Before;
 import io.cucumber.java.BeforeAll;
-import io.cucumber.java.Scenario;
-import io.github.bonigarcia.wdm.WebDriverManager;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.openqa.selenium.chrome.ChromeDriver;
-import org.openqa.selenium.chrome.ChromeOptions;
-import org.openqa.selenium.support.ui.WebDriverWait;
-
-import java.time.Duration;
 
 public class Hooks
 {
-    public static XWPFDocument iDocument;
-    public static String iDocPath = "";
-    public static String iTestCaseID = "";
     public static String iUrl = "";
     public static String iModel = "";
 
@@ -38,13 +25,7 @@ public class Hooks
             iUrl = System.getProperty("url", "").trim();
             iModel = System.getProperty("model", "").trim();
 
-            WebDriverManager.chromedriver().setup();
-
-            ChromeOptions iChromeOptions = new ChromeOptions();
-            iChromeOptions.addArguments("--start-maximized");
-
-            CommonFunctions.iDriver = new ChromeDriver(iChromeOptions);
-            CommonFunctions.iWait = new WebDriverWait(CommonFunctions.iDriver, Duration.ofSeconds(20));
+            CommonFunctions.launchBrowser();
 
             if (!iUrl.isEmpty())
             {
