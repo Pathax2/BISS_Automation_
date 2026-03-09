@@ -22,7 +22,7 @@ public class ObjectRepositoryReader
     }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : getLocatorValue
+    // FunctionS Name : getLocatorValue
     // Description   : Returns locator value from Object Repository based on the supplied key
     // Parameters    : iKey (String) - locator key from ObjectRepository.properties
     // Author        : Aniket Pathare | aniket.pathare

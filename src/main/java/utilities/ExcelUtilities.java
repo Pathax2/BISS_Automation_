@@ -72,7 +72,7 @@ public class ExcelUtilities
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : readEnvironmentConfigSheet
-    // Description   : Reads Config sheet from TestData.xlsx and creates environment to URL mapping
+    // DescriptionS   : Reads Config sheet from TestData.xlsx and creates environment to URL mapping
     // Parameters    : iTestDataFilePath (String) - full path of TestData.xlsx
     // Author        : Aniket Pathare | aniket.pathare
     // Precondition  : TestData.xlsx should exist and contain Config sheet with Env and URL columns
