@@ -16,11 +16,9 @@ public class TestRunner
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : executeSelectedTestCases
-    // Description   : Reads execution control, loads current test data row based on selected TestCase_ID,
-    //                 resolves matching feature files, and executes them one by one using Cucumber CLI
+    // Description   : Reads execution control, loads current test data row, resolves URL from Config using Environment, and executes feature
     // Parameters    : None
     // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : ExecutionControl.xlsx, TestData.xlsx, and feature files should be available in expected folders
     // Date Created  : 09-03-2026
     // ***************************************************************************************************************************************************************************************
     @Test
@@ -29,12 +27,10 @@ public class TestRunner
         try
         {
             List<Map<String, String>> iExecutionRows = ExcelUtilities.readExecutionControlSheet(iControlFilePath);
-            Map<String, String> iEnvironmentUrlMap = ExcelUtilities.readEnvironmentConfigSheet(iTestDataFilePath);
 
             if (iExecutionRows.isEmpty())
             {
-                System.out.println("[INFO] No rows found in ExecutionControl.xlsx");
-                return;
+                throw new RuntimeException("No rows found in ExecutionControl.xlsx");
             }
 
             for (Map<String, String> iRowData : iExecutionRows)
@@ -42,11 +38,9 @@ public class TestRunner
                 String iExecutionFlag = iRowData.getOrDefault("Execution", "").trim();
                 String iTestCaseID = iRowData.getOrDefault("TestCase_ID", "").trim();
                 String iEnvironment = iRowData.getOrDefault("Environment", "").trim();
-                String iModelName = iRowData.getOrDefault("Model", "").trim();
 
                 if (!iExecutionFlag.equalsIgnoreCase("Y"))
                 {
-                    System.out.println("[SKIPPED] " + iTestCaseID + " because Execution flag is not Y");
                     continue;
                 }
 
@@ -55,14 +49,14 @@ public class TestRunner
                     throw new RuntimeException("TestCase_ID is blank in Execution Control row");
                 }
 
-                if (!iEnvironmentUrlMap.containsKey(iEnvironment))
+                if (iEnvironment.isEmpty())
                 {
-                    throw new RuntimeException("No URL found in Config sheet for environment : " + iEnvironment + " | TestCase : " + iTestCaseID);
+                    throw new RuntimeException("Environment is blank in Execution Control row for TestCase_ID : " + iTestCaseID);
                 }
 
+                String iUrl = ExcelUtilities.getUrlByEnvironment(iTestDataFilePath, iEnvironment);
                 ExcelUtilities.loadCurrentTestDataRow(iTestDataFilePath, iTestCaseID);
 
-                String iUrl = iEnvironmentUrlMap.get(iEnvironment);
                 File iFeatureFile = ExcelUtilities.findFeatureFile(iFeatureDirectoryPath, iTestCaseID);
 
                 if (iFeatureFile == null)
@@ -70,17 +64,15 @@ public class TestRunner
                     throw new RuntimeException("No feature file found for TestCase_ID : " + iTestCaseID);
                 }
 
+                System.setProperty("testcase", iTestCaseID);
+                System.setProperty("url", iUrl);
+                System.setProperty("env", iEnvironment);
+
                 System.out.println("------------------------------------------------------------------------------------------------------------------");
                 System.out.println("[RUNNING] TestCase_ID : " + iTestCaseID);
                 System.out.println("[INFO] Environment : " + iEnvironment);
                 System.out.println("[INFO] URL         : " + iUrl);
-                System.out.println("[INFO] Model       : " + iModelName);
                 System.out.println("[INFO] Feature     : " + iFeatureFile.getAbsolutePath());
-
-                System.setProperty("testcase", iTestCaseID);
-                System.setProperty("url", iUrl);
-                System.setProperty("env", iEnvironment);
-                System.setProperty("model", iModelName);
 
                 byte iExitStatus = Main.run(
                         new String[]
@@ -89,21 +81,18 @@ public class TestRunner
                                         "--glue", "stepdefinitions",
                                         "--plugin", "pretty",
                                         "--plugin", "summary",
-                                        "--plugin", "io.qameta.allure.cucumber7jvm.AllureCucumber7Jvm",
                                         "--plugin", "html:target/cucumber-reports/" + iTestCaseID + ".html",
                                         "--plugin", "json:target/cucumber-json/" + iTestCaseID + ".json"
                                 },
                         Thread.currentThread().getContextClassLoader()
                 );
 
-                if (iExitStatus == 0)
-                {
-                    System.out.println("[PASS] " + iTestCaseID);
-                }
-                else
+                if (iExitStatus != 0)
                 {
                     throw new RuntimeException("Execution failed for TestCase_ID : " + iTestCaseID);
                 }
+
+                break;
             }
         }
         catch (Exception iException)

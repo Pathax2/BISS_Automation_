@@ -22,7 +22,6 @@ public class ExcelUtilities
     // Description   : Reads ExecutionControl.xlsx and stores each row as key-value data using header names
     // Parameters    : iControlFilePath (String) - full path of ExecutionControl.xlsx
     // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : Excel file should exist and contain a valid header row
     // Date Created  : 09-03-2026
     // ***************************************************************************************************************************************************************************************
     public static List<Map<String, String>> readExecutionControlSheet(String iControlFilePath)
@@ -71,16 +70,15 @@ public class ExcelUtilities
     }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : readEnvironmentConfigSheet
-    // DescriptionS   : Reads Config sheet from TestData.xlsx and creates environment to URL mapping
+    // Function Name : getUrlByEnvironment
+    // Description   : Reads Config sheet from TestData.xlsx and returns URL for the supplied environment
     // Parameters    : iTestDataFilePath (String) - full path of TestData.xlsx
+    //                 iEnvironment (String) - environment value from ExecutionControl sheet like QA/UAT
     // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : TestData.xlsx should exist and contain Config sheet with Env and URL columns
     // Date Created  : 09-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static Map<String, String> readEnvironmentConfigSheet(String iTestDataFilePath)
+    public static String getUrlByEnvironment(String iTestDataFilePath, String iEnvironment)
     {
-        Map<String, String> iEnvironmentUrlMap = new HashMap<>();
         DataFormatter iDataFormatter = new DataFormatter();
 
         try (FileInputStream iFileInputStream = new FileInputStream(iTestDataFilePath);
@@ -111,8 +109,7 @@ public class ExcelUtilities
                 {
                     iEnvColumnIndex = iColumnIndex;
                 }
-
-                if (iColumnName.equalsIgnoreCase("URL"))
+                else if (iColumnName.equalsIgnoreCase("URL"))
                 {
                     iUrlColumnIndex = iColumnIndex;
                 }
@@ -132,21 +129,25 @@ public class ExcelUtilities
                     continue;
                 }
 
-                String iEnvironment = iDataFormatter.formatCellValue(iCurrentRow.getCell(iEnvColumnIndex)).trim();
+                String iExcelEnvironment = iDataFormatter.formatCellValue(iCurrentRow.getCell(iEnvColumnIndex)).trim();
                 String iUrl = iDataFormatter.formatCellValue(iCurrentRow.getCell(iUrlColumnIndex)).trim();
 
-                if (!iEnvironment.isEmpty() && !iUrl.isEmpty())
+                if (iExcelEnvironment.equalsIgnoreCase(iEnvironment.trim()))
                 {
-                    iEnvironmentUrlMap.put(iEnvironment, iUrl);
+                    if (iUrl.isEmpty())
+                    {
+                        throw new RuntimeException("URL is blank in Config sheet for environment : " + iEnvironment);
+                    }
+                    return iUrl;
                 }
             }
         }
         catch (Exception iException)
         {
-            throw new RuntimeException("Unable to read Config sheet from TestData.xlsx : " + iException.getMessage(), iException);
+            throw new RuntimeException("Unable to read URL from Config sheet for environment : " + iEnvironment + " | Reason : " + iException.getMessage(), iException);
         }
 
-        return iEnvironmentUrlMap;
+        throw new RuntimeException("No matching environment found in Config sheet for : " + iEnvironment);
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -155,7 +156,6 @@ public class ExcelUtilities
     // Parameters    : iTestDataFilePath (String) - full path of TestData.xlsx
     //                 iTestCaseID (String) - current TestCase_ID selected from Execution Control
     // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : Data sheet should contain TestCase_ID column
     // Date Created  : 09-03-2026
     // ***************************************************************************************************************************************************************************************
     public static void loadCurrentTestDataRow(String iTestDataFilePath, String iTestCaseID)
@@ -235,7 +235,6 @@ public class ExcelUtilities
     // Description   : Returns the value from current loaded TestData row based on column name
     // Parameters    : iColumnName (String) - column name from Data sheet
     // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : Current test data row should already be loaded
     // Date Created  : 09-03-2026
     // ***************************************************************************************************************************************************************************************
     public static String getCurrentTestDataValue(String iColumnName)
@@ -256,7 +255,6 @@ public class ExcelUtilities
     // Parameters    : iFeatureDirectoryPath (String) - path of feature directory
     //                 iTestCaseID (String) - test case id to search in feature file names
     // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : Feature directory should exist and contain .feature files
     // Date Created  : 09-03-2026
     // ***************************************************************************************************************************************************************************************
     public static File findFeatureFile(String iFeatureDirectoryPath, String iTestCaseID)

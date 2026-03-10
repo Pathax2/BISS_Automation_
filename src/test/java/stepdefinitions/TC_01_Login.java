@@ -9,14 +9,6 @@ import utilities.ObjectRepositoryReader;
 
 public class TC_01_Login
 {
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : userLaunchesTheApplication
-    // Description   : Launches application URL from Config sheet loaded through TestRunner
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : URL should already be loaded from TestData Config sheet into runtime property
-    // Date Created  : 09-03-2026
-    // ***************************************************************************************************************************************************************************************
     @Given("User Launches the application")
     public void userLaunchesTheApplication()
     {
@@ -30,14 +22,6 @@ public class TC_01_Login
         CommonFunctions.iDriver.get(iApplicationURL);
     }
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : userEntersValid
-    // Description   : Enters value from current TestData row into the target field using actual column name from feature file
-    // Parameters    : iColumnName (String) - actual column name from TestData sheet like Username or Password
-    // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : Current TestData row should already be loaded for executing TestCase_ID
-    // Date Created  : 09-03-2026
-    // ***************************************************************************************************************************************************************************************
     @When("user enters valid {string}")
     public void userEntersValid(String iColumnName)
     {
@@ -61,14 +45,6 @@ public class TC_01_Login
         }
     }
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : userClicksOnLoginButton
-    // Description   : Clicks on login button using object repository
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : Login button locator should be available in ObjectRepository.properties
-    // Date Created  : 09-03-2026
-    // ***************************************************************************************************************************************************************************************
     @And("user clicks on Login button")
     public void userClicksOnLoginButton()
     {
@@ -78,14 +54,6 @@ public class TC_01_Login
         CommonFunctions.iAction("CLICK", iLocatorType, iLocatorValue, "");
     }
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : userShouldBeSuccessfullyAbleToLogin
-    // Description   : Verifies login success using current URL check after clicking login
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare
-    // Precondition  : Login action should already be completed
-    // Date Created  : 09-03-2026
-    // ***************************************************************************************************************************************************************************************
     @Then("User should be successfully able to login")
     public void userShouldBeSuccessfullyAbleToLogin()
     {
