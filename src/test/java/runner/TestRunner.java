@@ -15,7 +15,7 @@ public class TestRunner
     // Description   : Reads execution control file, executes all rows where Execution = Y, passes values to hooks
     //                 and updates status column as PASS or FAIL
     // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // ***************************************************************************************************************************************************************************************
     @Test
     public void executeSelectedTestCases()
@@ -27,7 +27,7 @@ public class TestRunner
     // Function Name : main
     // Description   : Main method added for direct execution support
     // Parameters    : pArgs (String[]) - command line arguments
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // ***************************************************************************************************************************************************************************************
     public static void main(String[] pArgs)
     {
@@ -38,7 +38,7 @@ public class TestRunner
     // Function Name : runFrameworkExecution
     // Description   : Common execution method used by both JUnit and main method
     // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // ***************************************************************************************************************************************************************************************
     private static void runFrameworkExecution()
     {
@@ -60,6 +60,7 @@ public class TestRunner
                 iAnyExecutionFound = true;
 
                 String iTestCaseID = iExecutionExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "TestCase_ID").trim();
+                System.out.println(iTestCaseID);
                 String iEnvironment = iExecutionExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Environment").trim();
 
                 if (iTestCaseID.isEmpty())
