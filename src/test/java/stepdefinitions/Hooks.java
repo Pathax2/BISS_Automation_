@@ -90,7 +90,7 @@ public class Hooks
     // ***************************************************************************************************************************************************************************************
     // Function Name : afterScenarioExecution
     // Description   : Executes after every scenario. Adds screenshot to report if scenario fails
-    // Parameters    : pScenario (Scenario) - current scenario
+    // Parameters    : pScenario (Scenario) - current scenarios
     // Author        : Aniket Pathare | 20050492@mydbs.ie
     // ***************************************************************************************************************************************************************************************
     @After
