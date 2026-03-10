@@ -1,74 +1,152 @@
 package stepdefinitions;
 
 import commonFunctions.CommonFunctions;
-import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
-import utilities.ObjectRepositoryReader;
 
 public class TC_01_Login
 {
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : launchApplication
+    // Description   : Verifies that application launch step is executed. Browser launch and URL navigation
+    //                 are already handled inside Hooks.java BeforeAll method.
+    // Parameters    : None
+    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Precondition  : Hooks should have already launched browser and opened the application URL
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
     @Given("User Launches the application")
-    public void userLaunchesTheApplication()
+    public void launchApplication()
     {
-        String iApplicationURL = System.getProperty("url");
-
-        if (iApplicationURL == null || iApplicationURL.trim().isEmpty())
+        try
         {
-            throw new RuntimeException("Application URL is blank. Please check Config sheet in TestData.xlsx and TestRunner loading.");
+            CommonFunctions.log.info("Application launch step executed successfully.");
         }
-
-        CommonFunctions.iDriver.get(iApplicationURL);
+        catch (Exception e)
+        {
+            throw new RuntimeException("Failed during application launch step: " + e.getMessage(), e);
+        }
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : enterUsername
+    // Description   : Enters username into username textbox. Username value is fetched from TestData.xlsx
+    //                 using TD:Username mapping
+    // Parameters    : pColumnName (String) - column name from feature file (Username)
+    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Precondition  : Username textbox should be present on the login page
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
     @When("user enters valid {string}")
-    public void userEntersValid(String iColumnName)
+    public void enterUsername(String pColumnName)
     {
-        if (iColumnName.equalsIgnoreCase("Username"))
+        try
         {
-            String iLocatorType = ObjectRepositoryReader.getLocatorType("login.username.id");
-            String iLocatorValue = ObjectRepositoryReader.getLocatorValue("login.username.id");
+            CommonFunctions.iAction(
+                    "TEXTBOX",
+                    "ID",
+                    "username",
+                    "TD:" + pColumnName
+            );
 
-            CommonFunctions.iAction("TEXTBOX", iLocatorType, iLocatorValue, "TD:Username");
+            CommonFunctions.log.info("Username entered successfully using column: " + pColumnName);
         }
-        else if (iColumnName.equalsIgnoreCase("Password"))
+        catch (Exception e)
         {
-            String iLocatorType = ObjectRepositoryReader.getLocatorType("login.password.id");
-            String iLocatorValue = ObjectRepositoryReader.getLocatorValue("login.password.id");
-
-            CommonFunctions.iAction("TEXTBOX", iLocatorType, iLocatorValue, "TD:Password");
-        }
-        else
-        {
-            throw new RuntimeException("Unsupported column passed in feature file : " + iColumnName);
+            throw new RuntimeException("Failed while entering username: " + e.getMessage(), e);
         }
     }
 
-    @And("user clicks on Login button")
-    public void userClicksOnLoginButton()
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : enterPassword
+    // Description   : Enters password into password textbox. Password value is fetched from TestData.xlsx
+    //                 using TD:Password mapping
+    // Parameters    : pColumnName (String) - column name from feature file (Password)
+    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Precondition  : Password textbox should be present on the login page
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("user enters valid {string}")
+    public void enterPassword(String pColumnName)
     {
-        String iLocatorType = ObjectRepositoryReader.getLocatorType("login.button.id");
-        String iLocatorValue = ObjectRepositoryReader.getLocatorValue("login.button.id");
+        try
+        {
+            CommonFunctions.iAction(
+                    "TEXTBOX",
+                    "ID",
+                    "password",
+                    "TD:" + pColumnName
+            );
 
-        CommonFunctions.iAction("CLICK", iLocatorType, iLocatorValue, "");
+            CommonFunctions.log.info("Password entered successfully using column: " + pColumnName);
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException("Failed while entering password: " + e.getMessage(), e);
+        }
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : clickLoginButton
+    // Description   : Clicks the login button on the login page
+    // Parameters    : None
+    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Precondition  : Login button should be visible and clickable
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("user clicks on Login button")
+    public void clickLoginButton()
+    {
+        try
+        {
+            CommonFunctions.iAction(
+                    "CLICK",
+                    "ID",
+                    "loginButton",
+                    ""
+            );
+
+            CommonFunctions.log.info("Login button clicked successfully.");
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException("Failed while clicking login button: " + e.getMessage(), e);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : verifyLoginSuccessful
+    // Description   : Verifies that user is logged into the application by checking presence of dashboard element
+    // Parameters    : None
+    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Precondition  : Successful login should redirect user to dashboard/home page
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
     @Then("User should be successfully able to login")
-    public void userShouldBeSuccessfullyAbleToLogin()
+    public void verifyLoginSuccessful()
     {
-        String iCurrentURL = CommonFunctions.iDriver.getCurrentUrl();
-
-        if (iCurrentURL == null || iCurrentURL.trim().isEmpty())
+        try
         {
-            throw new AssertionError("Login validation failed because current URL is blank.");
-        }
+            String iDashboardText = CommonFunctions.iAction(
+                    "GETTEXT",
+                    "ID",
+                    "dashboard",
+                    ""
+            );
 
-        if (iCurrentURL.toLowerCase().contains("login"))
+            if (iDashboardText == null || iDashboardText.isEmpty())
+            {
+                throw new AssertionError("Login verification failed. Dashboard text not found.");
+            }
+
+            CommonFunctions.log.info("Login verified successfully. Dashboard text: " + iDashboardText);
+        }
+        catch (Exception e)
         {
-            throw new AssertionError("Login validation failed. User is still on login page. Current URL : " + iCurrentURL);
+            throw new RuntimeException("Login verification failed: " + e.getMessage(), e);
         }
-
-        System.out.println("Login successful. Current URL after login : " + iCurrentURL);
     }
+
 }
