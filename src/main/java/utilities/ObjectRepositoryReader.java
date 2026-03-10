@@ -4,10 +4,10 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.Properties;
 
-public class ObjectRepositoryReader
+public class ObjReader
 {
     private static final Properties iProperties = new Properties();
-    private static final String iObjectRepositoryPath = "src/test/resources/ObjectRepository/ObjectRepository.properties";
+    private static final String iObjectRepositoryPath = "src/test/resources/Object_Repository/ObjectRepository.properties";
 
     static
     {
