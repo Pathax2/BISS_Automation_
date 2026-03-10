@@ -21,7 +21,7 @@ public class ExcelUtilities
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : ExcelUtilities
-    // Description   : Constructor used to initialize excel file path
+    // Description   : Constructor used to initiaulize excel file path
     // Parameters    : pFilePath (String) - excel file path
     // Author        : Aniket Pathare | 20050492@mydbs.ie
     // Date Created  : 10-03-2026
