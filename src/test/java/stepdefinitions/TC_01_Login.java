@@ -4,14 +4,14 @@ import commonFunctions.CommonFunctions;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
-
+import utilities.ObjReader;
 public class TC_01_Login
 {
     // ***************************************************************************************************************************************************************************************
     // Function Name : launchApplication
     // Description   : Launch application step. Actual browser launch already happens in hooks.
     // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // ***************************************************************************************************************************************************************************************
     @Given("User Launches the application")
     public void launchApplication()
@@ -23,7 +23,7 @@ public class TC_01_Login
     // Function Name : enterValidFieldValue
     // Description   : Enters username or password based on feature file input
     // Parameters    : pColumnName (String) - Username or Password
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // ***************************************************************************************************************************************************************************************
     @When("user enters valid {string}")
     public void enterValidFieldValue(String pColumnName)
@@ -32,12 +32,15 @@ public class TC_01_Login
         {
             if (pColumnName.equalsIgnoreCase("Username"))
             {
-                CommonFunctions.iAction("TEXTBOX", "ID", "username", "TD:Username");
+                CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocatorValue("iWelcomeLoginBtn"),"");
+                CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocatorValue("iUsernametxtbox"), "TD:Username");
                 CommonFunctions.log.info("Username entered successfully.");
+
+                CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocatorValue("iUsernameContinuebtn"),"");
             }
             else if (pColumnName.equalsIgnoreCase("Password"))
             {
-                CommonFunctions.iAction("TEXTBOX", "ID", "password", "TD:Password");
+                CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocatorValue("iPasswordtxtbox"), "TD:Password");
                 CommonFunctions.log.info("Password entered successfully.");
             }
             else
@@ -55,15 +58,18 @@ public class TC_01_Login
     // Function Name : clickLoginButton
     // Description   : Clicks login button
     // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // ***************************************************************************************************************************************************************************************
     @When("user clicks on Login button")
     public void clickLoginButton()
     {
         try
         {
-            CommonFunctions.iAction("CLICK", "ID", "loginButton", "");
+            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocatorValue("iLoginbtn"),"");
             CommonFunctions.log.info("Login button clicked successfully.");
+            CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocatorValue("iOPTtxtbox"), "111111");
+            CommonFunctions.log.info("Microsoft Authenticator one-time code  entered successfully.");
+
         }
         catch (Exception iException)
         {
@@ -75,14 +81,14 @@ public class TC_01_Login
     // Function Name : verifyLoginSuccessful
     // Description   : Verifies login success by checking dashboard element text
     // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // ***************************************************************************************************************************************************************************************
     @Then("User should be successfully able to login")
     public void verifyLoginSuccessful()
     {
         try
         {
-            String iDashboardText = CommonFunctions.iAction("GETTEXT", "ID", "dashboard", "");
+            String iDashboardText = CommonFunctions.iAction("GETTEXT", "XPATH", ObjReader.getLocatorValue("iLoginbtn"),"");
 
             if (iDashboardText == null || iDashboardText.trim().isEmpty())
             {
