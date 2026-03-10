@@ -1,422 +1,320 @@
 package utilities;
 
+import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 
-import java.io.File;
 import java.io.FileInputStream;
-import java.util.ArrayList;
+import java.io.FileOutputStream;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 public class ExcelUtilities
 {
-    // ***************************************************************************************************************************************************************************************
-    // Variable Name : iCurrentTestDataRow
-    // Description   : Stores currently selected test case row data from Data sheet so that step definitions can use it directly
-    // ***************************************************************************************************************************************************************************************
+    private final String iFilePath;
+    private final DataFormatter iDataFormatter = new DataFormatter();
+
     public static Map<String, String> iCurrentTestDataRow = new HashMap<>();
 
     // ***************************************************************************************************************************************************************************************
-    // Variable Name : iDataFormatter
-    // Description   : Apache POI formatter used to safely read Excel cell values as String
-    // ***************************************************************************************************************************************************************************************
-    private static final DataFormatter iDataFormatter = new DataFormatter();
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : readExecutionControlSheet
-    // Description   : Reads ExecutionControl.xlsx first sheet and stores each data row in key-value format using header names
-    // Parameters    : pControlFilePath (String) - full path of ExecutionControl.xlsx
+    // Function Name : ExcelUtilities
+    // Description   : Constructor used to initialize excel file path
+    // Parameters    : pFilePath (String) - excel file path
     // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : Excel file should exist and first row should contain valid headers
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static List<Map<String, String>> readExecutionControlSheet(String pControlFilePath)
+    public ExcelUtilities(String pFilePath)
     {
-        List<Map<String, String>> iExecutionRows = new ArrayList<>();
-
-        try (FileInputStream iFileInputStream = new FileInputStream(pControlFilePath);
-             Workbook iWorkbook = WorkbookFactory.create(iFileInputStream))
-        {
-            // Taking first sheet because ExecutionControl workbook usually keeps control data in the first sheet
-            Sheet iSheet = iWorkbook.getSheetAt(0);
-
-            if (iSheet == null)
-            {
-                throw new RuntimeException("Execution Control sheet is not present in file : " + pControlFilePath);
-            }
-
-            Row iHeaderRow = iSheet.getRow(0);
-
-            if (iHeaderRow == null)
-            {
-                throw new RuntimeException("Header row is missing in Execution Control sheet.");
-            }
-
-            // Loop through all rows after header
-            for (int iRowIndex = 1; iRowIndex <= iSheet.getLastRowNum(); iRowIndex++)
-            {
-                Row iCurrentRow = iSheet.getRow(iRowIndex);
-
-                // Skip null rows
-                if (iCurrentRow == null)
-                {
-                    continue;
-                }
-
-                // Skip completely blank rows
-                if (isRowCompletelyBlank(iCurrentRow, iHeaderRow.getLastCellNum()))
-                {
-                    continue;
-                }
-
-                Map<String, String> iRowData = new HashMap<>();
-
-                // Read each column using header as key
-                for (int iColumnIndex = 0; iColumnIndex < iHeaderRow.getLastCellNum(); iColumnIndex++)
-                {
-                    String iHeaderName = getCellValue(iHeaderRow, iColumnIndex).trim();
-                    String iCellValue = getCellValue(iCurrentRow, iColumnIndex).trim();
-
-                    // Only store if header is not blank
-                    if (!iHeaderName.isEmpty())
-                    {
-                        iRowData.put(iHeaderName, iCellValue);
-                    }
-                }
-
-                iExecutionRows.add(iRowData);
-            }
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Unable to read ExecutionControl.xlsx. Reason : " + iException.getMessage(), iException);
-        }
-
-        return iExecutionRows;
+        this.iFilePath = pFilePath;
     }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : getUrlByEnvironment
-    // Description   : Reads Config sheet from TestData.xlsx and returns the URL matching the given environment value
-    // Parameters    : pTestDataFilePath (String) - full path of TestData.xlsx
-    //                 pEnvironment (String) - environment value from ExecutionControl sheet such as QA, UAT, PROD
+    // Function Name : getRowCount
+    // Description   : Returns last data row count from the given sheet
+    // Parameters    : pSheetName (String) - sheet name
     // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : Config sheet should contain Env and URL columns
-    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static String getUrlByEnvironment(String pTestDataFilePath, String pEnvironment)
+    public int getRowCount(String pSheetName)
     {
-        try (FileInputStream iFileInputStream = new FileInputStream(pTestDataFilePath);
-             Workbook iWorkbook = WorkbookFactory.create(iFileInputStream))
+        try (FileInputStream iInputStream = new FileInputStream(iFilePath);
+             Workbook iWorkbook = WorkbookFactory.create(iInputStream))
         {
-            Sheet iConfigSheet = iWorkbook.getSheet("Config");
+            Sheet iSheet = iWorkbook.getSheet(pSheetName);
 
-            if (iConfigSheet == null)
+            if (iSheet == null)
             {
-                throw new RuntimeException("Config sheet not found in TestData.xlsx");
+                throw new RuntimeException("Sheet not found : " + pSheetName);
             }
 
-            Row iHeaderRow = iConfigSheet.getRow(0);
+            return iSheet.getLastRowNum();
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Unable to get row count from sheet : " + pSheetName + " | Reason : " + iException.getMessage(), iException);
+        }
+    }
 
-            if (iHeaderRow == null)
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getCellValue
+    // Description   : Returns cell value using row number and column name
+    // Parameters    : pSheetName (String) - sheet name
+    //                 pRowNumber (int) - row number
+    //                 pColumnName (String) - column header
+    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // ***************************************************************************************************************************************************************************************
+    public String getCellValue(String pSheetName, int pRowNumber, String pColumnName)
+    {
+        try (FileInputStream iInputStream = new FileInputStream(iFilePath);
+             Workbook iWorkbook = WorkbookFactory.create(iInputStream))
+        {
+            Sheet iSheet = iWorkbook.getSheet(pSheetName);
+
+            if (iSheet == null)
             {
-                throw new RuntimeException("Header row is missing in Config sheet.");
+                throw new RuntimeException("Sheet not found : " + pSheetName);
             }
 
-            int iEnvColumnIndex = getColumnIndex(iHeaderRow, "Env");
-            int iUrlColumnIndex = getColumnIndex(iHeaderRow, "URL");
+            Row iHeaderRow = iSheet.getRow(0);
+            int iColumnIndex = getColumnIndex(iHeaderRow, pColumnName);
 
-            if (iEnvColumnIndex == -1)
+            if (iColumnIndex == -1)
             {
-                throw new RuntimeException("Env column not found in Config sheet.");
+                throw new RuntimeException("Column not found : " + pColumnName + " in sheet : " + pSheetName);
             }
 
-            if (iUrlColumnIndex == -1)
+            Row iRow = iSheet.getRow(pRowNumber);
+
+            if (iRow == null)
             {
-                throw new RuntimeException("URL column not found in Config sheet.");
+                return "";
             }
 
-            // Loop through all config rows and find matching environment
-            for (int iRowIndex = 1; iRowIndex <= iConfigSheet.getLastRowNum(); iRowIndex++)
+            Cell iCell = iRow.getCell(iColumnIndex);
+
+            return iCell == null ? "" : iDataFormatter.formatCellValue(iCell).trim();
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Unable to read cell value from sheet : " + pSheetName + " | Reason : " + iException.getMessage(), iException);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setCellValue
+    // Description   : Updates cell value using row number and column name
+    // Parameters    : pSheetName (String) - sheet name
+    //                 pRowNumber (int) - row number
+    //                 pColumnName (String) - column header
+    //                 pValue (String) - value to update
+    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // ***************************************************************************************************************************************************************************************
+    public void setCellValue(String pSheetName, int pRowNumber, String pColumnName, String pValue)
+    {
+        try (FileInputStream iInputStream = new FileInputStream(iFilePath);
+             Workbook iWorkbook = WorkbookFactory.create(iInputStream))
+        {
+            Sheet iSheet = iWorkbook.getSheet(pSheetName);
+
+            if (iSheet == null)
             {
-                Row iCurrentRow = iConfigSheet.getRow(iRowIndex);
+                throw new RuntimeException("Sheet not found : " + pSheetName);
+            }
 
-                if (iCurrentRow == null)
-                {
-                    continue;
-                }
+            Row iHeaderRow = iSheet.getRow(0);
+            int iColumnIndex = getColumnIndex(iHeaderRow, pColumnName);
 
-                if (isRowCompletelyBlank(iCurrentRow, iHeaderRow.getLastCellNum()))
-                {
-                    continue;
-                }
+            if (iColumnIndex == -1)
+            {
+                throw new RuntimeException("Column not found : " + pColumnName + " in sheet : " + pSheetName);
+            }
 
-                String iExcelEnvironment = getCellValue(iCurrentRow, iEnvColumnIndex).trim();
-                String iExcelUrl = getCellValue(iCurrentRow, iUrlColumnIndex).trim();
+            Row iRow = iSheet.getRow(pRowNumber);
+            if (iRow == null)
+            {
+                iRow = iSheet.createRow(pRowNumber);
+            }
 
-                if (iExcelEnvironment.equalsIgnoreCase(pEnvironment.trim()))
-                {
-                    if (iExcelUrl.isEmpty())
-                    {
-                        throw new RuntimeException("URL is blank in Config sheet for environment : " + pEnvironment);
-                    }
+            Cell iCell = iRow.getCell(iColumnIndex);
+            if (iCell == null)
+            {
+                iCell = iRow.createCell(iColumnIndex);
+            }
 
-                    return iExcelUrl;
-                }
+            iCell.setCellValue(pValue);
+
+            try (FileOutputStream iOutputStream = new FileOutputStream(iFilePath))
+            {
+                iWorkbook.write(iOutputStream);
             }
         }
         catch (Exception iException)
         {
-            throw new RuntimeException("Unable to fetch URL for environment : " + pEnvironment + ". Reason : " + iException.getMessage(), iException);
+            throw new RuntimeException("Unable to update cell value in sheet : " + pSheetName + " | Reason : " + iException.getMessage(), iException);
         }
+    }
 
-        throw new RuntimeException("No matching environment found in Config sheet for : " + pEnvironment);
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : findRow
+    // Description   : Finds row number where column value matches expected value
+    // Parameters    : pSheetName (String) - sheet name
+    //                 pColumnName (String) - column name
+    //                 pExpectedValue (String) - value to search
+    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // ***************************************************************************************************************************************************************************************
+    public int findRow(String pSheetName, String pColumnName, String pExpectedValue)
+    {
+        try (FileInputStream iInputStream = new FileInputStream(iFilePath);
+             Workbook iWorkbook = WorkbookFactory.create(iInputStream))
+        {
+            Sheet iSheet = iWorkbook.getSheet(pSheetName);
+
+            if (iSheet == null)
+            {
+                throw new RuntimeException("Sheet not found : " + pSheetName);
+            }
+
+            Row iHeaderRow = iSheet.getRow(0);
+            int iColumnIndex = getColumnIndex(iHeaderRow, pColumnName);
+
+            if (iColumnIndex == -1)
+            {
+                throw new RuntimeException("Column not found : " + pColumnName + " in sheet : " + pSheetName);
+            }
+
+            for (int iRowIndex = 1; iRowIndex <= iSheet.getLastRowNum(); iRowIndex++)
+            {
+                Row iRow = iSheet.getRow(iRowIndex);
+
+                if (iRow == null)
+                {
+                    continue;
+                }
+
+                Cell iCell = iRow.getCell(iColumnIndex);
+                String iActualValue = iCell == null ? "" : iDataFormatter.formatCellValue(iCell).trim();
+
+                if (iActualValue.equalsIgnoreCase(pExpectedValue.trim()))
+                {
+                    return iRowIndex;
+                }
+            }
+
+            return -1;
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Unable to find row in sheet : " + pSheetName + " | Reason : " + iException.getMessage(), iException);
+        }
     }
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : loadCurrentTestDataRow
-    // Description   : Loads one matching row from Data sheet based on TestCase_ID and stores it in memory for current execution
-    // Parameters    : pTestDataFilePath (String) - full path of TestData.xlsx
-    //                 pTestCaseID (String) - test case id selected from execution control sheet
+    // Description   : Loads complete row from Data sheet using TestCase_ID
+    // Parameters    : pSheetName (String) - usually Data
+    //                 pTestCaseID (String) - testcase id
     // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : Data sheet should contain TestCase_ID column
-    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static void loadCurrentTestDataRow(String pTestDataFilePath, String pTestCaseID)
+    public void loadCurrentTestDataRow(String pSheetName, String pTestCaseID)
     {
-        // Clear old row data before loading fresh row
         iCurrentTestDataRow.clear();
 
-        try (FileInputStream iFileInputStream = new FileInputStream(pTestDataFilePath);
-             Workbook iWorkbook = WorkbookFactory.create(iFileInputStream))
+        try (FileInputStream iInputStream = new FileInputStream(iFilePath);
+             Workbook iWorkbook = WorkbookFactory.create(iInputStream))
         {
-            Sheet iDataSheet = iWorkbook.getSheet("Data");
+            Sheet iSheet = iWorkbook.getSheet(pSheetName);
 
-            if (iDataSheet == null)
+            if (iSheet == null)
             {
-                throw new RuntimeException("Data sheet not found in TestData.xlsx");
+                throw new RuntimeException("Sheet not found : " + pSheetName);
             }
 
-            Row iHeaderRow = iDataSheet.getRow(0);
+            Row iHeaderRow = iSheet.getRow(0);
+            int iTestCaseColumnIndex = getColumnIndex(iHeaderRow, "TestCase_ID");
 
-            if (iHeaderRow == null)
+            if (iTestCaseColumnIndex == -1)
             {
-                throw new RuntimeException("Header row is missing in Data sheet.");
+                throw new RuntimeException("Column TestCase_ID not found in sheet : " + pSheetName);
             }
 
-            int iTestCaseIdColumnIndex = getColumnIndex(iHeaderRow, "TestCase_ID");
-
-            if (iTestCaseIdColumnIndex == -1)
+            for (int iRowIndex = 1; iRowIndex <= iSheet.getLastRowNum(); iRowIndex++)
             {
-                throw new RuntimeException("TestCase_ID column not found in Data sheet.");
-            }
+                Row iRow = iSheet.getRow(iRowIndex);
 
-            // Loop through all rows and match TestCase_ID
-            for (int iRowIndex = 1; iRowIndex <= iDataSheet.getLastRowNum(); iRowIndex++)
-            {
-                Row iCurrentRow = iDataSheet.getRow(iRowIndex);
-
-                if (iCurrentRow == null)
+                if (iRow == null)
                 {
                     continue;
                 }
 
-                if (isRowCompletelyBlank(iCurrentRow, iHeaderRow.getLastCellNum()))
-                {
-                    continue;
-                }
+                String iCurrentTestCaseID = iDataFormatter.formatCellValue(iRow.getCell(iTestCaseColumnIndex)).trim();
 
-                String iExcelTestCaseID = getCellValue(iCurrentRow, iTestCaseIdColumnIndex).trim();
-
-                if (iExcelTestCaseID.equalsIgnoreCase(pTestCaseID.trim()))
+                if (iCurrentTestCaseID.equalsIgnoreCase(pTestCaseID.trim()))
                 {
-                    // Store the complete row using header names
                     for (int iColumnIndex = 0; iColumnIndex < iHeaderRow.getLastCellNum(); iColumnIndex++)
                     {
-                        String iHeaderName = getCellValue(iHeaderRow, iColumnIndex).trim();
-                        String iCellValue = getCellValue(iCurrentRow, iColumnIndex).trim();
+                        String iHeader = iDataFormatter.formatCellValue(iHeaderRow.getCell(iColumnIndex)).trim();
+                        String iValue = iRow.getCell(iColumnIndex) == null ? "" : iDataFormatter.formatCellValue(iRow.getCell(iColumnIndex)).trim();
 
-                        if (!iHeaderName.isEmpty())
+                        if (!iHeader.isEmpty())
                         {
-                            iCurrentTestDataRow.put(iHeaderName, iCellValue);
+                            iCurrentTestDataRow.put(iHeader, iValue);
                         }
                     }
-
                     return;
                 }
             }
+
+            throw new RuntimeException("No test data row found for TestCase_ID : " + pTestCaseID);
         }
         catch (Exception iException)
         {
-            throw new RuntimeException("Unable to load test data row for TestCase_ID : " + pTestCaseID + ". Reason : " + iException.getMessage(), iException);
+            throw new RuntimeException("Unable to load current test data row | Reason : " + iException.getMessage(), iException);
         }
-
-        throw new RuntimeException("No matching row found in Data sheet for TestCase_ID : " + pTestCaseID);
     }
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : getCurrentTestDataValue
-    // Description   : Returns a value from the currently loaded test data row using the column name
-    // Parameters    : pColumnName (String) - column name from Data sheet, for example Username, Password, FirstName etc.
+    // Description   : Returns current test data value by column name
+    // Parameters    : pColumnName (String) - column name
     // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : loadCurrentTestDataRow must be executed before calling this method
-    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
     public static String getCurrentTestDataValue(String pColumnName)
     {
-        if (iCurrentTestDataRow == null || iCurrentTestDataRow.isEmpty())
-        {
-            throw new RuntimeException("Current test data row is not loaded. Please load test data before fetching values.");
-        }
-
-        if (!iCurrentTestDataRow.containsKey(pColumnName))
-        {
-            throw new RuntimeException("Column name not found in current test data row : " + pColumnName);
-        }
-
-        String iValue = iCurrentTestDataRow.get(pColumnName);
-
-        return iValue == null ? "" : iValue.trim();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getCurrentTestDataMap
-    // Description   : Returns the complete currently loaded test data row map
-    // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : loadCurrentTestDataRow must be executed before calling this method
-    // Date Created  : 10-03-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Map<String, String> getCurrentTestDataMap()
-    {
-        if (iCurrentTestDataRow == null || iCurrentTestDataRow.isEmpty())
+        if (iCurrentTestDataRow.isEmpty())
         {
             throw new RuntimeException("Current test data row is not loaded.");
         }
 
-        return new HashMap<>(iCurrentTestDataRow);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : findFeatureFile
-    // Description   : Finds the matching feature file from the given folder using TestCase_ID in file name
-    // Parameters    : pFeatureDirectoryPath (String) - path where feature files are available
-    //                 pTestCaseID (String) - current test case id for example TC_01_Login
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : Feature folder should exist and feature file naming should include TestCase_ID
-    // Date Created  : 10-03-2026
-    // ***************************************************************************************************************************************************************************************
-    public static File findFeatureFile(String pFeatureDirectoryPath, String pTestCaseID)
-    {
-        File iFeatureDirectory = new File(pFeatureDirectoryPath);
-
-        if (!iFeatureDirectory.exists())
+        if (!iCurrentTestDataRow.containsKey(pColumnName))
         {
-            throw new RuntimeException("Feature directory does not exist : " + pFeatureDirectoryPath);
+            throw new RuntimeException("Column not found in current test data row : " + pColumnName);
         }
 
-        if (!iFeatureDirectory.isDirectory())
-        {
-            throw new RuntimeException("Provided feature path is not a directory : " + pFeatureDirectoryPath);
-        }
-
-        File[] iFeatureFiles = iFeatureDirectory.listFiles((iDirectory, iFileName) ->
-                iFileName.toLowerCase().endsWith(".feature")
-                        && iFileName.toLowerCase().contains(pTestCaseID.toLowerCase())
-        );
-
-        if (iFeatureFiles == null || iFeatureFiles.length == 0)
-        {
-            return null;
-        }
-
-        if (iFeatureFiles.length > 1)
-        {
-            throw new RuntimeException("Multiple feature files found for TestCase_ID : " + pTestCaseID + ". Please keep only one matching feature file.");
-        }
-
-        return iFeatureFiles[0];
+        return iCurrentTestDataRow.get(pColumnName);
     }
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : getColumnIndex
-    // Description   : Finds and returns the column index by header name from the given header row
-    // Parameters    : pHeaderRow (Row) - header row object
-    //                 pColumnName (String) - column name to search
+    // Description   : Returns column index based on header name
+    // Parameters    : pHeaderRow (Row) - header row
+    //                 pColumnName (String) - column name
     // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : Header row should not be null
-    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    private static int getColumnIndex(Row pHeaderRow, String pColumnName)
+    private int getColumnIndex(Row pHeaderRow, String pColumnName)
     {
         for (int iColumnIndex = 0; iColumnIndex < pHeaderRow.getLastCellNum(); iColumnIndex++)
         {
-            String iHeaderName = getCellValue(pHeaderRow, iColumnIndex).trim();
+            Cell iCell = pHeaderRow.getCell(iColumnIndex);
+            String iHeader = iCell == null ? "" : iDataFormatter.formatCellValue(iCell).trim();
 
-            if (iHeaderName.equalsIgnoreCase(pColumnName.trim()))
+            if (iHeader.equalsIgnoreCase(pColumnName.trim()))
             {
                 return iColumnIndex;
             }
         }
 
         return -1;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getCellValue
-    // Description   : Safely returns cell value as String from given row and column index
-    // Parameters    : pRow (Row) - Excel row object
-    //                 pColumnIndex (int) - target column index
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : Row object can be null, method handles safely
-    // Date Created  : 10-03-2026
-    // ***************************************************************************************************************************************************************************************
-    private static String getCellValue(Row pRow, int pColumnIndex)
-    {
-        if (pRow == null)
-        {
-            return "";
-        }
-
-        if (pRow.getCell(pColumnIndex) == null)
-        {
-            return "";
-        }
-
-        return iDataFormatter.formatCellValue(pRow.getCell(pColumnIndex));
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : isRowCompletelyBlank
-    // Description   : Checks whether the complete row is blank based on all expected columns
-    // Parameters    : pRow (Row) - current row to validate
-    //                 pTotalColumns (int) - number of columns to check
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
-    // Precondition  : None
-    // Date Created  : 10-03-2026
-    // ***************************************************************************************************************************************************************************************
-    private static boolean isRowCompletelyBlank(Row pRow, int pTotalColumns)
-    {
-        if (pRow == null)
-        {
-            return true;
-        }
-
-        for (int iColumnIndex = 0; iColumnIndex < pTotalColumns; iColumnIndex++)
-        {
-            String iCellValue = getCellValue(pRow, iColumnIndex).trim();
-
-            if (!iCellValue.isEmpty())
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 }

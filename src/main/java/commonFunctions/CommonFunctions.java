@@ -125,16 +125,10 @@ public class CommonFunctions
     // Precondition  : Chrome browser should be installed on the machine
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static void launchBrowser()
+    public static void launchBrowser(String pUrl)
     {
         try
         {
-            if (iDriver != null)
-            {
-                log.info("Browser is already launched. Reusing the existing instance.");
-                return;
-            }
-
             WebDriverManager.chromedriver().setup();
 
             ChromeOptions iChromeOptions = new ChromeOptions();
@@ -145,6 +139,7 @@ public class CommonFunctions
 
             iDriver = new ChromeDriver(iChromeOptions);
             iWait = new WebDriverWait(iDriver, Duration.ofSeconds(20));
+            iDriver.get(pUrl);
 
             log.info("Chrome browser launched successfully.");
         }
