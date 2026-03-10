@@ -51,7 +51,7 @@ public class CommonFunctions
     // Description   : Temporarily highlights the target element with a red border so that the current action is visually visible
     // Parameters    : pDriver (WebDriver) - active browser driver instance
     //                 pElement (WebElement) - target element to highlight
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Browser should be launched and element should be available
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -92,7 +92,7 @@ public class CommonFunctions
     // Description   : Scrolls the page until the target element comes into visible area
     // Parameters    : pDriver (WebDriver) - active browser driver instance
     //                 pElement (WebElement) - target element which needs to be scrolled into view
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Browser should be launched and element should be available
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -121,7 +121,7 @@ public class CommonFunctions
     // Function Name : launchBrowser
     // Description   : Launches Chrome browser, initializes driver and explicit wait, and keeps a single browser instance per execution
     // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Chrome browser should be installed on the machine
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -129,7 +129,8 @@ public class CommonFunctions
     {
         try
         {
-            WebDriverManager.chromedriver().setup();
+            String iDriverPath = System.getProperty("user.dir") + "\\drivers\\chromedriver.exe";
+            System.setProperty("webdriver.chrome.driver", iDriverPath);
 
             ChromeOptions iChromeOptions = new ChromeOptions();
             iChromeOptions.addArguments("--start-maximized");
@@ -149,6 +150,7 @@ public class CommonFunctions
         }
     }
 
+
     // ***************************************************************************************************************************************************************************************
     // Function Name : iAction
     // Description   : Performs reusable UI actions for different control types such as click, textbox, dropdown, checkbox and gettext
@@ -156,7 +158,7 @@ public class CommonFunctions
     //                 pIdentifyBy   (String) - locator strategy such as ID, NAME, XPATH, CSS, CLASS_NAME, TAG_NAME, LINK_TEXT
     //                 pObjectName   (String) - locator value
     //                 pValueToEnter (String) - input value where applicable. Supports TD:ColumnName format also
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Browser and wait should already be initialized
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -432,7 +434,7 @@ public class CommonFunctions
     // Description   : Validates whether the expected error message exists inside the actual error message
     // Parameters    : pActualErrorMessage   (String) - message captured from application
     //                 pExpectedErrorMessage (String) - expected message to validate
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Actual error message should already be captured
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -468,7 +470,7 @@ public class CommonFunctions
     // Function Name : startWordReport
     // Description   : Creates a Word report for the selected test case by reading its description from ExecutionControl.xlsx
     // Parameters    : pTestCaseID (String) - currently executing test case id
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : ExecutionControl.xlsx should exist and contain TestCase_ID and Description columns
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -535,7 +537,7 @@ public class CommonFunctions
     // Parameters    : pDocument   (XWPFDocument) - active Word document object
     //                 pDocPath    (String) - report full path
     //                 pTestCaseID (String) - currently executing test case id
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Driver should be initialized and Word report should already be created
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -618,7 +620,7 @@ public class CommonFunctions
     // Description   : Saves and closes the Word report document
     // Parameters    : pDocument (XWPFDocument) - active Word document object
     //                 pDocPath  (String) - report full path
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Word report should already be created
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -657,7 +659,7 @@ public class CommonFunctions
     // Function Name : getTestDataValue
     // Description   : Returns value from the currently loaded test data row based on the supplied column name
     // Parameters    : pColumnName (String) - column name from TestData sheet
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Current test data row should already be loaded through ExcelUtilities
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -670,7 +672,7 @@ public class CommonFunctions
     // Function Name : resolveValue
     // Description   : Resolves actual value. If input starts with TD: then fetches value from current test data row
     // Parameters    : pValue (String) - direct value or TD:ColumnName syntax
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Current test data row should already be loaded before using TD: syntax
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -695,7 +697,7 @@ public class CommonFunctions
     // Description   : Converts locator strategy and locator value into Selenium By object
     // Parameters    : pIdentifyBy (String) - locator strategy
     //                 pObjectName (String) - locator value
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : Locator strategy and value should be valid
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -742,7 +744,7 @@ public class CommonFunctions
     // Function Name : getDescriptionFromExecutionControl
     // Description   : Reads ExecutionControl.xlsx and returns the Description for the supplied TestCase_ID
     // Parameters    : pTestCaseID (String) - currently executing test case id
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : ExecutionControl.xlsx should contain TestCase_ID and Description columns
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -817,7 +819,7 @@ public class CommonFunctions
     // Description   : Safely returns cell value as String from the given row and column index
     // Parameters    : pRow (Row) - excel row object
     //                 pColumnIndex (int) - target column index
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | Aniket.Pathare@agriculture.gov.ie
     // Precondition  : None
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
