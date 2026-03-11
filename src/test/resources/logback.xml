@@ -1,0 +1,170 @@
+<!--
+    ===================================================================================================================================
+    File          : logback.xml
+    Description   : Logback structured logging configuration for the BISS automation framework.
+                    Replaces java.util.logging with a professional logging setup.
+
+    Outputs:
+      1. CONSOLE   — coloured INFO+ output to terminal for local development
+      2. FILE_ALL  — rolling daily log file with 30-day retention (all levels)
+      3. FILE_FAIL — separate log file containing WARN and ERROR only (failure triage)
+
+    Folder        : src/test/resources/logback.xml
+
+    Log file paths:
+      target/logs/biss-execution.log         ← current run (all levels)
+      target/logs/biss-execution.YYYY-MM-DD.log ← archived daily logs
+      target/logs/biss-failures.log          ← WARN + ERROR only
+
+    Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    Date Created  : 10-03-2026
+    ===================================================================================================================================
+-->
+
+<configuration scan="true" scanPeriod="30 seconds">
+
+    <!-- ============================================================
+         PROPERTIES
+         ============================================================ -->
+    <property name="LOG_DIR"       value="target/logs"/>
+    <property name="LOG_FILE"      value="${LOG_DIR}/biss-execution"/>
+    <property name="LOG_FAIL_FILE" value="${LOG_DIR}/biss-failures"/>
+    <property name="MAX_HISTORY"   value="30"/>
+    <property name="MAX_FILE_SIZE" value="50MB"/>
+
+    <!-- ============================================================
+         CONSOLE APPENDER — coloured output for local development
+         ============================================================ -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) [%cyan(%thread)] %logger{36} - %msg%n</pattern>
+        </encoder>
+        <!-- Only INFO and above to console — DEBUG stays in file -->
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>INFO</level>
+        </filter>
+    </appender>
+
+    <!-- ============================================================
+         FILE APPENDER — all levels, daily rolling, 30-day retention
+         ============================================================ -->
+    <appender name="FILE_ALL" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE}.log</file>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>%d{dd-MM-yyyy HH:mm:ss.SSS} %-5level [%thread] %logger{50} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <!-- Daily rollover — archived file name includes date -->
+            <fileNamePattern>${LOG_FILE}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <timeBasedFileNamingAndTriggeringPolicy
+                    class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+                <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            </timeBasedFileNamingAndTriggeringPolicy>
+            <!-- Keep last 30 days of logs — older files auto-deleted -->
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+            <cleanHistoryOnStart>true</cleanHistoryOnStart>
+        </rollingPolicy>
+    </appender>
+
+    <!-- ============================================================
+         FILE APPENDER — failures only (WARN + ERROR)
+         Bamboo artifact: target/logs/biss-failures.log
+         Quick triage reference for QA leads and management
+         ============================================================ -->
+    <appender name="FILE_FAIL" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FAIL_FILE}.log</file>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>%d{dd-MM-yyyy HH:mm:ss.SSS} %-5level [%thread] %logger{50} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_FAIL_FILE}.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+        </rollingPolicy>
+        <!-- Only WARN and ERROR written to this file -->
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
+    </appender>
+
+    <!-- ============================================================
+         ASYNC WRAPPERS — prevent I/O from blocking test threads
+         ============================================================ -->
+    <appender name="ASYNC_FILE_ALL" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="FILE_ALL"/>
+        <queueSize>512</queueSize>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <appender name="ASYNC_FILE_FAIL" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="FILE_FAIL"/>
+        <queueSize>256</queueSize>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <!-- ============================================================
+         LOGGER LEVELS — per-package control (no code changes needed)
+         ============================================================ -->
+
+    <!-- BISS framework packages — DEBUG in file, INFO on console -->
+    <logger name="commonFunctions"  level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE_ALL"/>
+        <appender-ref ref="ASYNC_FILE_FAIL"/>
+    </logger>
+
+    <logger name="stepdefinitions"  level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE_ALL"/>
+        <appender-ref ref="ASYNC_FILE_FAIL"/>
+    </logger>
+
+    <logger name="utilities"        level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE_ALL"/>
+        <appender-ref ref="ASYNC_FILE_FAIL"/>
+    </logger>
+
+    <logger name="reporting"        level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE_ALL"/>
+        <appender-ref ref="ASYNC_FILE_FAIL"/>
+    </logger>
+
+    <logger name="runner"           level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE_ALL"/>
+        <appender-ref ref="ASYNC_FILE_FAIL"/>
+    </logger>
+
+    <logger name="database"         level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE_ALL"/>
+        <appender-ref ref="ASYNC_FILE_FAIL"/>
+    </logger>
+
+    <!-- Selenium / WebDriver — INFO only (suppress verbose HTTP logs) -->
+    <logger name="org.openqa.selenium"         level="INFO"/>
+    <logger name="org.openqa.selenium.remote"  level="WARN"/>
+
+    <!-- Cucumber — INFO only -->
+    <logger name="io.cucumber"                 level="INFO"/>
+
+    <!-- HikariCP — INFO only (suppress pool noise) -->
+    <logger name="com.zaxxer.hikari"           level="INFO"/>
+
+    <!-- Apache POI — WARN only -->
+    <logger name="org.apache.poi"              level="WARN"/>
+
+    <!-- ============================================================
+         ROOT LOGGER — catches everything not matched above
+         ============================================================ -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE_ALL"/>
+        <appender-ref ref="ASYNC_FILE_FAIL"/>
+    </root>
+
+</configuration>
