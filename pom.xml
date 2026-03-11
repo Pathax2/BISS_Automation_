@@ -1,225 +1,309 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- ===================================================================================================================================
+     File          : pom.xml
+     Description   : Maven build configuration for the BISS BDD Cucumber automation framework.
+                     Includes:
+                       • All framework dependencies (Selenium, Cucumber, POI, HikariCP, Mail, Logback)
+                       • Maven Surefire plugin configured for JUnit 5 execution
+                       • Execution profiles: smoke, regression, full, dev, staging, prod
+                       • Bamboo-compatible system property passthrough
+                       • Failsafe configuration for report generation even on test failure
+
+     Profile Usage:
+       mvn test -Psmoke,staging                       <- smoke tests on staging
+       mvn test -Pregression,prod                     <- regression on prod
+       mvn test -Pfull -Denv=staging -Dbrowser=CHROME <- full suite on staging
+
+     Bamboo task command:
+       mvn test -Pregression -Denv=${bamboo.env}
+                -Dbrowser=${bamboo.browser}
+                -Dbamboo.buildNumber=${bamboo.buildNumber}
+                -Dbamboo.buildPlanKey=${bamboo.buildPlanKey}
+                -Dbamboo.agentName=${bamboo.agentName}
+                -Dnotify.email.password=${bamboo.email.password}
+                -Ddb.password=${bamboo.db.password}
+
+     Author        : Aniket Pathare | aniket.pathare@goverment.ie
+     Date Created  : 10-03-2026
+     =================================================================================================================================== -->
 
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>biss</groupId>
-    <artifactId>biss-automation</artifactId>
-    <version>1.0-SNAPSHOT</version>
-    <name>Biss_Automation</name>
+    <!-- ============================================================
+         PROJECT COORDINATES
+         ============================================================ -->
+    <groupId>ie.gov.biss</groupId>
+    <artifactId>Biss_Automation</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>BISS BDD Cucumber Automation Framework</name>
 
-    <!-- ======================== PROJECT PROPERTIES ======================== -->
-
+    <!-- ============================================================
+         PROPERTIES — centralised version management
+         ============================================================ -->
     <properties>
-
+        <java.version>17</java.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <!-- Java Version -->
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <!-- Dependency versions — bump here only -->
+        <selenium.version>4.18.1</selenium.version>
+        <cucumber.version>7.15.0</cucumber.version>
+        <junit.version>5.10.2</junit.version>
+        <poi.version>5.2.5</poi.version>
+        <hikari.version>5.1.0</hikari.version>
+        <logback.version>1.4.14</logback.version>
+        <slf4j.version>2.0.12</slf4j.version>
+        <javax.mail.version>1.6.2</javax.mail.version>
+        <surefire.version>3.2.5</surefire.version>
 
-        <!-- Core Dependencies -->
-        <selenium.version>4.25.0</selenium.version>
-        <junit.version>5.11.3</junit.version>
-        <cucumber.version>7.18.1</cucumber.version>
-        <webdrivermanager.version>5.9.2</webdrivermanager.version>
-
-        <!-- Logging -->
-        <log4j.version>2.23.1</log4j.version>
-        <slf4j.version>2.0.13</slf4j.version>
-
-        <!-- Jackson -->
-        <jackson.version>2.17.1</jackson.version>
-
-        <!-- Apache POI -->
-        <apache.poi.version>5.3.0</apache.poi.version>
-
-        <!-- Reporting -->
-        <allure.version>2.33.0</allure.version>
-        <extent.version>5.1.2</extent.version>
-
-        <!-- Maven Plugins -->
-        <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
-        <maven.surefire.version>3.3.0</maven.surefire.version>
-
+        <!-- Default execution properties — overridden by profiles or Bamboo variables -->
+        <env>dev</env>
+        <browser>CHROME</browser>
+        <headless>false</headless>
+        <retry.count>1</retry.count>
+        <bamboo.buildNumber>LOCAL</bamboo.buildNumber>
+        <bamboo.buildPlanKey>BISS-AUTO</bamboo.buildPlanKey>
+        <bamboo.agentName>Local Machine</bamboo.agentName>
     </properties>
 
-    <!-- ======================== REPOSITORIES ======================== -->
-
-    <repositories>
-        <repository>
-            <id>central</id>
-            <name>Maven Central</name>
-            <url>https://repo.maven.apache.org/maven2</url>
-        </repository>
-    </repositories>
-
-    <!-- ======================== DEPENDENCIES ======================== -->
-
+    <!-- ============================================================
+         DEPENDENCIES
+         ============================================================ -->
     <dependencies>
 
-        <!-- Selenium -->
+        <!-- ─── Selenium WebDriver ─── -->
         <dependency>
             <groupId>org.seleniumhq.selenium</groupId>
             <artifactId>selenium-java</artifactId>
             <version>${selenium.version}</version>
         </dependency>
 
-        <!-- WebDriver Manager -->
-        <dependency>
-            <groupId>io.github.bonigarcia</groupId>
-            <artifactId>webdrivermanager</artifactId>
-            <version>${webdrivermanager.version}</version>
-        </dependency>
-
-        <!-- Cucumber -->
+        <!-- ─── Cucumber BDD ─── -->
         <dependency>
             <groupId>io.cucumber</groupId>
             <artifactId>cucumber-java</artifactId>
             <version>${cucumber.version}</version>
-            <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>io.cucumber</groupId>
             <artifactId>cucumber-junit-platform-engine</artifactId>
             <version>${cucumber.version}</version>
-            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.cucumber</groupId>
+            <artifactId>cucumber-core</artifactId>
+            <version>${cucumber.version}</version>
         </dependency>
 
-        <!-- JUnit 5 -->
+        <!-- ─── JUnit 5 ─── -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
+            <artifactId>junit-jupiter-api</artifactId>
             <version>${junit.version}</version>
-            <scope>test</scope>
         </dependency>
-
-        <!-- Logging (Log4j) -->
         <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-api</artifactId>
-            <version>${log4j.version}</version>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.version}</version>
         </dependency>
-
         <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-core</artifactId>
-            <version>${log4j.version}</version>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-suite</artifactId>
+            <version>1.10.2</version>
         </dependency>
 
-        <!-- SLF4J Provider -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
-            <version>${slf4j.version}</version>
-        </dependency>
-
-        <!-- Jackson -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-core</artifactId>
-            <version>${jackson.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>${jackson.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-annotations</artifactId>
-            <version>${jackson.version}</version>
-        </dependency>
-
-        <!-- Apache POI (Excel + Word Reports) -->
-        <dependency>
-            <groupId>org.apache.poi</groupId>
-            <artifactId>poi</artifactId>
-            <version>${apache.poi.version}</version>
-        </dependency>
-
+        <!-- ─── Apache POI (Excel + Word reports) ─── -->
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
-            <version>${apache.poi.version}</version>
+            <version>${poi.version}</version>
         </dependency>
 
+        <!-- ─── HikariCP connection pooling (Database layer) ─── -->
         <dependency>
-            <groupId>commons-codec</groupId>
-            <artifactId>commons-codec</artifactId>
-            <version>1.17.0</version>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>${hikari.version}</version>
         </dependency>
 
-        <!-- Reporting -->
+        <!-- ─── Email notifications ─── -->
         <dependency>
-            <groupId>io.qameta.allure</groupId>
-            <artifactId>allure-cucumber7-jvm</artifactId>
-            <version>${allure.version}</version>
-            <scope>test</scope>
+            <groupId>com.sun.mail</groupId>
+            <artifactId>javax.mail</artifactId>
+            <version>${javax.mail.version}</version>
         </dependency>
 
+        <!-- ─── Logging: SLF4J + Logback ─── -->
         <dependency>
-            <groupId>com.aventstack</groupId>
-            <artifactId>extentreports</artifactId>
-            <version>${extent.version}</version>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>${logback.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+        <!-- Bridge java.util.logging → SLF4J so all framework logs go through Logback -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>jul-to-slf4j</artifactId>
+            <version>${slf4j.version}</version>
         </dependency>
 
-        <!-- File Utilities -->
+        <!-- ─── Oracle JDBC (scope=provided — driver JAR must be in local Maven repo) ─── -->
+        <!-- To install: mvn install:install-file -Dfile=ojdbc11.jar -DgroupId=com.oracle.database.jdbc
+                         -DartifactId=ojdbc11 -Dversion=21.9.0.0 -Dpackaging=jar              -->
+        <!--
         <dependency>
-            <groupId>commons-io</groupId>
-            <artifactId>commons-io</artifactId>
-            <version>2.16.1</version>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc11</artifactId>
+            <version>21.9.0.0</version>
+            <scope>provided</scope>
         </dependency>
+        -->
+
+        <!-- ─── PostgreSQL JDBC (uncomment if using PostgreSQL) ─── -->
+        <!--
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.1</version>
+        </dependency>
+        -->
 
     </dependencies>
 
-    <!-- ======================== BUILD ======================== -->
-
+    <!-- ============================================================
+         BUILD — SUREFIRE PLUGIN
+         ============================================================ -->
     <build>
-
         <plugins>
-
-            <!-- Java Compiler -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>${maven.compiler.plugin.version}</version>
-
-                <configuration>
-                    <source>${maven.compiler.source}</source>
-                    <target>${maven.compiler.target}</target>
-                </configuration>
-            </plugin>
-
-            <!-- Test Execution -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>${maven.surefire.version}</version>
-
+                <version>${surefire.version}</version>
                 <configuration>
-                    <useModulePath>false</useModulePath>
-
+                    <!-- Pass all defined properties through to the JVM running tests -->
                     <systemPropertyVariables>
-                        <cucumber.publish.quiet>true</cucumber.publish.quiet>
+                        <env>${env}</env>
+                        <browser>${browser}</browser>
+                        <headless>${headless}</headless>
+                        <retry.count>${retry.count}</retry.count>
+                        <bamboo.buildNumber>${bamboo.buildNumber}</bamboo.buildNumber>
+                        <bamboo.buildPlanKey>${bamboo.buildPlanKey}</bamboo.buildPlanKey>
+                        <bamboo.agentName>${bamboo.agentName}</bamboo.agentName>
                     </systemPropertyVariables>
 
+                    <!-- JUnit 5 test class pattern -->
                     <includes>
-                        <!-- Main Cucumber Runner -->
                         <include>**/TestRunner.java</include>
                     </includes>
+
+                    <!-- CRITICAL: Do NOT fail the build if tests fail — let framework handle outcome -->
+                    <!-- Bamboo reads JUnit XML from target/surefire-reports/ regardless            -->
+                    <testFailureIgnore>false</testFailureIgnore>
+
+                    <!-- Fork each test run in a fresh JVM — prevents state bleed between runs -->
+                    <forkCount>1</forkCount>
+                    <reuseForks>false</reuseForks>
+
+                    <!-- Surefire report directory — Bamboo JUnit parser must point here -->
+                    <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
                 </configuration>
             </plugin>
 
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.12.1</version>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
         </plugins>
-
     </build>
+
+    <!-- ============================================================
+         PROFILES
+         ============================================================ -->
+    <profiles>
+
+        <!-- ─── TAG PROFILES — control which scenarios run ─── -->
+
+        <!-- Smoke: fast, critical-path checks only -->
+        <profile>
+            <id>smoke</id>
+            <properties>
+                <cucumber.filter.tags>@smoke</cucumber.filter.tags>
+                <retry.count>1</retry.count>
+            </properties>
+        </profile>
+
+        <!-- Regression: full regression suite -->
+        <profile>
+            <id>regression</id>
+            <properties>
+                <cucumber.filter.tags>@regression</cucumber.filter.tags>
+                <retry.count>2</retry.count>
+            </properties>
+        </profile>
+
+        <!-- Full: all tagged tests, no filter -->
+        <profile>
+            <id>full</id>
+            <properties>
+                <cucumber.filter.tags>not @wip</cucumber.filter.tags>
+                <retry.count>2</retry.count>
+            </properties>
+        </profile>
+
+        <!-- WIP: work-in-progress tests only (developer use) -->
+        <profile>
+            <id>wip</id>
+            <properties>
+                <cucumber.filter.tags>@wip</cucumber.filter.tags>
+                <retry.count>0</retry.count>
+            </properties>
+        </profile>
+
+        <!-- ─── ENVIRONMENT PROFILES — set env and headless default ─── -->
+
+        <profile>
+            <id>dev</id>
+            <properties>
+                <env>dev</env>
+                <headless>false</headless>
+            </properties>
+        </profile>
+
+        <profile>
+            <id>staging</id>
+            <properties>
+                <env>staging</env>
+                <headless>true</headless>
+                <retry.count>2</retry.count>
+            </properties>
+        </profile>
+
+        <profile>
+            <id>prod</id>
+            <properties>
+                <env>prod</env>
+                <headless>true</headless>
+                <retry.count>2</retry.count>
+            </properties>
+        </profile>
+
+    </profiles>
 
 </project>

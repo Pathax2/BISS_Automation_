@@ -1,21 +1,62 @@
+// ===================================================================================================================================
+// File          : TestRunner.java
+// Package       : runner
+// Description   : Entry point for the BISS BDD Cucumber automation framework.
+//                 Reads ExecutionControl.xlsx, iterates rows marked Y, sets JVM system properties
+//                 per test case, invokes Cucumber CLI for each feature file, writes PASS/FAIL back,
+//                 and drives the full reporting pipeline:
+//                   ReportManager → HtmlReportGenerator → JUnitXmlGenerator
+//
+// Bamboo Integration:
+//   • JUnit XML written to target/surefire-reports/BISS_Execution_Results.xml
+//     → Configure "JUnit Parser" task in Bamboo pointing to target/surefire-reports/*.xml
+//   • HTML report written to Test_Report/html/
+//     → Add as a Bamboo Artifact definition so it appears as a downloadable link per build
+//
+// Author        : Aniket Pathare | aniket.pathare@goverment.ie
+// Date Created  : 10-03-2026
+// ===================================================================================================================================
+
 package runner;
 
 import io.cucumber.core.cli.Main;
 import org.junit.jupiter.api.Test;
+import reporting.HtmlReportGenerator;
+import reporting.JUnitXmlGenerator;
+import reporting.ReportManager;
 import utilities.ExcelUtilities;
+
+import java.io.File;
+import java.util.logging.Logger;
 
 public class TestRunner
 {
-    public static final String iExecutionControlFilePath = "src/test/resources/Execution_Control_File/ExecutionControl.xlsx";
-    public static final String iExecutionControlSheetName = "Sheet1";
-    public static final String iFeatureDirectoryPath = "src/test/resources/Test_Cases/";
+    private static final Logger log = Logger.getLogger(TestRunner.class.getName());
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Framework paths — all overridable via -D JVM system properties for Bamboo plan configuration
+    // -------------------------------------------------------------------------------------------------------------------------------
+    public static final String iExecutionControlFilePath  = System.getProperty(
+            "execution.control.path",  "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
+
+    public static final String iExecutionControlSheetName = System.getProperty(
+            "execution.control.sheet", "Sheet1");
+
+    public static final String iFeatureDirectoryPath = System.getProperty(
+            "feature.directory.path",  "src/test/resources/Test_Cases/");
+
+    public static final String iStepDefinitionsGlue = System.getProperty(
+            "glue.package", "stepdefinitions");
+
+    private static final String iHtmlReportPath = "target/cucumber-reports/";
+    private static final String iJsonReportPath = "target/cucumber-json/";
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : executeSelectedTestCases
-    // Description   : Reads execution control file, executes all rows where Execution = Y, passes values to hooks
-    //                 and updates status column as PASS or FAIL
+    // Description   : JUnit 5 entry point — triggered by Maven Surefire or IDE
     // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
     @Test
     public void executeSelectedTestCases()
@@ -25,9 +66,10 @@ public class TestRunner
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : main
-    // Description   : Main method added for direct execution support
-    // Parameters    : pArgs (String[]) - command line arguments
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Description   : Direct execution entry point — no JUnit required
+    // Parameters    : pArgs (String[]) - unused; all config via system properties
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
     public static void main(String[] pArgs)
     {
@@ -36,92 +78,185 @@ public class TestRunner
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : runFrameworkExecution
-    // Description   : Common execution method used by both JUnit and main method
+    // Description   : Core execution loop with full reporting pipeline integration.
+    //                 Per each Y-flagged row:
+    //                   1. Reads TestCase_ID, Description, Environment, Browser, Tags
+    //                   2. Validates feature file on disk
+    //                   3. Times the full Cucumber run
+    //                   4. Records result (status, duration, error, screenshot) in ReportManager
+    //                   5. Writes PASS/FAIL back to ExecutionControl.xlsx
+    //                 Post-loop: generates HTML + JUnit XML reports
     // Parameters    : None
-    // Author        : Aniket Pathare | 20050492@mydbs.ie
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
     private static void runFrameworkExecution()
     {
-        ExcelUtilities iExecutionExcel = new ExcelUtilities(iExecutionControlFilePath);
-        int iRowCount = iExecutionExcel.getRowCount(iExecutionControlSheetName);
-        boolean iAnyExecutionFound = false;
+        ExcelUtilities iExcel     = new ExcelUtilities(iExecutionControlFilePath);
+        int            iRowCount  = iExcel.getRowCount(iExecutionControlSheetName);
+        boolean        iAnyRun    = false;
+        int            iPassCount = 0;
+        int            iFailCount = 0;
+
+        // Suite-level defaults for ReportManager — first Y-row values will dominate,
+        // but we prime with JVM props to handle Bamboo plan-level overrides
+        String iSuiteBrowser     = System.getProperty("browser",     "CHROME");
+        String iSuiteEnvironment = System.getProperty("environment", "");
+        ReportManager.startSuite(iSuiteEnvironment, iSuiteBrowser);
 
         for (int iRowNumber = 1; iRowNumber <= iRowCount; iRowNumber++)
         {
+            String iTestCaseID    = "";
+            String iEnvironment   = "";
+            String iBrowser       = "";
+            String iDescription   = "";
+            String iTags          = "";
+            String iErrorMessage  = "";
+            String iScreenshot    = "";
+            long   iStartTime     = 0L;
+
             try
             {
-                String iExecutionFlag = iExecutionExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Execution").trim();
+                String iExecFlag = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Execution").trim();
+                if (!iExecFlag.equalsIgnoreCase("Y")) { continue; }
 
-                if (!iExecutionFlag.equalsIgnoreCase("Y"))
-                {
-                    continue;
-                }
+                iAnyRun = true;
 
-                iAnyExecutionFound = true;
+                iTestCaseID  = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "TestCase_ID").trim();
+                iEnvironment = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Environment").trim();
+                iDescription = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Description").trim();
+                iTags        = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Tags").trim();
+                iBrowser     = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Browser").trim();
 
-                String iTestCaseID = iExecutionExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "TestCase_ID").trim();
-                String iEnvironment = iExecutionExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Environment").trim();
-
-                if (iTestCaseID.isEmpty())
-                {
-                    throw new RuntimeException("TestCase_ID is blank for row number : " + iRowNumber);
-                }
-
-                if (iEnvironment.isEmpty())
-                {
-                    throw new RuntimeException("Environment is blank for TestCase_ID : " + iTestCaseID);
-                }
-
-                System.setProperty("testcase", iTestCaseID);
-                System.setProperty("environment", iEnvironment);
+                if (iBrowser.isEmpty())  { iBrowser     = System.getProperty("browser",     "CHROME"); }
+                if (iTestCaseID.isEmpty())  { throw new RuntimeException("TestCase_ID blank at row : " + iRowNumber); }
+                if (iEnvironment.isEmpty()) { throw new RuntimeException("Environment blank for : " + iTestCaseID); }
 
                 String iFeaturePath = iFeatureDirectoryPath + iTestCaseID + ".feature";
+                if (!new File(iFeaturePath).exists())
+                {
+                    throw new RuntimeException("Feature file not found : " + iFeaturePath);
+                }
 
-                System.out.println("======================================================================");
-                System.out.println("Starting Execution");
-                System.out.println("TestCase_ID : " + iTestCaseID);
-                System.out.println("Environment : " + iEnvironment);
-                System.out.println("FeaturePath : " + iFeaturePath);
-                System.out.println("======================================================================");
+                System.setProperty("testcase",    iTestCaseID);
+                System.setProperty("environment", iEnvironment);
+                System.setProperty("browser",     iBrowser);
 
-                byte iExecutionStatus = Main.run(
+                printExecutionHeader(iTestCaseID, iEnvironment, iBrowser, iFeaturePath);
+                new File(iHtmlReportPath).mkdirs();
+                new File(iJsonReportPath).mkdirs();
+
+                iStartTime = System.currentTimeMillis();
+
+                byte iExitCode = Main.run(
                         new String[]{
                                 iFeaturePath,
-                                "--glue", "stepdefinitions",
+                                "--glue",   iStepDefinitionsGlue,
                                 "--plugin", "pretty",
                                 "--plugin", "summary",
-                                "--plugin", "html:target/cucumber-reports/" + iTestCaseID + ".html",
-                                "--plugin", "json:target/cucumber-json/" + iTestCaseID + ".json"
+                                "--plugin", "html:" + iHtmlReportPath + iTestCaseID + ".html",
+                                "--plugin", "json:" + iJsonReportPath + iTestCaseID + ".json"
                         },
                         Thread.currentThread().getContextClassLoader()
                 );
 
-                if (iExecutionStatus == 0)
+                long iDuration = System.currentTimeMillis() - iStartTime;
+
+                if (iExitCode == 0)
                 {
-                    iExecutionExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "PASS");
+                    iExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "PASS");
+                    log.info("[RUNNER] PASS : " + iTestCaseID);
+                    iPassCount++;
+
+                    ReportManager.recordResult(iTestCaseID, iDescription, "PASS",
+                            iDuration, "", "", iTags, iEnvironment, iBrowser);
                 }
                 else
                 {
-                    iExecutionExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "FAIL");
+                    // Hooks stores failure reason and screenshot path into system properties
+                    // using keys: lastFailureReason.<TestCaseID> and lastScreenshotPath.<TestCaseID>
+                    iErrorMessage = System.getProperty("lastFailureReason." + iTestCaseID, "");
+                    iScreenshot   = System.getProperty("lastScreenshotPath." + iTestCaseID, "");
+
+                    iExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "FAIL");
+                    log.severe("[RUNNER] FAIL : " + iTestCaseID);
+                    iFailCount++;
+
+                    ReportManager.recordResult(iTestCaseID, iDescription, "FAIL",
+                            iDuration, iErrorMessage, iScreenshot, iTags, iEnvironment, iBrowser);
                 }
             }
             catch (Exception iException)
             {
+                long iDuration = iStartTime > 0 ? System.currentTimeMillis() - iStartTime : 0L;
+
                 try
                 {
-                    iExecutionExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "FAIL");
+                    if (!iTestCaseID.isEmpty())
+                    {
+                        iExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "FAIL");
+                    }
                 }
-                catch (Exception ignored)
-                {
-                }
+                catch (Exception ignored) {}
 
-                throw new RuntimeException("Execution failed at row number : " + iRowNumber + " | Reason : " + iException.getMessage(), iException);
+                log.severe("[RUNNER] ERROR row=" + iRowNumber + " ID=" + iTestCaseID
+                        + " | " + iException.getMessage());
+                iFailCount++;
+
+                ReportManager.recordResult(iTestCaseID, iDescription, "ERROR",
+                        iDuration, iException.getMessage(), "", iTags, iEnvironment, iBrowser);
             }
         }
 
-        if (!iAnyExecutionFound)
+        // -------------------------------------------------------------------------------------------------------------------------------
+        // REPORTING PIPELINE — always runs, even if all tests failed
+        // -------------------------------------------------------------------------------------------------------------------------------
+        ReportManager.endSuite();
+        printExecutionSummary(iPassCount, iFailCount);
+
+        try   { HtmlReportGenerator.generate(); }
+        catch (Exception e) { log.severe("[RUNNER] HTML report failed : " + e.getMessage()); }
+
+        try   { JUnitXmlGenerator.generate(); }
+        catch (Exception e) { log.severe("[RUNNER] JUnit XML failed : " + e.getMessage()); }
+
+        // -------------------------------------------------------------------------------------------------------------------------------
+        // Suite outcome — fail JUnit test if any test case failed (Bamboo reads JUnit result)
+        // -------------------------------------------------------------------------------------------------------------------------------
+        if (!iAnyRun)
         {
-            throw new RuntimeException("No rows marked as Y in ExecutionControl.xlsx");
+            throw new RuntimeException("No rows with Execution=Y in ExecutionControl.xlsx.");
         }
+
+        if (iFailCount > 0)
+        {
+            throw new RuntimeException("Suite completed with " + iFailCount
+                    + " failure(s). Check HTML report and Bamboo JUnit results.");
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Console output helpers
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static void printExecutionHeader(String pID, String pEnv, String pBrowser, String pPath)
+    {
+        System.out.println("\n======================================================================");
+        System.out.println("  STARTING   : " + pID);
+        System.out.println("  Environment: " + pEnv);
+        System.out.println("  Browser    : " + pBrowser);
+        System.out.println("  Feature    : " + pPath);
+        System.out.println("======================================================================");
+    }
+
+    private static void printExecutionSummary(int pPass, int pFail)
+    {
+        System.out.println("\n======================================================================");
+        System.out.println("  EXECUTION SUMMARY");
+        System.out.println("  Total  : " + (pPass + pFail));
+        System.out.println("  PASS   : " + pPass);
+        System.out.println("  FAIL   : " + pFail);
+        System.out.println("  HTML   : Test_Report/html/");
+        System.out.println("  XML    : target/surefire-reports/BISS_Execution_Results.xml");
+        System.out.println("======================================================================");
     }
 }
