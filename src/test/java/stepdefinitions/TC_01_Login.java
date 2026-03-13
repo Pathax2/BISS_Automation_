@@ -54,50 +54,24 @@ public class TC_01_Login
 
             if (pColumnName.equalsIgnoreCase("Username"))
             {
-                CommonFunctions.iAction(
-                        "CLICK",
-                        ObjReader.getLocatorType("iWelcomeLoginBtn"),
-                        ObjReader.getLocatorValue("iWelcomeLoginBtn"),
-                        ""
-                );
-
-                CommonFunctions.iAction(
-                        "TEXTBOX",
-                        ObjReader.getLocatorType("iUsernametxtbox"),
-                        ObjReader.getLocatorValue("iUsernametxtbox"),
-                        "TD:Username"
-                );
-
-                CommonFunctions.iAction(
-                        "CLICK",
-                        ObjReader.getLocatorType("iUsernameContinuebtn"),
-                        ObjReader.getLocatorValue("iUsernameContinuebtn"),
-                        ""
-                );
-
+                CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), "");
+                CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), "TD:Username");
+                CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), "");
                 CommonFunctions.log.info("Username entered and Continue clicked successfully.");
             }
             else if (pColumnName.equalsIgnoreCase("Password"))
             {
-                CommonFunctions.iAction(
-                        "TEXTBOX",
-                        ObjReader.getLocatorType("iPasswordtxtbox"),
-                        ObjReader.getLocatorValue("iPasswordtxtbox"),
-                        "TD:Password"
-                );
-
+                CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
                 CommonFunctions.log.info("Password entered successfully.");
             }
             else
             {
-                throw new RuntimeException("Unsupported field value from feature file : '" + pColumnName
-                        + "'. Accepted values: Username, Password.");
+                throw new RuntimeException("Unsupported field value from feature file : '" + pColumnName + "'. Accepted values: Username, Password.");
             }
         }
         catch (Exception iException)
         {
-            throw new RuntimeException("Failed to enter value for field : '" + pColumnName
-                    + "' | Reason : " + iException.getMessage(), iException);
+            throw new RuntimeException("Failed to enter value for field : '" + pColumnName + "' | Reason : " + iException.getMessage(), iException);
         }
     }
 
@@ -116,23 +90,12 @@ public class TC_01_Login
     {
         try
         {
-            CommonFunctions.iAction(
-                    "CLICK",
-                    ObjReader.getLocatorType("iLoginbtn"),
-                    ObjReader.getLocatorValue("iLoginbtn"),
-                    ""
-            );
-
+            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), "");
             CommonFunctions.log.info("Login button clicked.");
-
-            CommonFunctions.iAction(
-                    "TEXTBOX",
-                    ObjReader.getLocatorType("iOPTtxtbox"),
-                    ObjReader.getLocatorValue("iOPTtxtbox"),
-                    "111111"
-            );
-
+            CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
             CommonFunctions.log.info("MFA OTP entered successfully.");
+            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), "");
+            CommonFunctions.log.info("Login button clicked.");
         }
         catch (Exception iException)
         {
@@ -156,20 +119,10 @@ public class TC_01_Login
         try
         {
             // Verify dashboard title element is visible — confirms successful login and page load
-            CommonFunctions.iAction(
-                    "VERIFYELEMENT",
-                    ObjReader.getLocatorType("iDashboardTitle"),
-                    ObjReader.getLocatorValue("iDashboardTitle"),
-                    ""
-            );
+            CommonFunctions.iAction("VERIFYELEMENT", ObjReader.getLocatorType("iDashboardTitle"), ObjReader.getLocator("iDashboardTitle"), "");
 
             // Capture dashboard title text for log confirmation
-            String iDashboardText = CommonFunctions.iAction(
-                    "GETTEXT",
-                    ObjReader.getLocatorType("iDashboardTitle"),
-                    ObjReader.getLocatorValue("iDashboardTitle"),
-                    ""
-            );
+            String iDashboardText = CommonFunctions.iAction("GETTEXT", ObjReader.getLocatorType("iDashboardTitle"), ObjReader.getLocator("iDashboardTitle"), "");
 
             if (iDashboardText == null || iDashboardText.trim().isEmpty())
             {
@@ -181,6 +134,87 @@ public class TC_01_Login
         catch (Exception iException)
         {
             throw new RuntimeException("Login verification step failed : " + iException.getMessage(), iException);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : LogoutApplication
+    // Description   : Clicks the logout Sign Out Button.
+    // Parameters    : None
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Precondition  : Username and password must already have been entered
+    // Date Created  : 12-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("A user logging out of an application")
+    public void LogoutApplication()
+    {
+        try
+        {
+            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), "");
+            CommonFunctions.log.info("Logout/Signout button clicked.");
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Failed during logging out of application : " + iException.getMessage(), iException);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : enterValidFieldValue
+    // Description   : Enters Username or Password based on the string argument passed from the feature file.
+    //                 Username flow : clicks Welcome Login button → enters username → clicks Continue button
+    //                 Password flow : enters password into the password field
+    // Parameters    : pColumnName (String) - "Username" or "Password" as passed from the Gherkin step
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Precondition  : Browser must be open; test data row must be loaded for TD: resolution
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("user enters invalid credentials")
+    public void enterInvalidCredentials(String pColumnName)
+    {
+        try
+        {
+            if (pColumnName == null || pColumnName.trim().isEmpty())
+            {
+                throw new RuntimeException("Field name passed from feature file cannot be blank.");
+            }
+
+            if (pColumnName.equalsIgnoreCase("Username"))
+            {
+                CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), "TD:Username");
+                CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), "");
+                CommonFunctions.log.info("Username entered and Continue clicked successfully.");
+            }
+            else if (pColumnName.equalsIgnoreCase("Password"))
+            {
+                CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "Invalid");
+                CommonFunctions.log.info("Invalid Password entered successfully.");
+
+                CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), "");
+                CommonFunctions.log.info("Login button clicked.");
+
+                // Verify Authentication Page shows error message when invalid credentials are passed
+                CommonFunctions.iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iInvalidCredErr"), "");
+
+                // Capture dashboard title text for log confirmation
+                String iErrText = CommonFunctions.iAction("GETTEXT", "XPATH", ObjReader.getLocator("iInvalidCredErr"), "");
+
+                if (iErrText == null || iErrText.trim().isEmpty())
+                {
+                    throw new AssertionError("Login verification failed.Error Message should get displayed post entering invalid credentials");
+                }
+                CommonFunctions.log.info("Invalid Credentials Error Message Validation Completed : '" + iErrText + "'");
+                CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
+                CommonFunctions.log.info("Password entered successfully.");
+            }
+            else
+            {
+                throw new RuntimeException("Unsupported field value from feature file : '" + pColumnName + "'. Accepted values: Username, Password.");
+            }
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Failed to enter value for field : '" + pColumnName + "' | Reason : " + iException.getMessage(), iException);
         }
     }
 }
