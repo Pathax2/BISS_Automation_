@@ -1,28 +1,244 @@
-package runner;
-
-import org.openqa.selenium.By;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.chrome.ChromeDriver;
-import utilities.ObjectRepositoryExtractor;
-
-public class ExtractionRunner
+// ***************************************************************************************************************************************************************************************
+// Function Name : performList
+// Description   : Handles both native HTML <select> elements AND Angular Material <mat-select> components.
+//                 Selenium's Select class only works on native <select> — mat-select requires
+//                 a click-then-option approach since it renders options as <mat-option> in a
+//                 <div role="listbox"> overlay panel, not as native <option> elements.
+//
+//                 Detection strategy:
+//                   - Reads the element tag name after finding it
+//                   - "select"     → native HTML dropdown → uses Selenium Select class (existing behaviour)
+//                   - "mat-select" → Angular Material     → uses performMatSelect() click-based approach
+//
+//                 Supported value prefixes (same for both types):
+//                   VISIBLETEXT:value  → matches mat-option or option by visible text (default if no prefix)
+//                   VALUE:value        → native select only — falls back to VISIBLETEXT for mat-select
+//                   INDEX:n            → selects the nth option (0-based) for both types
+//
+// Parameters    : pDriver  (WebDriver)     - current thread driver
+//                 pWait    (WebDriverWait) - current thread wait
+//                 pBy      (By)            - resolved locator
+//                 pValue   (String)        - selection strategy + value
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Precondition  : launchBrowser() must have been called on this thread
+// Date Created  : 07-03-2026
+// ***************************************************************************************************************************************************************************************
+private static void performList(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
 {
-    public static void main(String[] args)
+    if (pValue == null || pValue.trim().isEmpty())
     {
-        WebDriver driver = new ChromeDriver();
-        ObjectRepositoryExtractor iObjectRepositoryExtractor = new ObjectRepositoryExtractor(driver);
-
-        driver.get("https://your-application-url.com");
-
-        driver.findElement(By.xpath("//span[normalize-space()='Home']")).click();
-        iObjectRepositoryExtractor.extractPageObjects("Home", "src/test/resources/ObjectRepository.properties");
-
-        driver.findElement(By.xpath("//span[normalize-space()='My Clients']")).click();
-        iObjectRepositoryExtractor.extractPageObjects("MyClients", "src/test/resources/ObjectRepository.properties");
-
-        driver.findElement(By.xpath("//span[normalize-space()='Farmer Dashboard']")).click();
-        iObjectRepositoryExtractor.extractPageObjects("FarmerDashboard", "src/test/resources/ObjectRepository.properties");
-
-        driver.quit();
+        throw new RuntimeException("LIST action requires a selection value.");
     }
+
+    WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+    pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+
+    scrollIntoView(pDriver, iElement);
+    highlightElement(pDriver, iElement);
+
+    String iTagName    = iElement.getTagName().toLowerCase().trim();
+    String iListValue  = pValue.trim();
+
+    log.info("[" + getCurrentTimestamp() + "] LIST | tag=<" + iTagName + "> | value=" + iListValue);
+
+    if ("mat-select".equals(iTagName))
+    {
+        // ── Angular Material mat-select — click-based selection ───────────
+        performMatSelect(pDriver, pWait, iElement, iListValue);
+    }
+    else if ("select".equals(iTagName))
+    {
+        // ── Native HTML select — Selenium Select class ────────────────────
+        pWait.until(iWebDriver -> new Select(iElement).getOptions().size() > 0);
+        performNativeSelect(iElement, iListValue);
+    }
+    else
+    {
+        // ── Unknown element type — attempt mat-select approach as fallback ─
+        log.warning("[" + getCurrentTimestamp() + "] LIST | Unexpected tag <" + iTagName
+                + "> — attempting mat-select click approach as fallback.");
+        performMatSelect(pDriver, pWait, iElement, iListValue);
+    }
+}
+
+
+// ***************************************************************************************************************************************************************************************
+// Function Name : performMatSelect
+// Description   : Selects an option from an Angular Material <mat-select> component.
+//
+//                 How MDC mat-select works:
+//                   1. Click the mat-select trigger — this opens a <div role="listbox"> overlay
+//                      panel injected at the bottom of <body>, NOT inside the mat-select element
+//                   2. Wait for the panel to appear in DOM
+//                   3. Find the matching <mat-option> by text or index
+//                   4. Click the mat-option — panel closes automatically
+//
+//                 Supported value prefixes:
+//                   VISIBLETEXT:value  → matches mat-option by trimmed visible text (default)
+//                   INDEX:n            → clicks the nth mat-option (0-based)
+//                   VALUE:value        → treated as VISIBLETEXT for mat-select (no value attribute)
+//                   plain text         → treated as VISIBLETEXT
+//
+// Parameters    : pDriver   (WebDriver)     - current thread driver
+//                 pWait     (WebDriverWait) - current thread wait
+//                 pElement  (WebElement)    - the mat-select element already found
+//                 pValue    (String)        - selection strategy + value
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 07-03-2026
+// ***************************************************************************************************************************************************************************************
+private static void performMatSelect(WebDriver pDriver, WebDriverWait pWait,
+                                     WebElement pElement, String pValue)
+{
+    // ── Step 1 : Click the mat-select to open the options panel ──────────────────────────
+    pElement.click();
+
+    // ── Step 2 : Wait for the overlay panel to appear in DOM ─────────────────────────────
+    // The panel is injected at body level — NOT inside the mat-select element
+    // role="listbox" is the reliable hook regardless of dynamic class names
+    By iPanelBy = By.cssSelector("div[role='listbox'].mat-mdc-select-panel, " +
+                                 "div[role='listbox'].mdc-menu-surface--open, " +
+                                 "div[role='listbox']");
+
+    WebElement iPanel = pWait.until(ExpectedConditions.visibilityOfElementLocated(iPanelBy));
+
+    log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened successfully.");
+
+    // ── Step 3 : Resolve selection value and strategy ────────────────────────────────────
+    String iUpperValue = pValue.toUpperCase();
+
+    if (iUpperValue.startsWith("INDEX:"))
+    {
+        // ── INDEX selection — click the nth mat-option (0-based) ─────────
+        int iIndex = Integer.parseInt(pValue.substring("INDEX:".length()).trim());
+
+        java.util.List<WebElement> iOptions = pWait.until(iWebDriver ->
+        {
+            java.util.List<WebElement> iOpts = iPanel.findElements(By.cssSelector("mat-option"));
+            return iOpts.size() > iIndex ? iOpts : null;
+        });
+
+        WebElement iTargetOption = iOptions.get(iIndex);
+        scrollIntoView(pDriver, iTargetOption);
+        highlightElement(pDriver, iTargetOption);
+        iTargetOption.click();
+
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by INDEX: " + iIndex);
+    }
+    else
+    {
+        // ── VISIBLETEXT / VALUE / plain text — match by trimmed span text ─
+        // VALUE: on mat-select has no attribute equivalent — treat as visible text
+        String iTargetText;
+
+        if (iUpperValue.startsWith("VISIBLETEXT:"))
+        {
+            iTargetText = pValue.substring("VISIBLETEXT:".length()).trim();
+        }
+        else if (iUpperValue.startsWith("VALUE:"))
+        {
+            iTargetText = pValue.substring("VALUE:".length()).trim();
+            log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | VALUE: prefix used on mat-select — "
+                    + "mat-select has no value attribute. Treating as VISIBLETEXT: '" + iTargetText + "'");
+        }
+        else
+        {
+            iTargetText = pValue.trim();
+        }
+
+        final String iFinalTargetText = iTargetText;
+
+        // Wait until at least one mat-option is present in the panel
+        pWait.until(iWebDriver -> iPanel.findElements(By.cssSelector("mat-option")).size() > 0);
+
+        // Find the mat-option whose trimmed text matches the target
+        // Matches against the inner <span class="mdc-list-item__primary-text"> text
+        WebElement iTargetOption = pWait.until(iWebDriver ->
+        {
+            java.util.List<WebElement> iOptions = iPanel.findElements(By.cssSelector("mat-option"));
+
+            for (WebElement iOption : iOptions)
+            {
+                String iOptionText = iOption.getText().trim();
+
+                if (iOptionText.equalsIgnoreCase(iFinalTargetText))
+                {
+                    return iOption;
+                }
+            }
+            return null;
+        });
+
+        if (iTargetOption == null)
+        {
+            // Close the panel before throwing to leave the page in a clean state
+            pressEscape(pDriver);
+            throw new RuntimeException("MAT-SELECT | Option not found: '" + iFinalTargetText
+                    + "' | Check the exact visible text of the mat-option in the panel.");
+        }
+
+        scrollIntoView(pDriver, iTargetOption);
+        highlightElement(pDriver, iTargetOption);
+        iTargetOption.click();
+
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by text: '" + iFinalTargetText + "'");
+    }
+
+    // ── Step 4 : Wait for the panel to close ─────────────────────────────────────────────
+    pWait.until(ExpectedConditions.invisibilityOfElementLocated(
+            By.cssSelector("div[role='listbox'].mdc-menu-surface--open")));
+
+    log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel closed — selection complete.");
+}
+
+
+// ***************************************************************************************************************************************************************************************
+// Function Name : performNativeSelect
+// Description   : Handles standard native HTML <select> elements using Selenium's Select class.
+//                 Extracted from performList to keep concerns separate.
+// Parameters    : pElement   (WebElement) - the native <select> element
+//                 pListValue (String)     - selection strategy + value
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 07-03-2026
+// ***************************************************************************************************************************************************************************************
+private static void performNativeSelect(WebElement pElement, String pListValue)
+{
+    Select iSelect      = new Select(pElement);
+    String iUpperValue  = pListValue.toUpperCase();
+
+    if (iUpperValue.startsWith("VISIBLETEXT:"))
+    {
+        iSelect.selectByVisibleText(pListValue.substring("VISIBLETEXT:".length()).trim());
+    }
+    else if (iUpperValue.startsWith("VALUE:"))
+    {
+        iSelect.selectByValue(pListValue.substring("VALUE:".length()).trim());
+    }
+    else if (iUpperValue.startsWith("INDEX:"))
+    {
+        iSelect.selectByIndex(Integer.parseInt(pListValue.substring("INDEX:".length()).trim()));
+    }
+    else
+    {
+        iSelect.selectByVisibleText(pListValue);
+    }
+
+    log.info("[" + getCurrentTimestamp() + "] NATIVE SELECT | Selected: '" + pListValue + "'");
+}
+
+
+// ***************************************************************************************************************************************************************************************
+// Function Name : pressEscape
+// Description   : Sends ESC key to the active element to close any open overlay panel.
+//                 Used as a cleanup action when mat-select option is not found.
+// Parameters    : pDriver (WebDriver) - current thread driver
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 07-03-2026
+// ***************************************************************************************************************************************************************************************
+private static void pressEscape(WebDriver pDriver)
+{
+    try
+    {
+        pDriver.switchTo().activeElement().sendKeys(Keys.ESCAPE);
+    }
+    catch (Exception ignored) {}
 }
