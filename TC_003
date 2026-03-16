@@ -1,1293 +1,1943 @@
 // ===================================================================================================================================
-// File          : BISSAgentStepDefinitions.java
-// Package       : stepdefinitions
-// Description   : Step definitions for BISS Agent end-to-end farmer application journey.
-//                 Covers: Login, Portal Navigation, Farmer Dashboard, Side Navigation,
-//                         Application Start, Active Farmer, Scheme Selection, Land Details,
-//                         GAEC 7, ACRES, Eco, Review & Submit, Correspondence Upload.
+// File          : CommonFunctions.java
+// Package       : commonFunctions
+// Description   : Core reusable utility class for BDD Cucumber Selenium automation framework.
+//                 Provides browser lifecycle management, UI action execution, test data resolution,
+//                 Word report generation, screenshot capture, and structured step logging.
 //
-//                 Naming convention  : iAction(actionType, identifyBy, locator, value)
-//                 Test data access   : System.getProperty("TD:ColumnName") — set by Hooks via ExcelUtilities
-//                 Herd data access   : ExcelUtilities.getRowData("HerdData", rowIndex)
+//                 Angular / MDC Synchronisation Strategy:
+//                   Every iAction call runs waitForAngularReady() before interacting with any element.
+//                   This blocks until:
+//                     1. Angular's Zone.js task queue is empty (no pending HTTP, timers, microtasks)
+//                     2. document.readyState === 'complete'
+//                     3. No active MDC circular progress spinner visible
+//                   This eliminates the race condition where Selenium acts faster than Angular
+//                   can process the previous interaction and update the DOM.
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 07-03-2026
+// Date Created  : 10-03-2026
 // ===================================================================================================================================
 
-package stepdefinitions;
+package commonFunctions;
 
-import commonFunctions.CommonFunctions;
-import io.cucumber.datatable.DataTable;
-import io.cucumber.java.en.*;
-import org.junit.jupiter.api.Assertions;
-import utilities.ObjReader;
+import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.apache.poi.util.Units;
+import org.apache.poi.xwpf.usermodel.Document;
+import org.apache.poi.xwpf.usermodel.ParagraphAlignment;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.openqa.selenium.By;
+import org.openqa.selenium.ElementClickInterceptedException;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.Keys;
+import org.openqa.selenium.OutputType;
+import org.openqa.selenium.StaleElementReferenceException;
+import org.openqa.selenium.TakesScreenshot;
+import org.openqa.selenium.TimeoutException;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.edge.EdgeDriver;
+import org.openqa.selenium.edge.EdgeOptions;
+import org.openqa.selenium.firefox.FirefoxDriver;
+import org.openqa.selenium.firefox.FirefoxOptions;
+import org.openqa.selenium.interactions.Actions;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.Select;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import utilities.ExcelUtilities;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
-import runner.TestRunner;
-import static commonFunctions.CommonFunctions.*;
 
-public class TC_03 {
+public class CommonFunctions
+{
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // ThreadLocal driver and wait — ensures full parallel execution safety across Cucumber threads
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final ThreadLocal<WebDriver>     iDriverHolder = new ThreadLocal<>();
+    private static final ThreadLocal<WebDriverWait> iWaitHolder   = new ThreadLocal<>();
 
-    private static final Logger log = Logger.getLogger(TC_03.class.getName());
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Framework Logger
+    // -------------------------------------------------------------------------------------------------------------------------------
+    public static final Logger log = Logger.getLogger(CommonFunctions.class.getName());
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // File Paths — sourced from system properties with fallback defaults to support multi-environment CI runs
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final String iExecutionControlFilePath       = System.getProperty("execution.control.path",  "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
+    private static final String iReportDocsDirectoryPath        = System.getProperty("report.docs.path",        "Test_Report/docs");
+    private static final String iReportScreenshotsDirectoryPath = System.getProperty("report.screenshots.path", "Test_Report/screenshots");
+    private static final int    iExplicitWaitSeconds            = Integer.parseInt(System.getProperty("explicit.wait.seconds", "20"));
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Angular synchronisation tuning — adjust via system properties per environment if needed
+    // angular.poll.ms     : how often to re-check Angular stability (default 300ms)
+    // angular.timeout.ms  : max time to wait for Angular to stabilise before giving up (default 15s)
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final int iAngularPollMs    = Integer.parseInt(System.getProperty("angular.poll.ms",    "300"));
+    private static final int iAngularTimeoutMs = Integer.parseInt(System.getProperty("angular.timeout.ms", "15000"));
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // MDC Circular Progress spinner CSS selector — used in Angular readiness check
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final String iSpinnerCss = "div.mdc-circular-progress__gap-patch";
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Shared Utilities
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final DataFormatter iDataFormatter = new DataFormatter();
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Date/Time Formatters
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final DateTimeFormatter iLogDateTimeFormatter                  = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+    private static final DateTimeFormatter iFileDateTimeFormatter                 = DateTimeFormatter.ofPattern("dd_MM_yyyy_HH_mm_ss");
+    private static final DateTimeFormatter iFileDateTimeFormatterWithMilliSeconds = DateTimeFormatter.ofPattern("dd_MM_yyyy_HH_mm_ss_SSS");
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Description cache — loaded once from ExecutionControl.xlsx to avoid repeated file I/O per screenshot
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final Map<String, String> iDescriptionCache       = new ConcurrentHashMap<>();
+    private static volatile boolean          iDescriptionCacheLoaded = false;
 
 
-    // ===================================================================================================================================
-    //  BACKGROUND — Login and Portal Entry
-    // ===================================================================================================================================
+    // ===============================================================================================================================
+    // SECTION 1 : ThreadLocal Driver Accessors
+    // ===============================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : Given the agent user is on the login page
-    // Description   : Launches browser and navigates to the application URL loaded from test data Config sheet
+    // Function Name : getDriver
+    // Description   : Returns the WebDriver instance bound to the current thread
+    // Parameters    : None
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Precondition  : launchBrowser() must have been called on this thread
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    @Given("the agent user is on the login page")
-    public void theAgentUserIsOnTheLoginPage()
+    public static WebDriver getDriver()
     {
-        CommonFunctions.log.info("Application launched via Hooks. Browser is active and URL loaded.");
-        log.info("[STEP] Given the agent user is on the login page");
-
+        return iDriverHolder.get();
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent logs into the application with valid credentials and OTP
-    // Description   : Enters username and password from test data, submits login form, handles OTP if present
+    // Function Name : getWait
+    // Description   : Returns the WebDriverWait instance bound to the current thread
+    // Parameters    : None
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Precondition  : launchBrowser() must have been called on this thread
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent logs into the application with valid credentials and OTP")
-    public void theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP()
+    public static WebDriverWait getWait()
     {
-        try {
-            log.info("[STEP] When the agent logs into the application with valid credentials and OTP");
-
-            String iUsername = System.getProperty("TD:Username");
-            String iPassword = System.getProperty("TD:Password");
-            // 1. Enter Username sequence
-            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), "");
-            CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), "TD:Username");
-            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), "");
-            CommonFunctions.log.info("Username entered and Continue clicked.");
-
-            // 2. Enter Password
-            CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
-            CommonFunctions.log.info("Password entered.");
-
-            // 3. Click Login and handle MFA OTP
-            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), "");
-            CommonFunctions.log.info("Initial Login button clicked.");
-
-            // Note: "111111" is a placeholder for dynamic OTP integration
-            CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-            CommonFunctions.log.info("MFA OTP entered.");
-
-            // 4. Final Click to submit OTP
-            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), "");
-            CommonFunctions.log.info("Final Login button clicked after OTP.");
-
-        } catch (Exception iException) {
-            throw new RuntimeException("Failed during agent login sequence: " + iException.getMessage(), iException);
-        }
+        return iWaitHolder.get();
     }
 
 
+    // ===============================================================================================================================
+    // SECTION 2 : Timestamp Utilities
+    // ===============================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent opens the "Basic Income Support for Sustainability" application
-    // Description   : Clicks the named application tile on the portal home screen
+    // Function Name : getCurrentTimestamp
+    // Description   : Returns current timestamp in formatted string for framework logging
     // ***************************************************************************************************************************************************************************************
-    @And("the agent opens the {string} application")
-    public void theAgentOpensTheApplication(String pApplicationName)
+    public static String getCurrentTimestamp()
     {
-            log.info("[STEP] And the agent opens the application: " + pApplicationName);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAppSearchBar"), "");
-
-            CommonFunctions.log.info("Enter the application name which you want to lookup.");
-            CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-
-            // Verify dashboard title element is visible — confirms successful login and page load
-            CommonFunctions.iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iSearchAppLabel"), "");
-            CommonFunctions.iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iSearchAppLabel"), "Found 1 applications matching your search");
-
-            //Click on BISS Link from Search Results
-            CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iBissLink"), "");
-
+        return LocalDateTime.now().format(iLogDateTimeFormatter);
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the agent should land on the BISS Home page
-    // Description   : Validates that the BISS Home page header is visible after login
+    // Function Name : getCurrentFileTimestamp
+    // Description   : Returns current timestamp in file-safe format including seconds
     // ***************************************************************************************************************************************************************************************
-    @Then("the agent should land on the BISS Home page")
-    public void theAgentShouldLandOnTheBISSHomePage()
+    public static String getCurrentFileTimestamp()
     {
-        iAction("WAITINVISIBLE", "XPATH", "iScreenBuffer", "MDC Progress Spinner");
-        log.info("[STEP] Then the agent should land on the BISS Home page");
-        CommonFunctions.iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iBissTitle"), "");
-        CommonFunctions.iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iBissTitle"), "Basic Income Support for Sustainability");
-        log.info("BISS Home page confirmed | Title: " + "Basic Income Support for Sustainability");
+        return LocalDateTime.now().format(iFileDateTimeFormatter);
     }
 
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent navigates to the "My Clients" tab
-    // Description   : Clicks the My Clients navigation tab on the BISS portal
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent navigates to the {string} and {string} Left Menu Link")
-    public void theAgentNavigatesToTheTab(String iHomeTab,String iMyCLientTab)
+    // ===============================================================================================================================
+    // SECTION 3 : Structured Step Logging
+    // ===============================================================================================================================
+
+    private static void logStepStart(String pActionType, String pIdentifyBy, String pObjectName, String pValue)
     {
-        log.info("[STEP] And the agent navigates to the tab: " + iHomeTab);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
-
-        log.info("[STEP] And the agent navigates to the tab: " + iMyCLientTab);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-
-        // 2. Client Selection and Header Verification
-        CommonFunctions.iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iBissTitle"), "Basic Income Support for Sustainability");
-
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iHerdExpiredTab"), "");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iDraftTab"), "");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iSubmittedTab"), "");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNotStartedTab"), "");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iViewAllTab"), "");
-
-        // 3. Form Interaction (Dropdown and Search)
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iListItemsPerPage"), "");
-        iAction("LIST", "XPATH", ObjReader.getLocator("iListItemsPerPage"), "328");
-        log.info("[STEP] Last Item from Total Number of Pages List Box is selected");
+        log.info("[" + getCurrentTimestamp() + "] STEP START | ActionType=" + pActionType
+                + " | IdentifyBy=" + pIdentifyBy
+                + " | Object=" + pObjectName
+                + " | Value=" + (pValue == null ? "" : pValue));
     }
 
-
-    // ===================================================================================================================================
-    //  FARMER SELECTION AND DASHBOARD
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent opens a farmer dashboard using herd data from row 4
-    // Description   : Reads herd number from the specified row of the HerdData sheet in TestData.xlsx
-    //                 and searches for that farmer on the My Clients screen
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent opens a farmer dashboard using herd data")
-    public void theAgentOpensAFarmerDashboardUsingHerdDataFromRow()
+    private static void logStepPass(String pActionType, String pIdentifyBy, String pObjectName, String pValue, long pDurationMs)
     {
-        log.info("[STEP] When the agent opens a farmer dashboard using herd data");
-        CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "TD:HerdNumber");
-        iAction("CLICK",   "XPATH",    ObjReader.getLocator("herdSearchBtn"),   null);
-        log.info("Farmer dashboard opened for herd number: " + "TD:iHerdNumber");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iViewAllTab"), "");
+        log.info("[" + getCurrentTimestamp() + "] STEP PASS  | ActionType=" + pActionType
+                + " | IdentifyBy=" + pIdentifyBy
+                + " | Object=" + pObjectName
+                + " | Value=" + (pValue == null ? "" : pValue)
+                + " | Duration=" + pDurationMs + " ms");
+    }
 
+    private static void logStepFail(String pActionType, String pIdentifyBy, String pObjectName, String pValue, long pDurationMs, String pReason)
+    {
+        log.severe("[" + getCurrentTimestamp() + "] STEP FAIL  | ActionType=" + pActionType
+                + " | IdentifyBy=" + pIdentifyBy
+                + " | Object=" + pObjectName
+                + " | Value=" + (pValue == null ? "" : pValue)
+                + " | Duration=" + pDurationMs + " ms"
+                + " | Reason=" + pReason);
     }
 
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the farmer dashboard should be displayed
-    // Description   : Confirms the farmer dashboard panel is visible
-    // ***************************************************************************************************************************************************************************************
-    @Then("the farmer dashboard should be displayed")
-    public void theFarmerDashboardShouldBeDisplayed() {
-        log.info("[STEP] Then the farmer dashboard should be displayed");
-        iAction("CLICK",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
-        //CLick on View Dashboard Button for Farmer Dashboard
-        iAction("CLICK",   "XPATH",    ObjReader.getLocator("iViewDashboard"),   null);
-        String iDashboardHeader = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iFarmerDashboardHeader"), null);
-        Assertions.assertFalse(iDashboardHeader.isEmpty(), "Farmer dashboard header should be visible.");
-        log.info("Farmer dashboard confirmed: " + iDashboardHeader);
+    // ===============================================================================================================================
+    // SECTION 4 : String Utilities
+    // ===============================================================================================================================
 
-        //CLick on View Start Application for Farmer Dashboard
-        iAction("CLICK",   "XPATH",    ObjReader.getLocator("iStartApplicationBtn"),   null);
+    private static String sanitizeFileName(String pInput)
+    {
+        if (pInput == null || pInput.trim().isEmpty())
+        {
+            return "Unnamed";
+        }
+        return pInput.trim().replaceAll("[\\\\/:*?\"<>|\\s]+", "_");
     }
 
 
-    // ===================================================================================================================================
-    //  SIDE NAVIGATION VALIDATION
-    // ===================================================================================================================================
+    // ===============================================================================================================================
+    // SECTION 5 : Browser Lifecycle
+    // ===============================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent navigates through the farmer side navigation tabs
-    // Description   : Iterates through the provided DataTable list of tab names and clicks each one
+    // Function Name : launchBrowser
+    // Description   : Launches the specified browser, initialises ThreadLocal driver and wait, and navigates to the given URL.
+    //                 Supports Chrome, Firefox, and Edge.
+    //                 After navigation, waits for Angular to stabilise before returning so the first step
+    //                 always starts from a fully ready application state.
+    // Parameters    : pBrowserType (String) - CHROME | FIREFOX | EDGE
+    //                 pUrl         (String) - application URL
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent navigates through the farmer side navigation tabs")
-    public void theAgentNavigatesThroughTheFarmerSideNavigationTabs(DataTable pDataTable) {
-        log.info("[STEP] When the agent navigates through the farmer side navigation tabs");
-        List<String> iTabs = pDataTable.asList();
-        for (String iTab : iTabs) {
-            log.info("  Clicking side nav tab: " + iTab);
-            String iCleanTabName = iTab.replace("My ", "").trim();
-            iAction("CLICK", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
+    public static void launchBrowser(String pBrowserType, String pUrl)
+    {
+        try
+        {
+            if (pBrowserType == null || pBrowserType.trim().isEmpty())
+            {
+                throw new RuntimeException("Browser type cannot be blank. Supported: CHROME, FIREFOX, EDGE.");
+            }
+            if (pUrl == null || pUrl.trim().isEmpty())
+            {
+                throw new RuntimeException("URL cannot be blank.");
+            }
+
+            boolean   iHeadless = Boolean.parseBoolean(System.getProperty("headless", "false"));
+            WebDriver iDriver;
+
+            switch (pBrowserType.trim().toUpperCase())
+            {
+                case "CHROME":
+                {
+                    ChromeOptions iOptions = new ChromeOptions();
+                    iOptions.addArguments("--start-maximized");
+                    iOptions.addArguments("--disable-notifications");
+                    iOptions.addArguments("--disable-infobars");
+                    iOptions.addArguments("--disable-extensions");
+                    iOptions.addArguments("--no-sandbox");
+                    iOptions.addArguments("--disable-dev-shm-usage");
+                    // Disable GPU-based rendering throttling that can cause Angular CD delays
+                    iOptions.addArguments("--disable-gpu");
+                    // Prevent Chrome from deprioritising background tab rendering
+                    iOptions.addArguments("--disable-background-timer-throttling");
+                    iOptions.addArguments("--disable-backgrounding-occluded-windows");
+                    iOptions.addArguments("--disable-renderer-backgrounding");
+                    if (iHeadless)
+                    {
+                        iOptions.addArguments("--headless=new");
+                        iOptions.addArguments("--window-size=1920,1080");
+                    }
+                    System.setProperty("webdriver.chrome.driver", "drivers/chromedriver.exe");
+                    iDriver = new ChromeDriver(iOptions);
+                    break;
+                }
+                case "FIREFOX":
+                {
+                    FirefoxOptions iOptions = new FirefoxOptions();
+                    if (iHeadless)
+                    {
+                        iOptions.addArguments("-headless");
+                    }
+                    iDriver = new FirefoxDriver(iOptions);
+                    iDriver.manage().window().maximize();
+                    break;
+                }
+                case "EDGE":
+                {
+                    EdgeOptions iOptions = new EdgeOptions();
+                    iOptions.addArguments("--start-maximized");
+                    iOptions.addArguments("--disable-notifications");
+                    iOptions.addArguments("--disable-background-timer-throttling");
+                    if (iHeadless)
+                    {
+                        iOptions.addArguments("--headless=new");
+                        iOptions.addArguments("--window-size=1920,1080");
+                    }
+                    iDriver = new EdgeDriver(iOptions);
+                    break;
+                }
+                default:
+                    throw new RuntimeException("Unsupported browser : '" + pBrowserType + "'. Supported: CHROME, FIREFOX, EDGE.");
+            }
+
+            iDriverHolder.set(iDriver);
+            iWaitHolder.set(new WebDriverWait(iDriver, Duration.ofSeconds(iExplicitWaitSeconds)));
+            iDriver.get(pUrl.trim());
+
+            // Wait for Angular to fully stabilise after initial page load
+            waitForAngularReady(iDriver);
+
+            log.info("[" + getCurrentTimestamp() + "] Browser launched | Browser=" + pBrowserType.toUpperCase()
+                    + " | Headless=" + iHeadless + " | URL=" + pUrl);
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Browser launch failed [" + pBrowserType + "] : " + iException.getMessage(), iException);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : closeBrowser
+    // Description   : Quits the WebDriver bound to the current thread and cleans up ThreadLocal references
+    // ***************************************************************************************************************************************************************************************
+    public static void closeBrowser()
+    {
+        try
+        {
+            WebDriver iDriver = iDriverHolder.get();
+            if (iDriver != null)
+            {
+                iDriver.quit();
+                log.info("[" + getCurrentTimestamp() + "] Browser closed successfully.");
+            }
+            else
+            {
+                log.warning("[" + getCurrentTimestamp() + "] closeBrowser called but no active driver on this thread.");
+            }
+        }
+        catch (Exception iException)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] Error closing browser : " + iException.getMessage());
+        }
+        finally
+        {
+            iDriverHolder.remove();
+            iWaitHolder.remove();
         }
     }
 
 
+    // ===============================================================================================================================
+    // SECTION 6 : Angular Synchronisation
+    // ===============================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then each requested side navigation tab should open successfully
-    // Description   : Confirms the last clicked tab rendered its content panel
+    // Function Name : waitForAngularReady
+    // Description   : Blocks execution until the Angular application is fully stable and ready for interaction.
+    //
+    //                 Three conditions must ALL be true before this method returns:
+    //
+    //                   Condition 1 — document.readyState === 'complete'
+    //                     Ensures the HTML document and all synchronous resources have finished loading.
+    //
+    //                   Condition 2 — Angular Zone.js task queue is empty
+    //                     Angular uses Zone.js to track all async tasks (HTTP calls, setTimeout, Promises).
+    //                     When ngZone.hasPendingMacrotasks and hasPendingMicrotasks are both false,
+    //                     Angular has finished processing and the DOM is stable.
+    //                     Falls back gracefully if Angular is not present on the page (e.g. login page
+    //                     served by a different framework).
+    //
+    //                   Condition 3 — No MDC circular progress spinner visible
+    //                     The BISS application shows an MDC spinner during API response delays.
+    //                     This check ensures the spinner is gone before any element interaction begins.
+    //
+    //                 This method is called automatically by iAction() before every single interaction.
+    //                 It does NOT replace WAITINVISIBLE in step definitions — WAITINVISIBLE is the
+    //                 explicit step-level wait; this is the implicit framework-level safety net.
+    //
+    // Parameters    : pDriver (WebDriver) - current thread driver
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    @Then("each requested side navigation tab should open successfully")
-    public void eachRequestedSideNavigationTabShouldOpenSuccessfully() {
-        log.info("[STEP] Then each requested side navigation tab should open successfully");
-        String iActiveTab = iAction("GETTEXT", "XPATH", "//nav//a[contains(@class,'active')]", null);
-        Assertions.assertFalse(iActiveTab.isEmpty(), "An active side navigation tab should be present.");
-        log.info("Side navigation tabs validated | Last active: " + iActiveTab);
+    public static void waitForAngularReady(WebDriver pDriver)
+    {
+        if (pDriver == null)
+        {
+            return;
+        }
+
+        JavascriptExecutor iJs        = (JavascriptExecutor) pDriver;
+        long               iDeadline  = System.currentTimeMillis() + iAngularTimeoutMs;
+
+        while (System.currentTimeMillis() < iDeadline)
+        {
+            try
+            {
+                // ── Condition 1 : document.readyState ────────────────────────────────────
+                Object iReadyState = iJs.executeScript("return document.readyState;");
+                if (!"complete".equals(iReadyState))
+                {
+                    Thread.sleep(iAngularPollMs);
+                    continue;
+                }
+
+                // ── Condition 2 : Angular Zone.js stability ───────────────────────────────
+                // The JS checks for window.getAllAngularTestabilities() which is present in
+                // Angular apps compiled with Zone.js (standard Angular build).
+                // Returns true (stable) when no pending tasks remain in any Angular zone.
+                Object iAngularStable = iJs.executeScript(
+                    "try {" +
+                    "  var testabilities = window.getAllAngularTestabilities();" +
+                    "  if (!testabilities || testabilities.length === 0) { return true; }" +
+                    "  for (var i = 0; i < testabilities.length; i++) {" +
+                    "    if (!testabilities[i].isStable()) { return false; }" +
+                    "  }" +
+                    "  return true;" +
+                    "} catch(e) {" +
+                    "  return true;" +  // Angular not present on this page — treat as stable
+                    "}"
+                );
+
+                if (!Boolean.TRUE.equals(iAngularStable))
+                {
+                    Thread.sleep(iAngularPollMs);
+                    continue;
+                }
+
+                // ── Condition 3 : MDC spinner not visible ─────────────────────────────────
+                // Checks both CSS visibility and aria-hidden on the spinner container.
+                // Uses findElements (returns empty list instead of throwing) for safety.
+                List<WebElement> iSpinners = pDriver.findElements(By.cssSelector(iSpinnerCss));
+
+                boolean iSpinnerActive = false;
+
+                for (WebElement iSpinner : iSpinners)
+                {
+                    try
+                    {
+                        boolean iDisplayed   = iSpinner.isDisplayed();
+                        String  iAriaHidden  = iSpinner.getAttribute("aria-hidden");
+                        boolean iHiddenByAria = "true".equalsIgnoreCase(iAriaHidden);
+
+                        if (iDisplayed && !iHiddenByAria)
+                        {
+                            iSpinnerActive = true;
+                            break;
+                        }
+                    }
+                    catch (StaleElementReferenceException iStale)
+                    {
+                        // Spinner was removed from DOM while checking — treat as gone
+                    }
+                }
+
+                if (iSpinnerActive)
+                {
+                    Thread.sleep(iAngularPollMs);
+                    continue;
+                }
+
+                // All three conditions met — Angular is ready
+                return;
+            }
+            catch (InterruptedException iInterrupted)
+            {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            catch (Exception iException)
+            {
+                // JS execution error or driver communication issue — log and continue polling
+                log.warning("[" + getCurrentTimestamp() + "] waitForAngularReady poll error (non-fatal) : " + iException.getMessage());
+                try { Thread.sleep(iAngularPollMs); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            }
+        }
+
+        // Timeout reached — log warning but do NOT throw. Framework continues.
+        // If the page is genuinely broken the subsequent element wait will fail with a clear message.
+        log.warning("[" + getCurrentTimestamp() + "] waitForAngularReady timed out after " + iAngularTimeoutMs + "ms — proceeding with action.");
     }
 
 
-    // ===================================================================================================================================
-    //  APPLICATION START
-    // ===================================================================================================================================
+    // ===============================================================================================================================
+    // SECTION 7 : Element Interaction Helpers
+    // ===============================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent deletes any existing draft if present
-    // Description   : Checks for an existing draft application and deletes it if found, otherwise continues
+    // Function Name : highlightElement
+    // Description   : Temporarily highlights the target element with a red border for visual execution tracking
     // ***************************************************************************************************************************************************************************************
-    @When("the agent deletes any existing draft if present")
-    public void theAgentDeletesAnyExistingDraftIfPresent() {
-        log.info("[STEP] When the agent deletes any existing draft if present");
-        try {
-            iAction("CLICK", "XPATH", "//button[contains(text(),'Delete Draft') or contains(text(),'Delete')]", null);
-            iAction("CLICK", "XPATH", "//button[contains(text(),'Confirm') or contains(text(),'Yes')]",         null);
-            log.info("Existing draft deleted.");
-        } catch (Exception e) {
-            log.info("No existing draft found — continuing to start new application.");
+    public static void highlightElement(WebDriver pDriver, WebElement pElement)
+    {
+        try
+        {
+            if (pDriver == null || pElement == null) { return; }
+
+            JavascriptExecutor iJs            = (JavascriptExecutor) pDriver;
+            String             iOriginalStyle = pElement.getAttribute("style");
+
+            iJs.executeScript("arguments[0].setAttribute('style', arguments[1]);",
+                    pElement, "border: 3px solid red; background: rgba(255,0,0,0.03);");
+
+            new Actions(pDriver).pause(Duration.ofMillis(300)).perform();
+
+            iJs.executeScript("arguments[0].setAttribute('style', arguments[1]);",
+                    pElement, iOriginalStyle == null ? "" : iOriginalStyle);
+        }
+        catch (Exception iException)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] highlightElement failed (non-fatal) : " + iException.getMessage());
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : scrollIntoView
+    // Description   : Scrolls element to centre of viewport before interaction
+    // ***************************************************************************************************************************************************************************************
+    public static void scrollIntoView(WebDriver pDriver, WebElement pElement)
+    {
+        try
+        {
+            if (pDriver == null || pElement == null) { return; }
+            ((JavascriptExecutor) pDriver).executeScript(
+                    "arguments[0].scrollIntoView({block:'center', inline:'nearest'});", pElement);
+        }
+        catch (Exception iException)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] scrollIntoView failed (non-fatal) : " + iException.getMessage());
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : pressEscape
+    // Description   : Sends ESC to the active element — used to close open Angular overlay panels
+    // ***************************************************************************************************************************************************************************************
+    private static void pressEscape(WebDriver pDriver)
+    {
+        try
+        {
+            pDriver.switchTo().activeElement().sendKeys(Keys.ESCAPE);
+        }
+        catch (Exception ignored) {}
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getByLocator
+    // Description   : Converts locator strategy string and value into a Selenium By object
+    // ***************************************************************************************************************************************************************************************
+    private static By getByLocator(String pIdentifyBy, String pObjectName)
+    {
+        switch (pIdentifyBy.trim().toUpperCase())
+        {
+            case "ID":                             return By.id(pObjectName);
+            case "NAME":                           return By.name(pObjectName);
+            case "XPATH":                          return By.xpath(pObjectName);
+            case "CSS":
+            case "CSSSELECTOR":
+            case "CSS_SELECTOR":                   return By.cssSelector(pObjectName);
+            case "CLASSNAME":
+            case "CLASS_NAME":                     return By.className(pObjectName);
+            case "TAGNAME":
+            case "TAG_NAME":                       return By.tagName(pObjectName);
+            case "LINKTEXT":
+            case "LINK_TEXT":                      return By.linkText(pObjectName);
+            case "PARTIALLINKTEXT":
+            case "PARTIAL_LINK_TEXT":              return By.partialLinkText(pObjectName);
+            default:
+                throw new RuntimeException("Unsupported IdentifyBy : '" + pIdentifyBy + "'. "
+                        + "Supported: ID, NAME, XPATH, CSS, CSSSELECTOR, CSS_SELECTOR, "
+                        + "CLASSNAME, CLASS_NAME, TAGNAME, TAG_NAME, LINKTEXT, LINK_TEXT, "
+                        + "PARTIALLINKTEXT, PARTIAL_LINK_TEXT");
         }
     }
 
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent starts a new BISS application
-    // Description   : Clicks the Start Application button to begin a new BISS submission
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent starts a new BISS application")
-    public void theAgentStartsANewBISSApplication() {
-        log.info("[STEP] And the agent starts a new BISS application");
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Start Application') or contains(text(),'New Application')]", null);
-    }
-
+    // ===============================================================================================================================
+    // SECTION 8 : iAction Per-Type Private Methods
+    // ===============================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the Active Farmer step should be displayed
-    // Description   : Confirms the Active Farmer step header is visible
+    // Function Name : performClick
+    // Description   : Clicks an element using a four-tier fallback strategy designed for Angular Material.
+    //
+    //                 Tier 0 — Angular readiness gate
+    //                   waitForAngularReady() runs first to ensure no pending HTTP/Zone tasks.
+    //
+    //                 Tier 1 — mat-icon / span / div parent escalation (pre-check)
+    //                   Angular Material icon buttons structure is <button><mat-icon>...</mat-icon></button>.
+    //                   The click handler lives on the parent <button>, not the <mat-icon>.
+    //                   This tier walks up the DOM to find the nearest <button> or <a> ancestor.
+    //
+    //                 Tier 2 — Standard Selenium click
+    //                   Direct element.click() — fast and reliable for most elements.
+    //
+    //                 Tier 3 — JavaScript click
+    //                   Fires on ElementClickInterceptedException (MDC ripple overlay interception).
+    //
+    //                 Tier 4 — Actions chain click
+    //                   Last resort — moves to element centre and clicks via Actions API.
     // ***************************************************************************************************************************************************************************************
-    @Then("the Active Farmer step should be displayed")
-    public void theActiveFarmerStepShouldBeDisplayed() {
-        log.info("[STEP] Then the Active Farmer step should be displayed");
-        String iStepHeader = iAction("GETTEXT", "XPATH", "//h2[contains(text(),'Active Farmer')]", null);
-        Assertions.assertFalse(iStepHeader.isEmpty(), "Active Farmer step header should be visible.");
-        log.info("Active Farmer step confirmed.");
-    }
+    private static void performClick(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
+    {
+        // Angular readiness gate — before every click
+        waitForAngularReady(pDriver);
 
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
 
-    // ===================================================================================================================================
-    //  ACTIVE FARMER STEP
-    // ===================================================================================================================================
+        String iTagName = iElement.getTagName().toLowerCase().trim();
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent selects "Making Hay/Silage/Haylage" in the Active Farmer step
-    // Description   : Selects the specified active farmer activity radio button or checkbox
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent selects {string} in the Active Farmer step")
-    public void theAgentSelectsInTheActiveFarmerStep(String pActivity) {
-        log.info("[STEP] When the agent selects in the Active Farmer step: " + pActivity);
-        iAction("CLICK", "XPATH", "//label[contains(text(),'" + pActivity + "')]", null);
-    }
+        // ── Tier 1 : Parent escalation for Angular Material icon/span/div elements ──────────
+        if ("mat-icon".equals(iTagName) || "span".equals(iTagName) || "div".equals(iTagName))
+        {
+            WebElement iAncestor = findClickableAncestor(pDriver, iElement);
+            if (iAncestor != null)
+            {
+                log.info("[" + getCurrentTimestamp() + "] CLICK | Escalating from <" + iTagName
+                        + "> to parent <" + iAncestor.getTagName() + "> | Locator: " + pObjectName);
+                scrollIntoView(pDriver, iAncestor);
+                highlightElement(pDriver, iAncestor);
+                try
+                {
+                    iAncestor.click();
+                    log.info("[" + getCurrentTimestamp() + "] CLICK | Parent escalation succeeded | " + pObjectName);
+                    waitForAngularReady(pDriver);
+                    return;
+                }
+                catch (Exception iAncestorEx)
+                {
+                    log.warning("[" + getCurrentTimestamp() + "] CLICK | Parent escalation failed — falling through | " + iAncestorEx.getMessage());
+                }
+            }
+        }
 
+        // ── Tier 2 : Standard Selenium click ─────────────────────────────────────────────────
+        try
+        {
+            iElement.click();
+            log.info("[" + getCurrentTimestamp() + "] CLICK | Standard click succeeded | " + pObjectName);
+            waitForAngularReady(pDriver);
+            return;
+        }
+        catch (ElementClickInterceptedException iIntercepted)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] CLICK | Intercepted — retrying with JS click | " + pObjectName);
+        }
+        catch (Exception iStandardEx)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] CLICK | Standard failed — retrying with JS click | " + iStandardEx.getMessage());
+        }
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent proceeds to the next application step
-    // Description   : Clicks the Next / Continue / Proceed button to advance the wizard step
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent proceeds to the next application step")
-    public void theAgentProceedsToTheNextApplicationStep() {
-        log.info("[STEP] And the agent proceeds to the next application step");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Next') or contains(text(),'Continue') or contains(text(),'Proceed')]",
-                null);
-    }
+        // ── Tier 3 : JavaScript click ─────────────────────────────────────────────────────────
+        try
+        {
+            ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", iElement);
+            log.info("[" + getCurrentTimestamp() + "] CLICK | JS click succeeded | " + pObjectName);
+            waitForAngularReady(pDriver);
+            return;
+        }
+        catch (Exception iJsEx)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] CLICK | JS click failed — retrying with Actions | " + iJsEx.getMessage());
+        }
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the Scheme Selection step should be displayed
-    // Description   : Confirms the Scheme Selection step header is visible
-    // ***************************************************************************************************************************************************************************************
-    @Then("the Scheme Selection step should be displayed")
-    public void theSchemeSelectionStepShouldBeDisplayed() {
-        log.info("[STEP] Then the Scheme Selection step should be displayed");
-        String iStepHeader = iAction("GETTEXT", "XPATH", "//h2[contains(text(),'Scheme Selection')]", null);
-        Assertions.assertFalse(iStepHeader.isEmpty(), "Scheme Selection step header should be visible.");
-        log.info("Scheme Selection step confirmed.");
-    }
-
-
-    // ===================================================================================================================================
-    //  SCHEME SELECTION STEP
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent selects the "Organics" scheme
-    // Description   : Clicks the scheme card or checkbox for the named scheme
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent selects the {string} scheme")
-    public void theAgentSelectsTheScheme(String pSchemeName) {
-        log.info("[STEP] When the agent selects the scheme: " + pSchemeName);
-        iAction("CLICK", "XPATH", "//label[contains(text(),'" + pSchemeName + "')]", null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent accepts the scheme selection acknowledgement if displayed
-    // Description   : Dismisses any acknowledgement modal that appears after scheme selection — skips if not present
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent accepts the scheme selection acknowledgement if displayed")
-    public void theAgentAcceptsTheSchemeSelectionAcknowledgementIfDisplayed() {
-        log.info("[STEP] And the agent accepts the scheme selection acknowledgement if displayed");
-        try {
-            iAction("CLICK", "XPATH",
-                    "//button[contains(text(),'Accept') or contains(text(),'Acknowledge') or contains(text(),'OK')]",
-                    null);
-            log.info("Scheme selection acknowledgement accepted.");
-        } catch (Exception e) {
-            log.info("No acknowledgement modal displayed — continuing.");
+        // ── Tier 4 : Actions moveToElement + click ────────────────────────────────────────────
+        try
+        {
+            new Actions(pDriver).moveToElement(iElement).click().perform();
+            log.info("[" + getCurrentTimestamp() + "] CLICK | Actions click succeeded | " + pObjectName);
+            waitForAngularReady(pDriver);
+        }
+        catch (Exception iActionsEx)
+        {
+            throw new RuntimeException("CLICK failed on all strategies (parent escalation / standard / JS / Actions) for : "
+                    + pObjectName + " | " + iActionsEx.getMessage(), iActionsEx);
         }
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : findClickableAncestor
+    // Description   : Walks up the DOM from a given element to find the nearest <button>, <a>, or role=button ancestor.
+    //                 Used by performClick to resolve Angular Material icon button targets.
+    // ***************************************************************************************************************************************************************************************
+    private static WebElement findClickableAncestor(WebDriver pDriver, WebElement pElement)
+    {
+        try
+        {
+            WebElement iCurrent = pElement;
+            for (int iLevel = 0; iLevel < 5; iLevel++)
+            {
+                try
+                {
+                    iCurrent = (WebElement) ((JavascriptExecutor) pDriver)
+                            .executeScript("return arguments[0].parentElement;", iCurrent);
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the Land Details step should be displayed
-    // Description   : Confirms the Land Details step header is visible
-    // ***************************************************************************************************************************************************************************************
-    @Then("the Land Details step should be displayed")
-    public void theLandDetailsStepShouldBeDisplayed() {
-        log.info("[STEP] Then the Land Details step should be displayed");
-        String iStepHeader = iAction("GETTEXT", "XPATH", "//h2[contains(text(),'Land Details')]", null);
-        Assertions.assertFalse(iStepHeader.isEmpty(), "Land Details step header should be visible.");
-        log.info("Land Details step confirmed.");
+                    if (iCurrent == null) { break; }
+
+                    String iTag  = iCurrent.getTagName().toLowerCase().trim();
+                    String iRole = iCurrent.getAttribute("role");
+
+                    if ("button".equals(iTag) || "a".equals(iTag) || "button".equals(iRole))
+                    {
+                        log.info("[" + getCurrentTimestamp() + "] findClickableAncestor | Found <" + iTag + "> at level " + (iLevel + 1));
+                        return iCurrent;
+                    }
+                }
+                catch (Exception iLevelEx)
+                {
+                    break;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] findClickableAncestor error : " + e.getMessage());
+        }
+        return null;
     }
 
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — INVALID PARCEL VALIDATION
-    // ===================================================================================================================================
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent attempts to add parcel "Invalid789"
-    // Description   : Enters an invalid parcel ID into the add parcel dialog and submits
+    // Function Name : performDoubleClick
     // ***************************************************************************************************************************************************************************************
-    @When("the agent attempts to add parcel {string}")
-    public void theAgentAttemptsToAddParcel(String pParcelId) {
-        log.info("[STEP] When the agent attempts to add parcel: " + pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Add Parcel')]",   null);
-        iAction("TEXTBOX", "ID",    "parcelIdInput",                             pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Search') or contains(text(),'Add')]", null);
+    private static void performDoubleClick(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    {
+        waitForAngularReady(pDriver);
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+        new Actions(pDriver).doubleClick(iElement).perform();
+        waitForAngularReady(pDriver);
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the invalid parcel warning message should be displayed
-    // Description   : Asserts the invalid parcel error message is visible on screen
+    // Function Name : performRightClick
     // ***************************************************************************************************************************************************************************************
-    @Then("the invalid parcel warning message should be displayed")
-    public void theInvalidParcelWarningMessageShouldBeDisplayed() {
-        log.info("[STEP] Then the invalid parcel warning message should be displayed");
-        String iWarning = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'error') or contains(@class,'warning')][contains(text(),'invalid') or contains(text(),'not found')]",
-                null);
-        Assertions.assertFalse(iWarning.isEmpty(), "Invalid parcel warning message should be displayed.");
-        log.info("Invalid parcel warning confirmed: " + iWarning);
+    private static void performRightClick(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    {
+        waitForAngularReady(pDriver);
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+        new Actions(pDriver).contextClick(iElement).perform();
+        waitForAngularReady(pDriver);
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the add parcel dialog should remain available for correction or cancellation
-    // Description   : Confirms the add parcel dialog is still open and usable after an invalid entry
+    // Function Name : performHover
     // ***************************************************************************************************************************************************************************************
-    @And("the add parcel dialog should remain available for correction or cancellation")
-    public void theAddParcelDialogShouldRemainAvailableForCorrectionOrCancellation() {
-        log.info("[STEP] And the add parcel dialog should remain available for correction or cancellation");
-        String iDialogTitle = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'modal') or contains(@class,'dialog')]//h2 | //div[contains(@class,'modal') or contains(@class,'dialog')]//h3",
-                null);
-        Assertions.assertFalse(iDialogTitle.isEmpty(), "Add parcel dialog should still be open after invalid entry.");
-        log.info("Add parcel dialog still open: " + iDialogTitle);
+    private static void performHover(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    {
+        waitForAngularReady(pDriver);
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+        new Actions(pDriver).moveToElement(iElement).perform();
+        waitForAngularReady(pDriver);
     }
 
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — ARCHIVED PARCEL VALIDATION
-    // ===================================================================================================================================
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent attempts to add archived parcel "H19112055"
-    // Description   : Enters a known archived parcel ID and submits it
+    // Function Name : performTextBox
+    // Description   : Waits for element to be visible, clickable, and editable (not disabled/readonly)
+    //                 before clearing and typing. Angular readiness checked before and after.
     // ***************************************************************************************************************************************************************************************
-    @When("the agent attempts to add archived parcel {string}")
-    public void theAgentAttemptsToAddArchivedParcel(String pParcelId) {
-        log.info("[STEP] When the agent attempts to add archived parcel: " + pParcelId);
-        iAction("TEXTBOX", "ID",    "parcelIdInput",                                                  pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Search') or contains(text(),'Add')]",  null);
+    private static void performTextBox(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
+    {
+        if (pValue == null)
+        {
+            throw new RuntimeException("TEXTBOX action requires a non-null value.");
+        }
+
+        waitForAngularReady(pDriver);
+
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+
+        // Wait until the field is genuinely editable — not disabled, not readonly
+        // Angular forms sometimes render fields as readonly while the model is still loading
+        pWait.until(iWebDriver ->
+        {
+            String iReadOnly = iElement.getAttribute("readonly");
+            return iElement.isEnabled() && (iReadOnly == null || iReadOnly.equalsIgnoreCase("false"));
+        });
+
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+        iElement.clear();
+
+        // Small pause after clear — Angular reactive forms can re-validate on clear
+        // which may temporarily disable the field before re-enabling it
+        try { Thread.sleep(100); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+
+        iElement.sendKeys(pValue);
+
+        // After sendKeys, wait for Angular to process the input event
+        waitForAngularReady(pDriver);
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performClearTextBox
+    // ***************************************************************************************************************************************************************************************
+    private static void performClearTextBox(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    {
+        waitForAngularReady(pDriver);
+
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        pWait.until(iWebDriver ->
+        {
+            String iReadOnly = iElement.getAttribute("readonly");
+            return iElement.isEnabled() && (iReadOnly == null || iReadOnly.equalsIgnoreCase("false"));
+        });
+
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+        iElement.clear();
+        waitForAngularReady(pDriver);
+    }
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the archived parcel warning should be displayed if applicable
-    // Description   : Soft assertion — logs warning if message is found; does not fail if not present
+    // Function Name : performRadioButton
     // ***************************************************************************************************************************************************************************************
-    @Then("the archived parcel warning should be displayed if applicable")
-    public void theArchivedParcelWarningShouldBeDisplayedIfApplicable() {
-        log.info("[STEP] Then the archived parcel warning should be displayed if applicable");
-        try {
-            String iWarning = iAction("GETTEXT", "XPATH",
-                    "//div[contains(@class,'warning') or contains(@class,'alert')][contains(text(),'archived') or contains(text(),'Archived')]",
-                    null);
-            log.info("Archived parcel warning found: " + iWarning);
-        } catch (Exception e) {
-            log.info("No archived parcel warning displayed — may not apply to this parcel in this environment.");
+    private static void performRadioButton(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    {
+        waitForAngularReady(pDriver);
+
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+
+        if (!iElement.isSelected())
+        {
+            iElement.click();
+            waitForAngularReady(pDriver);
+        }
+        else
+        {
+            log.info("[" + getCurrentTimestamp() + "] RADIOBUTTON already selected — skipping click.");
         }
     }
 
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — ADD VALID PARCEL
-    // ===================================================================================================================================
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent adds parcel "A1190600017" with claimed area "7"
-    // Description   : Opens add parcel dialog, enters parcel ID and claimed area, submits
+    // Function Name : performCheckBox
     // ***************************************************************************************************************************************************************************************
-    @When("the agent adds parcel {string} with claimed area {string}")
-    public void theAgentAddsParcelWithClaimedArea(String pParcelId, String pClaimedArea) {
-        log.info("[STEP] When the agent adds parcel: " + pParcelId + " with claimed area: " + pClaimedArea);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Add Parcel')]",                            null);
-        iAction("TEXTBOX", "ID",    "parcelIdInput",                                                      pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Search')]",                                null);
-        iAction("TEXTBOX", "ID",    "claimedArea",                                                        pClaimedArea);
-    }
+    private static void performCheckBox(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
+    {
+        if (pValue == null || pValue.trim().isEmpty())
+        {
+            throw new RuntimeException("CHECKBOX action requires CHECK or UNCHECK as value.");
+        }
 
+        waitForAngularReady(pDriver);
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent sets parcel ownership status to "Owned"
-    // Description   : Selects ownership status from the dropdown in the add parcel form
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent sets parcel ownership status to {string}")
-    public void theAgentSetsParcelOwnershipStatusTo(String pOwnershipStatus) {
-        log.info("[STEP] And the agent sets parcel ownership status to: " + pOwnershipStatus);
-        iAction("LIST", "ID", "ownershipStatus", "VISIBLETEXT:" + pOwnershipStatus);
-    }
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
 
+        String iAction = pValue.trim().toUpperCase();
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent sets parcel use to "Apples"
-    // Description   : Selects parcel land use from the dropdown in the add parcel form
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent sets parcel use to {string}")
-    public void theAgentSetsParcelUseTo(String pParcelUse) {
-        log.info("[STEP] And the agent sets parcel use to: " + pParcelUse);
-        iAction("LIST", "ID", "parcelUse", "VISIBLETEXT:" + pParcelUse);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent sets parcel organic status to "Conventional"
-    // Description   : Selects organic status from the dropdown in the add parcel form
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent sets parcel organic status to {string}")
-    public void theAgentSetsParcelOrganicStatusTo(String pOrganicStatus) {
-        log.info("[STEP] And the agent sets parcel organic status to: " + pOrganicStatus);
-        iAction("LIST", "ID", "organicStatus", "VISIBLETEXT:" + pOrganicStatus);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the parcel should be added successfully to Land Details
-    // Description   : Confirms success message or parcel row is visible in Land Details table
-    // ***************************************************************************************************************************************************************************************
-    @Then("the parcel should be added successfully to Land Details")
-    public void theParcelShouldBeAddedSuccessfullyToLandDetails() {
-        log.info("[STEP] Then the parcel should be added successfully to Land Details");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Add') or contains(text(),'Save') or contains(text(),'Submit')]",
-                null);
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "Parcel success confirmation should be visible after adding.");
-        log.info("Parcel added successfully: " + iConfirmation);
-    }
-
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — ALREADY CLAIMED PARCEL
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent attempts to add parcel "A1190600017" again
-    // Description   : Attempts to re-add a parcel that was already added in this session
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent attempts to add parcel {string} again")
-    public void theAgentAttemptsToAddParcelAgain(String pParcelId) {
-        log.info("[STEP] When the agent attempts to add parcel again: " + pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Add Parcel')]",                           null);
-        iAction("TEXTBOX", "ID",    "parcelIdInput",                                                     pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Search') or contains(text(),'Add')]",     null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the already claimed parcel warning should be displayed if applicable
-    // Description   : Soft assertion for duplicate parcel warning — logs result without hard failing
-    // ***************************************************************************************************************************************************************************************
-    @Then("the already claimed parcel warning should be displayed if applicable")
-    public void theAlreadyClaimedParcelWarningShouldBeDisplayedIfApplicable() {
-        log.info("[STEP] Then the already claimed parcel warning should be displayed if applicable");
-        try {
-            String iWarning = iAction("GETTEXT", "XPATH",
-                    "//div[contains(@class,'warning') or contains(@class,'alert')][contains(text(),'claimed') or contains(text(),'already')]",
-                    null);
-            log.info("Already claimed warning found: " + iWarning);
-        } catch (Exception e) {
-            log.info("No already-claimed warning displayed.");
+        if ("CHECK".equals(iAction))
+        {
+            if (!iElement.isSelected())
+            {
+                iElement.click();
+                waitForAngularReady(pDriver);
+            }
+            else
+            {
+                log.info("[" + getCurrentTimestamp() + "] CHECKBOX already checked — skipping.");
+            }
+        }
+        else if ("UNCHECK".equals(iAction))
+        {
+            if (iElement.isSelected())
+            {
+                iElement.click();
+                waitForAngularReady(pDriver);
+            }
+            else
+            {
+                log.info("[" + getCurrentTimestamp() + "] CHECKBOX already unchecked — skipping.");
+            }
+        }
+        else
+        {
+            throw new RuntimeException("CHECKBOX only accepts CHECK or UNCHECK. Got : '" + pValue + "'");
         }
     }
 
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — ADD PLOT
-    // ===================================================================================================================================
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent adds a plot with the following details
-    // Description   : Reads plot details from DataTable and fills in the add plot form fields
-    //                 DataTable keys: county, townland, plotReference, ownershipStatus,
-    //                                 organicStatus, claimedArea, plotUse, mapChangeOption
+    // Function Name : performList
+    // Description   : Handles both native HTML <select> elements AND Angular Material <mat-select> components.
+    //
+    //                 Detection: reads the element tag name after finding it.
+    //                   "select"     → native HTML → Selenium Select class
+    //                   "mat-select" → Angular MDC → performMatSelect() click-based approach
+    //                   other        → fallback to performMatSelect()
+    //
+    //                 Supported value prefixes (same for both types):
+    //                   VISIBLETEXT:value  → match by visible option text (default)
+    //                   VALUE:value        → native select only; treated as VISIBLETEXT for mat-select
+    //                   INDEX:n            → select by 0-based index
+    //                   plain text         → treated as VISIBLETEXT
     // ***************************************************************************************************************************************************************************************
-    @When("the agent adds a plot with the following details")
-    public void theAgentAddsAPlotWithTheFollowingDetails(DataTable pDataTable) {
-        log.info("[STEP] When the agent adds a plot with the following details");
-        Map<String, String> iPlotData = pDataTable.asMap(String.class, String.class);
+    private static void performList(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
+    {
+        if (pValue == null || pValue.trim().isEmpty())
+        {
+            throw new RuntimeException("LIST action requires a selection value.");
+        }
 
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Add Plot')]", null);
+        waitForAngularReady(pDriver);
 
-        iAction("LIST",    "ID", "county",          "VISIBLETEXT:" + iPlotData.get("county"));
-        iAction("LIST",    "ID", "townland",         "VISIBLETEXT:" + iPlotData.get("townland"));
-        iAction("TEXTBOX", "ID", "plotReference",    iPlotData.get("plotReference"));
-        iAction("LIST",    "ID", "ownershipStatus",  "VISIBLETEXT:" + iPlotData.get("ownershipStatus"));
-        iAction("LIST",    "ID", "organicStatus",    "VISIBLETEXT:" + iPlotData.get("organicStatus"));
-        iAction("TEXTBOX", "ID", "claimedArea",      iPlotData.get("claimedArea"));
-        iAction("LIST",    "ID", "plotUse",          "VISIBLETEXT:" + iPlotData.get("plotUse"));
-        iAction("LIST",    "ID", "mapChangeOption",  "VISIBLETEXT:" + iPlotData.get("mapChangeOption"));
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
 
-        log.info("Plot form filled | Reference: " + iPlotData.get("plotReference"));
-    }
+        String iTagName   = iElement.getTagName().toLowerCase().trim();
+        String iListValue = pValue.trim();
 
+        log.info("[" + getCurrentTimestamp() + "] LIST | tag=<" + iTagName + "> | value=" + iListValue);
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the plot should be added successfully to Land Details
-    // Description   : Submits the add plot form and confirms a success confirmation is visible
-    // ***************************************************************************************************************************************************************************************
-    @Then("the plot should be added successfully to Land Details")
-    public void thePlotShouldBeAddedSuccessfullyToLandDetails() {
-        log.info("[STEP] Then the plot should be added successfully to Land Details");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Add') or contains(text(),'Save') or contains(text(),'Submit')]",
-                null);
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "Plot success confirmation should be visible after adding.");
-        log.info("Plot added successfully: " + iConfirmation);
-    }
-
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — ADD PARCEL FROM GIS MAP
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent adds a parcel from the GIS map with the following details
-    // Description   : Opens the map interface, selects county and townland, fills parcel fields
-    //                 DataTable keys: county, townland, claimedArea, ownershipStatus, parcelUse, organicStatus
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent adds a parcel from the GIS map with the following details")
-    public void theAgentAddsAParcelFromTheGISMapWithTheFollowingDetails(DataTable pDataTable) {
-        log.info("[STEP] When the agent adds a parcel from the GIS map with the following details");
-        Map<String, String> iMapData = pDataTable.asMap(String.class, String.class);
-
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Add from Map') or contains(text(),'GIS Map')]", null);
-        iAction("LIST",    "ID", "mapCounty",       "VISIBLETEXT:" + iMapData.get("county"));
-        iAction("LIST",    "ID", "mapTownland",     "VISIBLETEXT:" + iMapData.get("townland"));
-        iAction("TEXTBOX", "ID", "mapClaimedArea",  iMapData.get("claimedArea"));
-        iAction("LIST",    "ID", "ownershipStatus", "VISIBLETEXT:" + iMapData.get("ownershipStatus"));
-        iAction("LIST",    "ID", "parcelUse",       "VISIBLETEXT:" + iMapData.get("parcelUse"));
-        iAction("LIST",    "ID", "organicStatus",   "VISIBLETEXT:" + iMapData.get("organicStatus"));
-
-        log.info("GIS map parcel form filled | County: " + iMapData.get("county") + " | Townland: " + iMapData.get("townland"));
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the GIS-selected parcel should be added successfully
-    // Description   : Submits the GIS parcel form and confirms success
-    // ***************************************************************************************************************************************************************************************
-    @Then("the GIS-selected parcel should be added successfully")
-    public void theGISSelectedParcelShouldBeAddedSuccessfully() {
-        log.info("[STEP] Then the GIS-selected parcel should be added successfully");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Add') or contains(text(),'Save') or contains(text(),'Submit')]",
-                null);
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "GIS parcel success message should be visible.");
-        log.info("GIS parcel added successfully: " + iConfirmation);
-    }
-
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — PARCEL AVAILABILITY CHECK
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then parcel "J1650300004" should be available in Land Details
-    // Description   : Confirms the specified parcel ID row exists in the Land Details parcel table
-    // ***************************************************************************************************************************************************************************************
-    @Then("parcel {string} should be available in Land Details")
-    public void parcelShouldBeAvailableInLandDetails(String pParcelId) {
-        log.info("[STEP] Then parcel should be available in Land Details: " + pParcelId);
-        String iParcelRow = iAction("GETTEXT", "XPATH",
-                "//td[contains(text(),'" + pParcelId + "')]",
-                null);
-        Assertions.assertFalse(iParcelRow.isEmpty(), "Parcel " + pParcelId + " should appear in Land Details table.");
-        log.info("Parcel confirmed in Land Details: " + pParcelId);
-    }
-
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — EDIT PARCEL (SIDE DRAWER)
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent opens parcel "J1650300004" in the side drawer
-    // Description   : Clicks the parcel row or edit icon to open the side drawer editor
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent opens parcel {string} in the side drawer")
-    public void theAgentOpensParcelInTheSideDrawer(String pParcelId) {
-        log.info("[STEP] When the agent opens parcel in the side drawer: " + pParcelId);
-        iAction("CLICK", "XPATH",
-                "//td[contains(text(),'" + pParcelId + "')]/ancestor::tr//button[contains(@class,'edit') or contains(text(),'Edit') or contains(@aria-label,'Edit')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent raises an EH change request with reason "Test Reason"
-    // Description   : Enters a change request reason in the side drawer EH section
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent raises an EH change request with reason {string}")
-    public void theAgentRaisesAnEHChangeRequestWithReason(String pReason) {
-        log.info("[STEP] And the agent raises an EH change request with reason: " + pReason);
-        iAction("TEXTBOX", "ID", "changeRequestReason", pReason);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent changes parcel use to "Coriander"
-    // Description   : Updates the parcel use dropdown in the side drawer
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent changes parcel use to {string}")
-    public void theAgentChangesParcelUseTo(String pParcelUse) {
-        log.info("[STEP] And the agent changes parcel use to: " + pParcelUse);
-        iAction("LIST", "ID", "parcelUse", "VISIBLETEXT:" + pParcelUse);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent saves the parcel changes
-    // Description   : Clicks Save in the side drawer to commit the parcel edits
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent saves the parcel changes")
-    public void theAgentSavesTheParcelChanges() {
-        log.info("[STEP] And the agent saves the parcel changes");
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Save')]", null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the parcel update should be saved successfully
-    // Description   : Confirms that the parcel save action produced a success indicator
-    // ***************************************************************************************************************************************************************************************
-    @Then("the parcel update should be saved successfully")
-    public void theParcelUpdateShouldBeSavedSuccessfully() {
-        log.info("[STEP] Then the parcel update should be saved successfully");
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'toast') or contains(@class,'alert-success')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "Parcel save confirmation should be visible.");
-        log.info("Parcel update saved: " + iConfirmation);
-    }
-
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — DELETE AND UNDO PARCEL
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent deletes parcel "J1650300004"
-    // Description   : Clicks the delete icon on the specified parcel row
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent deletes parcel {string}")
-    public void theAgentDeletesParcel(String pParcelId) {
-        log.info("[STEP] When the agent deletes parcel: " + pParcelId);
-        iAction("CLICK", "XPATH",
-                "//td[contains(text(),'" + pParcelId + "')]/ancestor::tr//button[contains(@class,'delete') or contains(text(),'Delete') or contains(@aria-label,'Delete')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then parcel "J1650300004" should be marked for deletion
-    // Description   : Confirms the parcel row has a deletion indicator (strikethrough, badge, or class)
-    // ***************************************************************************************************************************************************************************************
-    @Then("parcel {string} should be marked for deletion")
-    public void parcelShouldBeMarkedForDeletion(String pParcelId) {
-        log.info("[STEP] Then parcel should be marked for deletion: " + pParcelId);
-        String iDeletedRow = iAction("GETTEXT", "XPATH",
-                "//td[contains(text(),'" + pParcelId + "')]/ancestor::tr[contains(@class,'deleted') or contains(@class,'marked') or contains(@class,'strikethrough')]",
-                null);
-        Assertions.assertFalse(iDeletedRow.isEmpty(),
-                "Parcel " + pParcelId + " should be visually marked for deletion.");
-        log.info("Parcel marked for deletion confirmed: " + pParcelId);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent undoes deletion for parcel "J1650300004"
-    // Description   : Clicks the Undo button on the deleted parcel row
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent undoes deletion for parcel {string}")
-    public void theAgentUndoesDeletionForParcel(String pParcelId) {
-        log.info("[STEP] When the agent undoes deletion for parcel: " + pParcelId);
-        iAction("CLICK", "XPATH",
-                "//td[contains(text(),'" + pParcelId + "')]/ancestor::tr//button[contains(text(),'Undo') or contains(@aria-label,'Undo')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then parcel "J1650300004" should be restored in Land Details
-    // Description   : Confirms the parcel row no longer has a deletion indicator
-    // ***************************************************************************************************************************************************************************************
-    @Then("parcel {string} should be restored in Land Details")
-    public void parcelShouldBeRestoredInLandDetails(String pParcelId) {
-        log.info("[STEP] Then parcel should be restored in Land Details: " + pParcelId);
-        String iRestoredRow = iAction("GETTEXT", "XPATH",
-                "//td[contains(text(),'" + pParcelId + "')]",
-                null);
-        Assertions.assertFalse(iRestoredRow.isEmpty(),
-                "Parcel " + pParcelId + " should be visible and restored in Land Details.");
-        log.info("Parcel restored confirmed: " + pParcelId);
-    }
-
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — PLOT AVAILABILITY AND DELETE
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then plot "T87654321" should be available in Land Details
-    // Description   : Confirms the plot reference is visible in the Land Details table
-    // ***************************************************************************************************************************************************************************************
-    @Then("plot {string} should be available in Land Details")
-    public void plotShouldBeAvailableInLandDetails(String pPlotRef) {
-        log.info("[STEP] Then plot should be available in Land Details: " + pPlotRef);
-        String iPlotRow = iAction("GETTEXT", "XPATH",
-                "//td[contains(text(),'" + pPlotRef + "')]",
-                null);
-        Assertions.assertFalse(iPlotRow.isEmpty(),
-                "Plot " + pPlotRef + " should appear in Land Details table.");
-        log.info("Plot confirmed in Land Details: " + pPlotRef);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent deletes parcel or plot "T87654321"
-    // Description   : Clicks the delete button on the specified parcel or plot row
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent deletes parcel or plot {string}")
-    public void theAgentDeletesParcelOrPlot(String pReference) {
-        log.info("[STEP] When the agent deletes parcel or plot: " + pReference);
-        iAction("CLICK", "XPATH",
-                "//td[contains(text(),'" + pReference + "')]/ancestor::tr//button[contains(@class,'delete') or contains(text(),'Delete') or contains(@aria-label,'Delete')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent confirms the deletion
-    // Description   : Confirms a deletion modal prompt if it appears
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent confirms the deletion")
-    public void theAgentConfirmsTheDeletion() {
-        log.info("[STEP] And the agent confirms the deletion");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Confirm') or contains(text(),'Yes') or contains(text(),'OK')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then plot "T87654321" should be marked for deletion
-    // Description   : Confirms the plot row has a deletion indicator
-    // ***************************************************************************************************************************************************************************************
-    @Then("plot {string} should be marked for deletion")
-    public void plotShouldBeMarkedForDeletion(String pPlotRef) {
-        log.info("[STEP] Then plot should be marked for deletion: " + pPlotRef);
-        String iDeletedRow = iAction("GETTEXT", "XPATH",
-                "//td[contains(text(),'" + pPlotRef + "')]/ancestor::tr[contains(@class,'deleted') or contains(@class,'marked')]",
-                null);
-        Assertions.assertFalse(iDeletedRow.isEmpty(),
-                "Plot " + pPlotRef + " should be visually marked for deletion.");
-        log.info("Plot marked for deletion confirmed: " + pPlotRef);
-    }
-
-
-    // ===================================================================================================================================
-    //  LAND DETAILS — MANDATORY INFORMATION COMPLETION
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent completes all mandatory information in Land Details
-    // Description   : Handles any remaining mandatory fields flagged in the Land Details step
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent completes all mandatory information in Land Details")
-    public void theAgentCompletesAllMandatoryInformationInLandDetails() {
-        log.info("[STEP] When the agent completes all mandatory information in Land Details");
-        // Clicks the complete mandatory info button or resolves inline mandatory field indicators
-        try {
-            iAction("CLICK", "XPATH",
-                    "//button[contains(text(),'Complete Mandatory') or contains(text(),'Complete Information')]",
-                    null);
-        } catch (Exception e) {
-            log.info("No explicit complete mandatory button — mandatory fields resolved inline.");
+        if ("mat-select".equals(iTagName))
+        {
+            performMatSelect(pDriver, pWait, iElement, iListValue);
+        }
+        else if ("select".equals(iTagName))
+        {
+            pWait.until(iWebDriver -> new Select(iElement).getOptions().size() > 0);
+            performNativeSelect(iElement, iListValue);
+            waitForAngularReady(pDriver);
+        }
+        else
+        {
+            log.warning("[" + getCurrentTimestamp() + "] LIST | Unexpected tag <" + iTagName + "> — attempting mat-select approach.");
+            performMatSelect(pDriver, pWait, iElement, iListValue);
         }
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the next application step should open successfully
-    // Description   : Confirms the application has advanced past Land Details
+    // Function Name : performMatSelect
+    // Description   : Selects an option from an Angular Material <mat-select> component.
+    //
+    //                 How MDC mat-select works:
+    //                   1. Click the mat-select trigger → opens <div role="listbox"> overlay at body level
+    //                   2. Wait for overlay panel to appear
+    //                   3. Match <mat-option> by text or index
+    //                   4. Click the mat-option → panel closes automatically
+    //                   5. Wait for Angular to process the selection change event
     // ***************************************************************************************************************************************************************************************
-    @Then("the next application step should open successfully")
-    public void theNextApplicationStepShouldOpenSuccessfully() {
-        log.info("[STEP] Then the next application step should open successfully");
-        String iStepHeader = iAction("GETTEXT", "XPATH", "//h2[contains(@class,'step-header')]", null);
-        Assertions.assertFalse(iStepHeader.isEmpty(), "A new step header should be visible after advancing.");
-        log.info("Next application step opened: " + iStepHeader);
-    }
+    private static void performMatSelect(WebDriver pDriver, WebDriverWait pWait,
+                                         WebElement pElement, String pValue)
+    {
+        // Step 1: Click trigger to open panel — Angular ready check before click
+        waitForAngularReady(pDriver);
+        pElement.click();
 
+        // Step 2: Wait for overlay panel — injected at body level, NOT inside mat-select
+        By iPanelBy = By.cssSelector(
+                "div[role='listbox'].mat-mdc-select-panel, " +
+                "div[role='listbox'].mdc-menu-surface--open, " +
+                "div[role='listbox']");
 
-    // ===================================================================================================================================
-    //  GAEC 7 STEP
-    // ===================================================================================================================================
+        WebElement iPanel = pWait.until(ExpectedConditions.visibilityOfElementLocated(iPanelBy));
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened.");
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent opens the "GAEC 7" step
-    // Description   : Clicks the GAEC 7 step link in the application navigation
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent opens the {string} step")
-    public void theAgentOpensTheStep(String pStepName) {
-        log.info("[STEP] When the agent opens the step: " + pStepName);
-        iAction("CLICK", "XPATH",
-                "//a[contains(text(),'" + pStepName + "')] | //button[contains(text(),'" + pStepName + "')]",
-                null);
-    }
+        String iUpperValue = pValue.toUpperCase();
 
+        if (iUpperValue.startsWith("INDEX:"))
+        {
+            // ── INDEX selection ───────────────────────────────────────────────────────────
+            int iIndex = Integer.parseInt(pValue.substring("INDEX:".length()).trim());
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent proceeds from GAEC 7
-    // Description   : Clicks the Continue or Next button on the GAEC 7 panel
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent proceeds from GAEC 7")
-    public void theAgentProceedsFromGAEC7() {
-        log.info("[STEP] And the agent proceeds from GAEC 7");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Continue') or contains(text(),'Next') or contains(text(),'Proceed')]",
-                null);
-    }
+            List<WebElement> iOptions = pWait.until(iWebDriver ->
+            {
+                List<WebElement> iOpts = iPanel.findElements(By.cssSelector("mat-option"));
+                return iOpts.size() > iIndex ? iOpts : null;
+            });
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent handles any GAEC 7 continue action if present
-    // Description   : Soft step — clicks a secondary continue if a GAEC 7 confirmation dialog appears
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent handles any GAEC 7 continue action if present")
-    public void theAgentHandlesAnyGAEC7ContinueActionIfPresent() {
-        log.info("[STEP] And the agent handles any GAEC 7 continue action if present");
-        try {
-            iAction("CLICK", "XPATH",
-                    "//button[contains(text(),'Continue') or contains(text(),'OK') or contains(text(),'Accept')]",
-                    null);
-            log.info("GAEC 7 secondary continue action handled.");
-        } catch (Exception e) {
-            log.info("No GAEC 7 secondary action present — continuing.");
+            WebElement iTarget = iOptions.get(iIndex);
+            scrollIntoView(pDriver, iTarget);
+            highlightElement(pDriver, iTarget);
+            iTarget.click();
+            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by INDEX: " + iIndex);
         }
-    }
+        else
+        {
+            // ── VISIBLETEXT / VALUE / plain text ──────────────────────────────────────────
+            String iTargetText;
 
+            if (iUpperValue.startsWith("VISIBLETEXT:"))
+            {
+                iTargetText = pValue.substring("VISIBLETEXT:".length()).trim();
+            }
+            else if (iUpperValue.startsWith("VALUE:"))
+            {
+                iTargetText = pValue.substring("VALUE:".length()).trim();
+                log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | VALUE: prefix on mat-select — "
+                        + "treating as VISIBLETEXT: '" + iTargetText + "'");
+            }
+            else
+            {
+                iTargetText = pValue.trim();
+            }
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the application should move beyond the GAEC 7 step
-    // Description   : Confirms the page has moved past GAEC 7 by checking the header no longer reads GAEC 7
-    // ***************************************************************************************************************************************************************************************
-    @Then("the application should move beyond the GAEC 7 step")
-    public void theApplicationShouldMoveBeyondTheGAEC7Step() {
-        log.info("[STEP] Then the application should move beyond the GAEC 7 step");
-        String iCurrentStep = iAction("GETTEXT", "XPATH", "//h2[contains(@class,'step-header')]", null);
-        Assertions.assertFalse(iCurrentStep.contains("GAEC 7"),
-                "Application should have moved past GAEC 7. Current step: " + iCurrentStep);
-        log.info("Application moved beyond GAEC 7 | Current step: " + iCurrentStep);
-    }
+            final String iFinalTarget = iTargetText;
 
+            // Wait until options are present in the panel
+            pWait.until(iWebDriver -> iPanel.findElements(By.cssSelector("mat-option")).size() > 0);
 
-    // ===================================================================================================================================
-    //  ACRES STEP
-    // ===================================================================================================================================
+            // Find the matching mat-option by trimmed text — handles Angular's whitespace padding
+            WebElement iTargetOption = pWait.until(iWebDriver ->
+            {
+                List<WebElement> iOptions = iPanel.findElements(By.cssSelector("mat-option"));
+                for (WebElement iOption : iOptions)
+                {
+                    try
+                    {
+                        if (iOption.getText().trim().equalsIgnoreCase(iFinalTarget))
+                        {
+                            return iOption;
+                        }
+                    }
+                    catch (StaleElementReferenceException ignored) {}
+                }
+                return null;
+            });
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent selects "Yes, rescore" on panel 1
-    // Description   : Selects the specified ACRES panel option by label text
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent selects {string} on panel {int}")
-    public void theAgentSelectsOnPanel(String pOption, int pPanelNumber) {
-        log.info("[STEP] And the agent selects: " + pOption + " on panel: " + pPanelNumber);
-        iAction("CLICK", "XPATH",
-                "(//div[contains(@class,'panel')])[" + pPanelNumber + "]//label[contains(text(),'" + pOption + "')]",
-                null);
-    }
+            if (iTargetOption == null)
+            {
+                pressEscape(pDriver);
+                throw new RuntimeException("MAT-SELECT | Option not found : '" + iFinalTarget
+                        + "' — verify the exact visible text in the panel.");
+            }
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent continues panel 1
-    // Description   : Clicks the Continue button within the specified panel
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent continues panel {int}")
-    public void theAgentContinuesPanel(int pPanelNumber) {
-        log.info("[STEP] And the agent continues panel: " + pPanelNumber);
-        iAction("CLICK", "XPATH",
-                "(//div[contains(@class,'panel')])[" + pPanelNumber + "]//button[contains(text(),'Continue')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the ACRES step should be completed successfully
-    // Description   : Confirms ACRES step completion indicator is visible
-    // ***************************************************************************************************************************************************************************************
-    @Then("the ACRES step should be completed successfully")
-    public void theACRESStepShouldBeCompletedSuccessfully() {
-        log.info("[STEP] Then the ACRES step should be completed successfully");
-        String iStepStatus = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'step-complete') or contains(@class,'step-success')]",
-                null);
-        Assertions.assertFalse(iStepStatus.isEmpty(), "ACRES step completion indicator should be visible.");
-        log.info("ACRES step completed: " + iStepStatus);
-    }
-
-
-    // ===================================================================================================================================
-    //  ECO STEP
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent selects the "AP2" scheme option
-    // Description   : Clicks the named Eco scheme option card or radio button
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent selects the {string} scheme option")
-    public void theAgentSelectsTheSchemeOption(String pSchemeOption) {
-        log.info("[STEP] And the agent selects the scheme option: " + pSchemeOption);
-        iAction("CLICK", "XPATH",
-                "//label[contains(text(),'" + pSchemeOption + "')] | //div[contains(@data-scheme,'" + pSchemeOption + "')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent selects "Standard" for panel 2
-    // Description   : Selects the named option within the specified Eco panel
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent selects {string} for panel {int}")
-    public void theAgentSelectsForPanel(String pOption, int pPanelNumber) {
-        log.info("[STEP] And the agent selects: " + pOption + " for panel: " + pPanelNumber);
-        iAction("CLICK", "XPATH",
-                "(//div[contains(@class,'eco-panel')])[" + pPanelNumber + "]//label[contains(text(),'" + pOption + "')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent saves the selected eco option
-    // Description   : Clicks Save on the current Eco option selection
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent saves the selected eco option")
-    public void theAgentSavesTheSelectedEcoOption() {
-        log.info("[STEP] And the agent saves the selected eco option");
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Save')]", null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent selects approved spreader manufacturer "Lemken"
-    // Description   : Selects the spreader manufacturer from the AP5 dropdown
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent selects approved spreader manufacturer {string}")
-    public void theAgentSelectsApprovedSpreaderManufacturer(String pManufacturer) {
-        log.info("[STEP] And the agent selects approved spreader manufacturer: " + pManufacturer);
-        iAction("LIST", "ID", "spreaderManufacturer", "VISIBLETEXT:" + pManufacturer);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent selects approved spreader model "Polaris 14"
-    // Description   : Selects the spreader model from the AP5 dropdown
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent selects approved spreader model {string}")
-    public void theAgentSelectsApprovedSpreaderModel(String pModel) {
-        log.info("[STEP] And the agent selects approved spreader model: " + pModel);
-        iAction("LIST", "ID", "spreaderModel", "VISIBLETEXT:" + pModel);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent enters spreader serial number "A735B78346"
-    // Description   : Types the spreader serial number into the AP5 serial number field
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent enters spreader serial number {string}")
-    public void theAgentEntersSpreaderSerialNumber(String pSerialNumber) {
-        log.info("[STEP] And the agent enters spreader serial number: " + pSerialNumber);
-        iAction("TEXTBOX", "ID", "spreaderSerialNumber", pSerialNumber);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the Eco step should be completed successfully
-    // Description   : Confirms the Eco step completion indicator is visible
-    // ***************************************************************************************************************************************************************************************
-    @Then("the Eco step should be completed successfully")
-    public void theEcoStepShouldBeCompletedSuccessfully() {
-        log.info("[STEP] Then the Eco step should be completed successfully");
-        String iStepStatus = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'step-complete') or contains(@class,'step-success')]",
-                null);
-        Assertions.assertFalse(iStepStatus.isEmpty(), "Eco step completion indicator should be visible.");
-        log.info("Eco step completed: " + iStepStatus);
-    }
-
-
-    // ===================================================================================================================================
-    //  ECO OPT-OUT VALIDATION
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent returns to the "Scheme Selection" step
-    // Description   : Navigates back to the Scheme Selection step via the step navigation links
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent returns to the {string} step")
-    public void theAgentReturnsToTheStep(String pStepName) {
-        log.info("[STEP] When the agent returns to the step: " + pStepName);
-        iAction("CLICK", "XPATH",
-                "//a[contains(text(),'" + pStepName + "')] | //button[contains(text(),'" + pStepName + "')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent opens the "Eco" scheme card
-    // Description   : Clicks the Eco scheme card in the Scheme Selection step
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent opens the {string} scheme card")
-    public void theAgentOpensTheSchemeCard(String pSchemeName) {
-        log.info("[STEP] And the agent opens the scheme card: " + pSchemeName);
-        iAction("CLICK", "XPATH",
-                "//div[contains(@class,'scheme-card')]//h3[contains(text(),'" + pSchemeName + "')]/ancestor::div[contains(@class,'scheme-card')]",
-                null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent accepts the acknowledgement if displayed
-    // Description   : Dismisses any acknowledgement modal — skips safely if not present
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent accepts the acknowledgement if displayed")
-    public void theAgentAcceptsTheAcknowledgementIfDisplayed() {
-        log.info("[STEP] And the agent accepts the acknowledgement if displayed");
-        try {
-            iAction("CLICK", "XPATH",
-                    "//button[contains(text(),'Accept') or contains(text(),'Acknowledge') or contains(text(),'OK')]",
-                    null);
-            log.info("Acknowledgement accepted.");
-        } catch (Exception e) {
-            log.info("No acknowledgement modal present — continuing.");
+            scrollIntoView(pDriver, iTargetOption);
+            highlightElement(pDriver, iTargetOption);
+            iTargetOption.click();
+            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by text: '" + iFinalTarget + "'");
         }
+
+        // Step 5: Wait for panel to close + Angular to process selection change
+        try
+        {
+            pWait.until(ExpectedConditions.invisibilityOfElementLocated(
+                    By.cssSelector("div[role='listbox'].mdc-menu-surface--open")));
+        }
+        catch (TimeoutException ignored)
+        {
+            // Panel may have already closed — continue
+        }
+
+        waitForAngularReady(pDriver);
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selection complete and Angular stable.");
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performNativeSelect
+    // Description   : Handles standard HTML <select> elements using Selenium Select class
+    // ***************************************************************************************************************************************************************************************
+    private static void performNativeSelect(WebElement pElement, String pListValue)
+    {
+        Select iSelect     = new Select(pElement);
+        String iUpperValue = pListValue.toUpperCase();
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the application should continue successfully after eco validation
-    // Description   : Confirms the application step moved forward after eco opt-out validation
-    // ***************************************************************************************************************************************************************************************
-    @Then("the application should continue successfully after eco validation")
-    public void theApplicationShouldContinueSuccessfullyAfterEcoValidation() {
-        log.info("[STEP] Then the application should continue successfully after eco validation");
-        String iCurrentStep = iAction("GETTEXT", "XPATH", "//h2[contains(@class,'step-header')]", null);
-        Assertions.assertFalse(iCurrentStep.isEmpty(),
-                "A step header should be visible after eco opt-out validation.");
-        log.info("Application continued after eco validation | Current step: " + iCurrentStep);
+        if (iUpperValue.startsWith("VISIBLETEXT:"))
+        {
+            iSelect.selectByVisibleText(pListValue.substring("VISIBLETEXT:".length()).trim());
+        }
+        else if (iUpperValue.startsWith("VALUE:"))
+        {
+            iSelect.selectByValue(pListValue.substring("VALUE:".length()).trim());
+        }
+        else if (iUpperValue.startsWith("INDEX:"))
+        {
+            iSelect.selectByIndex(Integer.parseInt(pListValue.substring("INDEX:".length()).trim()));
+        }
+        else
+        {
+            iSelect.selectByVisibleText(pListValue);
+        }
+
+        log.info("[" + getCurrentTimestamp() + "] NATIVE SELECT | Selected: '" + pListValue + "'");
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performDragDrop
+    // ***************************************************************************************************************************************************************************************
+    private static void performDragDrop(WebDriver pDriver, WebDriverWait pWait, By pSourceBy, String pValue)
+    {
+        if (pValue == null || pValue.trim().isEmpty())
+        {
+            throw new RuntimeException("DRAGDROP action requires target locator in format IDENTIFYBY:::LOCATORVALUE.");
+        }
 
-    // ===================================================================================================================================
-    //  REVIEW AND SUBMIT
-    // ===================================================================================================================================
+        String[] iTargetDetails = pValue.split(":::", 2);
+        if (iTargetDetails.length != 2)
+        {
+            throw new RuntimeException("DRAGDROP value format invalid. Expected: IDENTIFYBY:::LOCATORVALUE. Got: '" + pValue + "'");
+        }
+
+        waitForAngularReady(pDriver);
+
+        By         iTargetBy     = getByLocator(iTargetDetails[0].trim(), iTargetDetails[1].trim());
+        WebElement iSourceElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pSourceBy));
+        WebElement iTargetElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(iTargetBy));
+
+        scrollIntoView(pDriver, iSourceElement);
+        highlightElement(pDriver, iSourceElement);
+        scrollIntoView(pDriver, iTargetElement);
+        highlightElement(pDriver, iTargetElement);
+
+        new Actions(pDriver).dragAndDrop(iSourceElement, iTargetElement).perform();
+        waitForAngularReady(pDriver);
+    }
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent completes all review page next actions
-    // Description   : Iterates through any Next buttons on the Review & Submit multi-page review
+    // Function Name : performUploadFile
     // ***************************************************************************************************************************************************************************************
-    @And("the agent completes all review page next actions")
-    public void theAgentCompletesAllReviewPageNextActions() {
-        log.info("[STEP] And the agent completes all review page next actions");
-        int iMaxPages = 10;
-        int iPage     = 0;
-        while (iPage < iMaxPages) {
-            try {
-                iAction("CLICK", "XPATH",
-                        "//button[contains(text(),'Next') and not(@disabled)]",
-                        null);
-                iPage++;
-                log.info("Review page next clicked — page: " + iPage);
-            } catch (Exception e) {
-                log.info("No more Next buttons on review — all review pages completed.");
-                break;
+    private static void performUploadFile(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
+    {
+        if (pValue == null || pValue.trim().isEmpty())
+        {
+            throw new RuntimeException("UPLOADFILE action requires an absolute file path.");
+        }
+
+        waitForAngularReady(pDriver);
+
+        // Use presenceOfElementLocated — file inputs are often hidden (display:none)
+        WebElement iElement = pWait.until(ExpectedConditions.presenceOfElementLocated(pBy));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+        iElement.sendKeys(pValue);
+        waitForAngularReady(pDriver);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performWaitVisible
+    // ***************************************************************************************************************************************************************************************
+    private static void performWaitVisible(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    {
+        waitForAngularReady(pDriver);
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        scrollIntoView(pDriver, iElement);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performWaitClickable
+    // ***************************************************************************************************************************************************************************************
+    private static void performWaitClickable(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    {
+        waitForAngularReady(pDriver);
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performWaitInvisible
+    // Description   : Waits until a loading element is no longer blocking the UI.
+    //
+    //                 Standard invisibilityOfElementLocated is unreliable for SVG-based MDC spinners
+    //                 because the inner SVG <circle> element is always rendered in the viewport.
+    //                 MDC signals spinner completion via aria-hidden="true" on the parent container.
+    //
+    //                 Strategy (first match wins):
+    //                   1. Custom polling loop — checks aria-hidden + isDisplayed on parent container
+    //                   2. StaleElementReferenceException — element removed from DOM (spinner gone)
+    //                   3. JS computed style fallback — opacity:0 or display:none check
+    //
+    //                 SVG locator auto-resolution:
+    //                   If the caller passes the deep SVG circle locator, resolveSpinnerParentLocator()
+    //                   redirects it to .mdc-circular-progress which carries aria-hidden.
+    // ***************************************************************************************************************************************************************************************
+    private static void performWaitInvisible(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
+    {
+        By iParentBy = resolveSpinnerParentLocator(pBy, pObjectName);
+
+        log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE | Watching: " + pObjectName);
+
+        try
+        {
+            pWait.until(iWebDriver ->
+            {
+                try
+                {
+                    List<WebElement> iElements = iWebDriver.findElements(iParentBy);
+
+                    if (iElements.isEmpty())
+                    {
+                        log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE | Element not in DOM — spinner dismissed.");
+                        return true;
+                    }
+
+                    WebElement iSpinner   = iElements.get(0);
+                    String     iAriaHidden = iSpinner.getAttribute("aria-hidden");
+                    boolean    iIsHidden  = "true".equalsIgnoreCase(iAriaHidden);
+                    boolean    iIsGone    = !iSpinner.isDisplayed();
+
+                    if (iIsHidden || iIsGone)
+                    {
+                        log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE | Resolved"
+                                + " | aria-hidden=" + iAriaHidden
+                                + " | isDisplayed=" + iSpinner.isDisplayed());
+                        return true;
+                    }
+
+                    return false;
+                }
+                catch (StaleElementReferenceException iStale)
+                {
+                    log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE | Spinner element went stale (removed from DOM).");
+                    return true;
+                }
+            });
+
+            log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE | Spinner dismissed : " + pObjectName);
+        }
+        catch (TimeoutException iTimeout)
+        {
+            // Fallback — JS computed style check
+            try
+            {
+                List<WebElement> iElements = pDriver.findElements(iParentBy);
+                if (iElements.isEmpty())
+                {
+                    log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE | Spinner gone after timeout check.");
+                    return;
+                }
+
+                WebElement iSpinner = iElements.get(0);
+                String     iOpacity = (String) ((JavascriptExecutor) pDriver)
+                        .executeScript("return window.getComputedStyle(arguments[0]).opacity;", iSpinner);
+                String     iDisplay = (String) ((JavascriptExecutor) pDriver)
+                        .executeScript("return window.getComputedStyle(arguments[0]).display;", iSpinner);
+
+                if ("0".equals(iOpacity) || "none".equals(iDisplay))
+                {
+                    log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE | Resolved via JS style | opacity=" + iOpacity + " | display=" + iDisplay);
+                    return;
+                }
+
+                throw new RuntimeException("WAITINVISIBLE timed out — spinner still visible | opacity=" + iOpacity
+                        + " | display=" + iDisplay + " | Locator: " + pObjectName);
+            }
+            catch (RuntimeException iRe)
+            {
+                throw iRe;
+            }
+            catch (Exception iJsEx)
+            {
+                throw new RuntimeException("WAITINVISIBLE failed. Spinner did not dismiss. Locator: " + pObjectName, iJsEx);
             }
         }
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolveSpinnerParentLocator
+    // Description   : When the caller passes the deep SVG circle locator, redirects to the
+    //                 .mdc-circular-progress parent which carries aria-hidden.
+    // ***************************************************************************************************************************************************************************************
+    private static By resolveSpinnerParentLocator(By pBy, String pObjectName)
+    {
+        if (pObjectName != null && (
+                pObjectName.contains("mdc-circular-progress__gap-patch") ||
+                pObjectName.contains("name()='circle'")                  ||
+                pObjectName.contains("name()='svg'")))
+        {
+            log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE | SVG spinner locator detected — resolving to .mdc-circular-progress parent.");
+            return By.cssSelector(".mdc-circular-progress");
+        }
+        return pBy;
+    }
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent accepts the Terms and Conditions
-    // Description   : Checks the Terms and Conditions checkbox on the submission page
+    // Function Name : performScrollToElement
     // ***************************************************************************************************************************************************************************************
-    @And("the agent accepts the Terms and Conditions")
-    public void theAgentAcceptsTheTermsAndConditions() {
-        log.info("[STEP] And the agent accepts the Terms and Conditions");
-        iAction("CHECKBOX", "ID", "termsAndConditions", "CHECK");
+    private static void performScrollToElement(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    {
+        waitForAngularReady(pDriver);
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performGetText
+    // Description   : Waits for element visibility and non-blank text before reading.
+    //                 Falls back to value attribute for input fields.
+    // ***************************************************************************************************************************************************************************************
+    private static String performGetText(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
+    {
+        waitForAngularReady(pDriver);
+
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+
+        pWait.until(iWebDriver ->
+        {
+            String iText  = iElement.getText();
+            String iValue = iElement.getAttribute("value");
+            return (iText  != null && !iText.trim().isEmpty())
+                || (iValue != null && !iValue.trim().isEmpty());
+        });
+
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+
+        String iText = iElement.getText().trim();
+
+        if (iText.isEmpty())
+        {
+            String iValue = iElement.getAttribute("value");
+            iText = iValue == null ? "" : iValue.trim();
+        }
+
+        if (iText.isEmpty())
+        {
+            log.warning("[" + getCurrentTimestamp() + "] GETTEXT returned empty for locator : " + pObjectName);
+        }
+        else
+        {
+            log.info("[" + getCurrentTimestamp() + "] GETTEXT captured : '" + iText + "'");
+        }
+
+        return iText;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performVerifyText
+    // Description   : Verifies element text using EXACT: / CONTAINS: / STARTSWITH: prefixes
+    // ***************************************************************************************************************************************************************************************
+    private static String performVerifyText(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
+    {
+        if (pValue == null)
+        {
+            throw new RuntimeException("VERIFYTEXT action requires an expected value.");
+        }
+
+        waitForAngularReady(pDriver);
+
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+
+        String iActualText = iElement.getText().trim();
+        if (iActualText.isEmpty())
+        {
+            String iVal = iElement.getAttribute("value");
+            iActualText = iVal == null ? "" : iVal.trim();
+        }
+
+        String  iResolvedExpected;
+        boolean iVerificationPassed;
+        String  iMatchMode;
+
+        if (pValue.trim().toUpperCase().startsWith("EXACT:"))
+        {
+            iResolvedExpected  = pValue.trim().substring("EXACT:".length()).trim();
+            iMatchMode         = "EXACT";
+            iVerificationPassed = iActualText.equalsIgnoreCase(iResolvedExpected);
+        }
+        else if (pValue.trim().toUpperCase().startsWith("STARTSWITH:"))
+        {
+            iResolvedExpected  = pValue.trim().substring("STARTSWITH:".length()).trim();
+            iMatchMode         = "STARTSWITH";
+            iVerificationPassed = iActualText.toLowerCase().startsWith(iResolvedExpected.toLowerCase());
+        }
+        else
+        {
+            iResolvedExpected  = pValue.trim().toUpperCase().startsWith("CONTAINS:")
+                    ? pValue.trim().substring("CONTAINS:".length()).trim()
+                    : pValue.trim();
+            iMatchMode         = "CONTAINS";
+            iVerificationPassed = iActualText.toLowerCase().contains(iResolvedExpected.toLowerCase());
+        }
+
+        if (!iVerificationPassed)
+        {
+            throw new AssertionError("VERIFYTEXT failed [Mode=" + iMatchMode + "]"
+                    + " | Expected : '" + iResolvedExpected + "'"
+                    + " | Actual   : '" + iActualText + "'");
+        }
+
+        return iActualText;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performVerifyElement
+    // ***************************************************************************************************************************************************************************************
+    private static void performVerifyElement(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
+    {
+        waitForAngularReady(pDriver);
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+
+        if (!iElement.isDisplayed())
+        {
+            throw new AssertionError("VERIFYELEMENT failed. Element not displayed for locator : " + pObjectName);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performCalendar
+    // Description   : Clears and types a date value into a date input field, then sends TAB to commit
+    // ***************************************************************************************************************************************************************************************
+    private static void performCalendar(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
+    {
+        if (pValue == null || pValue.trim().isEmpty())
+        {
+            throw new RuntimeException("CALENDAR action requires a date value.");
+        }
+
+        waitForAngularReady(pDriver);
+
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
+
+        try { iElement.clear(); } catch (Exception ignored) {}
+        try
+        {
+            iElement.sendKeys(Keys.chord(Keys.CONTROL, "a"));
+            iElement.sendKeys(Keys.DELETE);
+        }
+        catch (Exception ignored) {}
+
+        iElement.sendKeys(pValue);
+        iElement.sendKeys(Keys.TAB);
+        waitForAngularReady(pDriver);
     }
 
 
+    // ===============================================================================================================================
+    // SECTION 9 : iAction — Public Entry Point
+    // ===============================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent submits the application
-    // Description   : Clicks the Submit Application button
+    // Function Name : iAction
+    // Description   : Centralised UI interaction engine. Dispatches to dedicated private methods per action type.
+    //                 Angular synchronisation is applied automatically inside each action method —
+    //                 no manual WAITINVISIBLE calls are needed between steps for normal navigation.
+    //                 Use WAITINVISIBLE explicitly only when you need to assert the spinner is gone
+    //                 before a specific verification step.
+    //
+    //                 Supported action types:
+    //                   CLICK, DOUBLECLICK, RIGHTCLICK, HOVER, MOUSEHOVER,
+    //                   TEXTBOX, CLEARTEXTBOX,
+    //                   RADIOBUTTON, CHECKBOX,
+    //                   LIST (native <select> and Angular <mat-select>),
+    //                   DRAGDROP, UPLOADFILE,
+    //                   WAITVISIBLE, WAITCLICKABLE, WAITINVISIBLE,
+    //                   SCROLLTOELEMENT,
+    //                   GETTEXT, VERIFYTEXT, VERIFYELEMENT,
+    //                   CALENDAR (CALENDER also accepted — legacy alias)
+    //
+    // Parameters    : pActionType   (String) - action to perform (case-insensitive)
+    //                 pIdentifyBy   (String) - locator strategy
+    //                 pObjectName   (String) - locator value
+    //                 pValueToEnter (String) - input value; supports TD:ColumnName syntax for test data resolution
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Precondition  : launchBrowser() must have been called on this thread before invoking iAction
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent submits the application")
-    public void theAgentSubmitsTheApplication() {
-        log.info("[STEP] And the agent submits the application");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Submit') and not(contains(text(),'Confirm'))]",
-                null);
+    public static String iAction(String pActionType, String pIdentifyBy, String pObjectName, String pValueToEnter)
+    {
+        String iReturnedText = "";
+        long   iStartTime    = System.currentTimeMillis();
+
+        try
+        {
+            WebDriver     iDriver = iDriverHolder.get();
+            WebDriverWait iWait   = iWaitHolder.get();
+
+            if (iDriver == null || iWait == null)
+            {
+                throw new RuntimeException("WebDriver or WebDriverWait not initialised. Call launchBrowser() before iAction().");
+            }
+            if (pActionType == null || pActionType.trim().isEmpty())
+            {
+                throw new RuntimeException("ActionType cannot be blank.");
+            }
+            if (pIdentifyBy == null || pIdentifyBy.trim().isEmpty())
+            {
+                throw new RuntimeException("IdentifyBy cannot be blank.");
+            }
+            if (pObjectName == null || pObjectName.trim().isEmpty())
+            {
+                throw new RuntimeException("ObjectName cannot be blank.");
+            }
+
+            String iResolvedValue = resolveValue(pValueToEnter);
+            By     iBy            = getByLocator(pIdentifyBy, pObjectName);
+            String iActionType    = pActionType.trim().toUpperCase();
+
+            logStepStart(iActionType, pIdentifyBy, pObjectName, iResolvedValue);
+
+            switch (iActionType)
+            {
+                case "CLICK":
+                    performClick(iDriver, iWait, iBy, pObjectName);
+                    break;
+
+                case "DOUBLECLICK":
+                    performDoubleClick(iDriver, iWait, iBy);
+                    break;
+
+                case "RIGHTCLICK":
+                    performRightClick(iDriver, iWait, iBy);
+                    break;
+
+                case "HOVER":
+                case "MOUSEHOVER":
+                    performHover(iDriver, iWait, iBy);
+                    break;
+
+                case "TEXTBOX":
+                    performTextBox(iDriver, iWait, iBy, iResolvedValue);
+                    break;
+
+                case "CLEARTEXTBOX":
+                    performClearTextBox(iDriver, iWait, iBy);
+                    break;
+
+                case "RADIOBUTTON":
+                    performRadioButton(iDriver, iWait, iBy);
+                    break;
+
+                case "CHECKBOX":
+                    performCheckBox(iDriver, iWait, iBy, iResolvedValue);
+                    break;
+
+                case "LIST":
+                    performList(iDriver, iWait, iBy, iResolvedValue);
+                    break;
+
+                case "DRAGDROP":
+                    performDragDrop(iDriver, iWait, iBy, iResolvedValue);
+                    break;
+
+                case "UPLOADFILE":
+                    performUploadFile(iDriver, iWait, iBy, iResolvedValue);
+                    break;
+
+                case "WAITVISIBLE":
+                    performWaitVisible(iDriver, iWait, iBy);
+                    break;
+
+                case "WAITCLICKABLE":
+                    performWaitClickable(iDriver, iWait, iBy);
+                    break;
+
+                case "WAITINVISIBLE":
+                    performWaitInvisible(iDriver, iWait, iBy, pObjectName);
+                    break;
+
+                case "SCROLLTOELEMENT":
+                    performScrollToElement(iDriver, iWait, iBy);
+                    break;
+
+                case "GETTEXT":
+                    iReturnedText = performGetText(iDriver, iWait, iBy, pObjectName);
+                    break;
+
+                case "VERIFYTEXT":
+                    iReturnedText = performVerifyText(iDriver, iWait, iBy, iResolvedValue);
+                    break;
+
+                case "VERIFYELEMENT":
+                    performVerifyElement(iDriver, iWait, iBy, pObjectName);
+                    break;
+
+                case "CALENDAR":
+                case "CALENDER": // Legacy alias — use CALENDAR going forward
+                    performCalendar(iDriver, iWait, iBy, iResolvedValue);
+                    break;
+
+                default:
+                    throw new RuntimeException("Unsupported action type : '" + pActionType + "'.");
+            }
+
+            long iDuration = System.currentTimeMillis() - iStartTime;
+            logStepPass(iActionType, pIdentifyBy, pObjectName, iResolvedValue, iDuration);
+        }
+        catch (Exception iException)
+        {
+            long iDuration = System.currentTimeMillis() - iStartTime;
+            logStepFail(pActionType, pIdentifyBy, pObjectName, pValueToEnter, iDuration, iException.getMessage());
+            throw new RuntimeException("iAction failed | Action=[" + pActionType + "] | Object=[" + pObjectName + "] | Reason : " + iException.getMessage(), iException);
+        }
+
+        return iReturnedText;
     }
 
 
+    // ===============================================================================================================================
+    // SECTION 10 : Verification Utilities
+    // ===============================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent confirms the application submission
-    // Description   : Confirms the submission confirmation modal
+    // Function Name : verifyErrorMessage
+    // Description   : Validates expected message is contained in actual message (case-insensitive)
     // ***************************************************************************************************************************************************************************************
-    @And("the agent confirms the application submission")
-    public void theAgentConfirmsTheApplicationSubmission() {
-        log.info("[STEP] And the agent confirms the application submission");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Confirm') or contains(text(),'Yes, Submit') or contains(text(),'OK')]",
-                null);
+    public static String verifyErrorMessage(String pActualErrorMessage, String pExpectedErrorMessage)
+    {
+        if (pActualErrorMessage == null)
+        {
+            throw new AssertionError("Actual error message is NULL. Expected : '" + pExpectedErrorMessage + "'");
+        }
+        if (pExpectedErrorMessage == null || pExpectedErrorMessage.trim().isEmpty())
+        {
+            throw new AssertionError("Expected error message cannot be NULL or empty.");
+        }
+
+        String iActual   = pActualErrorMessage.trim();
+        String iExpected = pExpectedErrorMessage.trim();
+
+        if (!iActual.toLowerCase().contains(iExpected.toLowerCase()))
+        {
+            throw new AssertionError("Error message validation FAILED"
+                    + "\n  Expected (partial match) : '" + iExpected + "'"
+                    + "\n  Actual                   : '" + iActual + "'");
+        }
+
+        log.info("[" + getCurrentTimestamp() + "] Error message verified | Expected: '" + iExpected + "' | Actual: '" + iActual + "'");
+        return "Error message verified: '" + iExpected + "'";
     }
 
 
+    // ===============================================================================================================================
+    // SECTION 11 : Screenshot
+    // ===============================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the application should be submitted successfully
-    // Description   : Confirms the application submission success message or reference number is visible
+    // Function Name : takeScreenshot
+    // Description   : Captures screenshot and saves to framework screenshots folder
     // ***************************************************************************************************************************************************************************************
-    @Then("the application should be submitted successfully")
-    public void theApplicationShouldBeSubmittedSuccessfully() {
-        log.info("[STEP] Then the application should be submitted successfully");
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation') or contains(@class,'submitted')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(),
-                "Application submission success message should be visible.");
-        log.info("Application submitted successfully | Confirmation: " + iConfirmation);
+    public static String takeScreenshot(String pStepName)
+    {
+        try
+        {
+            WebDriver iDriver = iDriverHolder.get();
+            if (iDriver == null)
+            {
+                throw new RuntimeException("Driver not initialised. Cannot capture screenshot.");
+            }
+
+            File iDir = new File(iReportScreenshotsDirectoryPath);
+            if (!iDir.exists()) { iDir.mkdirs(); }
+
+            String iSafeName  = sanitizeFileName(pStepName);
+            String iTimestamp = LocalDateTime.now().format(iFileDateTimeFormatterWithMilliSeconds);
+            String iFileName  = iSafeName + "_" + iTimestamp + ".png";
+            String iFullPath  = iDir.getAbsolutePath() + File.separator + iFileName;
+
+            File iSource = ((TakesScreenshot) iDriver).getScreenshotAs(OutputType.FILE);
+            Files.copy(iSource.toPath(), new File(iFullPath).toPath(), StandardCopyOption.REPLACE_EXISTING);
+
+            log.info("[" + getCurrentTimestamp() + "] Screenshot captured : " + iFullPath);
+            return iFullPath;
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Failed to capture screenshot : " + iException.getMessage(), iException);
+        }
     }
 
 
-    // ===================================================================================================================================
-    //  CORRESPONDENCE — DOCUMENT UPLOAD
-    // ===================================================================================================================================
+    // ===============================================================================================================================
+    // SECTION 12 : Word Report
+    // ===============================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent chooses to upload a document
-    // Description   : Clicks the Upload Document button on the Correspondence tab
+    // Function Name : startWordReport
+    // Description   : Creates a Word (.docx) report for the executing test case. Returns Object[]{XWPFDocument, String}.
     // ***************************************************************************************************************************************************************************************
-    @And("the agent chooses to upload a document")
-    public void theAgentChoosesToUploadADocument() {
-        log.info("[STEP] And the agent chooses to upload a document");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Upload') or contains(text(),'Upload Document')]",
-                null);
+    public static Object[] startWordReport(String pTestCaseID)
+    {
+        try
+        {
+            if (pTestCaseID == null || pTestCaseID.trim().isEmpty())
+            {
+                throw new RuntimeException("TestCase_ID cannot be blank.");
+            }
+
+            String iDescription = getDescriptionFromExecutionControl(pTestCaseID);
+            String iTimestamp   = getCurrentFileTimestamp();
+
+            File iDocsDir = new File(iReportDocsDirectoryPath);
+            if (!iDocsDir.exists()) { iDocsDir.mkdirs(); }
+
+            String       iFileName = sanitizeFileName(pTestCaseID) + "_" + iTimestamp + ".docx";
+            String       iFullPath = iDocsDir.getAbsolutePath() + File.separator + iFileName;
+            XWPFDocument iDoc      = new XWPFDocument();
+
+            XWPFParagraph iHdr = iDoc.createParagraph();
+            iHdr.setAlignment(ParagraphAlignment.CENTER);
+            XWPFRun iHdrRun = iHdr.createRun();
+            iHdrRun.setBold(true);
+            iHdrRun.setFontSize(16);
+            iHdrRun.setText("Test Report: " + pTestCaseID);
+
+            XWPFRun iDescRun = iDoc.createParagraph().createRun();
+            iDescRun.setText("Description: " + iDescription);
+
+            XWPFRun iStartRun = iDoc.createParagraph().createRun();
+            iStartRun.setText("Started at: " + getCurrentTimestamp());
+
+            try (FileOutputStream iFos = new FileOutputStream(iFullPath))
+            {
+                iDoc.write(iFos);
+            }
+
+            log.info("[" + getCurrentTimestamp() + "] Word report created : " + iFullPath);
+            return new Object[]{iDoc, iFullPath};
+        }
+        catch (Exception iException)
+        {
+            log.severe("[" + getCurrentTimestamp() + "] Failed to create Word report : " + iException.getMessage());
+            throw new RuntimeException("Failed to create Word report : " + iException.getMessage(), iException);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : addScreenshotToReport
+    // Description   : Captures screenshot and appends it to the in-memory Word document
+    // ***************************************************************************************************************************************************************************************
+    public static void addScreenshotToReport(XWPFDocument pDocument, String pDocPath, String pTestCaseID)
+    {
+        try
+        {
+            WebDriver iDriver = iDriverHolder.get();
+            if (iDriver == null)  { throw new RuntimeException("Driver not initialised."); }
+            if (pDocument == null){ throw new RuntimeException("Word document is null."); }
+            if (pDocPath == null || pDocPath.trim().isEmpty()) { throw new RuntimeException("Doc path is blank."); }
+
+            File iDir = new File(iReportScreenshotsDirectoryPath);
+            if (!iDir.exists()) { iDir.mkdirs(); }
+
+            String iTimestamp = LocalDateTime.now().format(iFileDateTimeFormatterWithMilliSeconds);
+            String iPngName   = sanitizeFileName(pTestCaseID) + "_" + iTimestamp + ".png";
+            String iPngPath   = iDir.getAbsolutePath() + File.separator + iPngName;
+
+            File iSource = ((TakesScreenshot) iDriver).getScreenshotAs(OutputType.FILE);
+            Files.copy(iSource.toPath(), new File(iPngPath).toPath(), StandardCopyOption.REPLACE_EXISTING);
+
+            String iCaption = pTestCaseID + " - " + getDescriptionFromExecutionControl(pTestCaseID)
+                    + " | Captured at: " + getCurrentTimestamp();
+
+            XWPFRun iCaptionRun = pDocument.createParagraph().createRun();
+            iCaptionRun.setBold(true);
+            iCaptionRun.setText(iCaption);
+            iCaptionRun.addBreak();
+
+            XWPFRun iImgRun = pDocument.createParagraph().createRun();
+            try (InputStream iStream = new FileInputStream(iPngPath))
+            {
+                iImgRun.addPicture(iStream, Document.PICTURE_TYPE_PNG, iPngName,
+                        Units.toEMU(450), Units.toEMU(300));
+            }
+
+            log.info("[" + getCurrentTimestamp() + "] Screenshot appended to report : " + iPngPath);
+        }
+        catch (Exception iException)
+        {
+            log.severe("[" + getCurrentTimestamp() + "] Failed to append screenshot : " + iException.getMessage());
+            throw new RuntimeException("Failed to append screenshot : " + iException.getMessage(), iException);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : finalizeWordReport
+    // Description   : Writes the in-memory Word document to disk and closes the stream
+    // ***************************************************************************************************************************************************************************************
+    public static void finalizeWordReport(XWPFDocument pDocument, String pDocPath)
+    {
+        try
+        {
+            if (pDocument == null)
+            {
+                log.warning("[" + getCurrentTimestamp() + "] Word document is null — finalize skipped.");
+                return;
+            }
+            if (pDocPath == null || pDocPath.trim().isEmpty())
+            {
+                throw new RuntimeException("Word report path is blank.");
+            }
+
+            XWPFRun iEndRun = pDocument.createParagraph().createRun();
+            iEndRun.setText("Ended at: " + getCurrentTimestamp());
+
+            try (FileOutputStream iFos = new FileOutputStream(pDocPath))
+            {
+                pDocument.write(iFos);
+            }
+
+            pDocument.close();
+            log.info("[" + getCurrentTimestamp() + "] Word report finalized : " + pDocPath);
+        }
+        catch (Exception iException)
+        {
+            log.severe("[" + getCurrentTimestamp() + "] Failed to finalize Word report : " + iException.getMessage());
+            throw new RuntimeException("Failed to finalize Word report : " + iException.getMessage(), iException);
+        }
     }
 
 
+    // ===============================================================================================================================
+    // SECTION 13 : Test Data Resolution
+    // ===============================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent selects document type "Commonage Evidence"
-    // Description   : Selects the document type from the upload form dropdown
+    // Function Name : getTestDataValue
+    // Description   : Returns the value for the supplied column name from the currently loaded test data row
     // ***************************************************************************************************************************************************************************************
-    @And("the agent selects document type {string}")
-    public void theAgentSelectsDocumentType(String pDocumentType) {
-        log.info("[STEP] And the agent selects document type: " + pDocumentType);
-        iAction("LIST", "ID", "documentType", "VISIBLETEXT:" + pDocumentType);
+    public static String getTestDataValue(String pColumnName)
+    {
+        return ExcelUtilities.getCurrentTestDataValue(pColumnName);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolveValue
+    // Description   : Resolves TD:ColumnName syntax to actual test data value.
+    //                 Returns raw value unchanged if no TD: prefix.
+    // ***************************************************************************************************************************************************************************************
+    public static String resolveValue(String pValue)
+    {
+        if (pValue == null)            { return null; }
+        if (pValue.trim().startsWith("TD:"))
+        {
+            return getTestDataValue(pValue.trim().substring(3).trim());
+        }
+        return pValue;
     }
 
 
+    // ===============================================================================================================================
+    // SECTION 14 : ExecutionControl.xlsx — Description Cache
+    // ===============================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent uploads the correspondence document
-    // Description   : Sends the file path to the file input element to trigger upload
-    //                 File path is read from test data property TD:CorrespondenceFilePath
+    // Function Name : loadDescriptionCache
+    // Description   : Reads ExecutionControl.xlsx once into memory. Thread-safe via double-checked locking.
     // ***************************************************************************************************************************************************************************************
-    @And("the agent uploads the correspondence document")
-    public void theAgentUploadsTheCorrespondenceDocument() {
-        log.info("[STEP] And the agent uploads the correspondence document");
-        String iFilePath = System.getProperty("TD:CorrespondenceFilePath",
-                "src/test/resources/TestDocuments/sample_correspondence.pdf");
-        iAction("TEXTBOX", "CSS", "input[type='file']", iFilePath);
-        log.info("Document file path sent to upload input: " + iFilePath);
+    public static void loadDescriptionCache()
+    {
+        if (iDescriptionCacheLoaded) { return; }
+
+        synchronized (iDescriptionCache)
+        {
+            if (iDescriptionCacheLoaded) { return; }
+
+            try (FileInputStream iFis     = new FileInputStream(iExecutionControlFilePath);
+                 Workbook         iWorkbook = WorkbookFactory.create(iFis))
+            {
+                Sheet iSheet = iWorkbook.getSheetAt(0);
+                if (iSheet == null)
+                {
+                    throw new RuntimeException("Sheet at index 0 not found in : " + iExecutionControlFilePath);
+                }
+
+                Row iHeaderRow = iSheet.getRow(0);
+                if (iHeaderRow == null)
+                {
+                    throw new RuntimeException("Header row missing in ExecutionControl.xlsx.");
+                }
+
+                int iTestCaseIDCol  = -1;
+                int iDescriptionCol = -1;
+
+                for (int i = 0; i < iHeaderRow.getLastCellNum(); i++)
+                {
+                    String iColName = getCellValue(iHeaderRow, i).trim();
+                    if (iColName.equalsIgnoreCase("TestCase_ID"))  { iTestCaseIDCol  = i; }
+                    if (iColName.equalsIgnoreCase("Description"))  { iDescriptionCol = i; }
+                }
+
+                if (iTestCaseIDCol == -1 || iDescriptionCol == -1)
+                {
+                    throw new RuntimeException("TestCase_ID and/or Description columns not found in ExecutionControl.xlsx.");
+                }
+
+                for (int iRowIdx = 1; iRowIdx <= iSheet.getLastRowNum(); iRowIdx++)
+                {
+                    Row iRow = iSheet.getRow(iRowIdx);
+                    if (iRow == null) { continue; }
+
+                    String iId   = getCellValue(iRow, iTestCaseIDCol).trim();
+                    String iDesc = getCellValue(iRow, iDescriptionCol).trim();
+
+                    if (!iId.isEmpty())
+                    {
+                        iDescriptionCache.put(iId.toUpperCase(), iDesc);
+                    }
+                }
+
+                iDescriptionCacheLoaded = true;
+                log.info("[" + getCurrentTimestamp() + "] Description cache loaded. Entries: " + iDescriptionCache.size());
+            }
+            catch (Exception iException)
+            {
+                throw new RuntimeException("Failed to load ExecutionControl.xlsx : " + iException.getMessage(), iException);
+            }
+        }
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getDescriptionFromExecutionControl
+    // ***************************************************************************************************************************************************************************************
+    private static String getDescriptionFromExecutionControl(String pTestCaseID)
+    {
+        if (!iDescriptionCacheLoaded) { loadDescriptionCache(); }
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent confirms the upload
-    // Description   : Clicks the Confirm or Submit button on the document upload dialog
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent confirms the upload")
-    public void theAgentConfirmsTheUpload() {
-        log.info("[STEP] And the agent confirms the upload");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Confirm') or contains(text(),'Upload') or contains(text(),'Submit')]",
-                null);
+        String iDescription = iDescriptionCache.get(pTestCaseID.trim().toUpperCase());
+        if (iDescription == null)
+        {
+            throw new RuntimeException("No description found for TestCase_ID : '" + pTestCaseID + "'.");
+        }
+        return iDescription;
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the document should be uploaded successfully in Correspondence
-    // Description   : Confirms the uploaded document appears in the Correspondence document list
+    // Function Name : getCellValue
     // ***************************************************************************************************************************************************************************************
-    @Then("the document should be uploaded successfully in Correspondence")
-    public void theDocumentShouldBeUploadedSuccessfullyInCorrespondence() {
-        log.info("[STEP] Then the document should be uploaded successfully in Correspondence");
-        String iDocRow = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'correspondence-list')]//td[contains(text(),'Commonage Evidence')]",
-                null);
-        Assertions.assertFalse(iDocRow.isEmpty(),
-                "Uploaded document should be visible in the Correspondence list.");
-        log.info("Document uploaded and confirmed in Correspondence: " + iDocRow);
+    private static String getCellValue(Row pRow, int pColumnIndex)
+    {
+        if (pRow == null)                         { return ""; }
+        if (pRow.getCell(pColumnIndex) == null)   { return ""; }
+        return iDataFormatter.formatCellValue(pRow.getCell(pColumnIndex));
     }
 }
