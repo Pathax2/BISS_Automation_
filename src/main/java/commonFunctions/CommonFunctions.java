@@ -40,7 +40,7 @@ import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.Select;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import utilities.ExcelUtilities ;
-
+import java.io.IOException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -293,6 +293,7 @@ public class CommonFunctions
                         iOptions.addArguments("--window-size=1920,1080");
                     }
 
+                    System.setProperty("webdriver.chrome.driver","drivers/chromedriver.exe");
                     iDriver = new ChromeDriver(iOptions);
                     break;
                 }
@@ -660,33 +661,186 @@ public class CommonFunctions
 
         WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
         pWait.until(ExpectedConditions.elementToBeClickable(iElement));
-        pWait.until(iWebDriver -> new Select(iElement).getOptions().size() > 0);
 
         scrollIntoView(pDriver, iElement);
         highlightElement(pDriver, iElement);
 
-        Select iSelect = new Select(iElement);
-        String iListValue = pValue.trim();
+        String iTagName    = iElement.getTagName().toLowerCase().trim();
+        String iListValue  = pValue.trim();
 
-        if (iListValue.toUpperCase().startsWith("VISIBLETEXT:"))
+        log.info("[" + getCurrentTimestamp() + "] LIST | tag=<" + iTagName + "> | value=" + iListValue);
+
+        if ("mat-select".equals(iTagName))
         {
-            iSelect.selectByVisibleText(iListValue.substring("VISIBLETEXT:".length()).trim());
+            // ── Angular Material mat-select — click-based selection ───────────
+            performMatSelect(pDriver, pWait, iElement, iListValue);
         }
-        else if (iListValue.toUpperCase().startsWith("VALUE:"))
+        else if ("select".equals(iTagName))
         {
-            iSelect.selectByValue(iListValue.substring("VALUE:".length()).trim());
-        }
-        else if (iListValue.toUpperCase().startsWith("INDEX:"))
-        {
-            int iIndex = Integer.parseInt(iListValue.substring("INDEX:".length()).trim());
-            iSelect.selectByIndex(iIndex);
+            // ── Native HTML select — Selenium Select class ────────────────────
+            pWait.until(iWebDriver -> new Select(iElement).getOptions().size() > 0);
+            performNativeSelect(iElement, iListValue);
         }
         else
         {
-            iSelect.selectByVisibleText(iListValue);
+            // ── Unknown element type — attempt mat-select approach as fallback ─
+            log.warning("[" + getCurrentTimestamp() + "] LIST | Unexpected tag <" + iTagName
+                    + "> — attempting mat-select click approach as fallback.");
+            performMatSelect(pDriver, pWait, iElement, iListValue);
         }
     }
 
+    private static void performMatSelect(WebDriver pDriver, WebDriverWait pWait, WebElement pElement, String pValue)
+    {
+        // ── Step 1 : Click the mat-select to open the options panel ──────────────────────────
+        // ── Step 1 : Click the mat-select to open the options panel ──────────────────────────
+        try
+        {
+            // Check if already expanded to avoid redundant clicks
+            String iIsExpanded = pElement.getAttribute("aria-expanded");
+            if ("true".equalsIgnoreCase(iIsExpanded)) {
+                log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | already expanded. Skipping trigger click.");
+            } else {
+                pElement.click();
+            }
+        }
+        catch (ElementClickInterceptedException iEx)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | Click intercepted by backdrop. Retrying with JS click.");
+            ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", pElement);
+        }
+
+        // ── Step 2 : Wait for the overlay panel to appear in DOM ─────────────────────────────
+        // The panel is injected at body level — NOT inside the mat-select element
+        // role="listbox" is the reliable hook regardless of dynamic class names
+        By iPanelBy = By.cssSelector("div[role='listbox'].mat-mdc-select-panel, " +
+                "div[role='listbox'].mdc-menu-surface--open, " +
+                "div[role='listbox']");
+
+        WebElement iPanel = pWait.until(ExpectedConditions.visibilityOfElementLocated(iPanelBy));
+
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened successfully.");
+
+        // ── Step 3 : Resolve selection value and strategy ────────────────────────────────────
+        String iUpperValue = pValue.toUpperCase();
+
+        if (iUpperValue.startsWith("INDEX:"))
+        {
+            // ── INDEX selection — click the nth mat-option (0-based) ─────────
+            int iIndex = Integer.parseInt(pValue.substring("INDEX:".length()).trim());
+
+            java.util.List<WebElement> iOptions = pWait.until(iWebDriver ->
+            {
+                java.util.List<WebElement> iOpts = iPanel.findElements(By.cssSelector("mat-option"));
+                return iOpts.size() > iIndex ? iOpts : null;
+            });
+
+            WebElement iTargetOption = iOptions.get(iIndex);
+            scrollIntoView(pDriver, iTargetOption);
+            highlightElement(pDriver, iTargetOption);
+            iTargetOption.click();
+
+            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by INDEX: " + iIndex);
+        }
+        else
+        {
+            // ── VISIBLETEXT / VALUE / plain text — match by trimmed span text ─
+            // VALUE: on mat-select has no attribute equivalent — treat as visible text
+            String iTargetText;
+
+            if (iUpperValue.startsWith("VISIBLETEXT:"))
+            {
+                iTargetText = pValue.substring("VISIBLETEXT:".length()).trim();
+            }
+            else if (iUpperValue.startsWith("VALUE:"))
+            {
+                iTargetText = pValue.substring("VALUE:".length()).trim();
+                log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | VALUE: prefix used on mat-select — "
+                        + "mat-select has no value attribute. Treating as VISIBLETEXT: '" + iTargetText + "'");
+            }
+            else
+            {
+                iTargetText = pValue.trim();
+            }
+
+            final String iFinalTargetText = iTargetText;
+
+            // Wait until at least one mat-option is present in the panel
+            pWait.until(iWebDriver -> iPanel.findElements(By.cssSelector("mat-option")).size() > 0);
+
+            // Find the mat-option whose trimmed text matches the target
+            // Matches against the inner <span class="mdc-list-item__primary-text"> text
+            WebElement iTargetOption = pWait.until(iWebDriver ->
+            {
+                java.util.List<WebElement> iOptions = iPanel.findElements(By.cssSelector("mat-option"));
+
+                for (WebElement iOption : iOptions)
+                {
+                    String iOptionText = iOption.getText().trim();
+
+                    if (iOptionText.equalsIgnoreCase(iFinalTargetText))
+                    {
+                        return iOption;
+                    }
+                }
+                return null;
+            });
+
+            if (iTargetOption == null)
+            {
+                // Close the panel before throwing to leave the page in a clean state
+                pressEscape(pDriver);
+                throw new RuntimeException("MAT-SELECT | Option not found: '" + iFinalTargetText
+                        + "' | Check the exact visible text of the mat-option in the panel.");
+            }
+
+            scrollIntoView(pDriver, iTargetOption);
+            highlightElement(pDriver, iTargetOption);
+            iTargetOption.click();
+
+            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by text: '" + iFinalTargetText + "'");
+        }
+
+        // ── Step 4 : Wait for the panel to close ─────────────────────────────────────────────
+        pWait.until(ExpectedConditions.invisibilityOfElementLocated(
+                By.cssSelector("div[role='listbox'].mdc-menu-surface--open")));
+
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel closed — selection complete.");
+    }
+
+    private static void performNativeSelect(WebElement pElement, String pListValue)
+    {
+        Select iSelect      = new Select(pElement);
+        String iUpperValue  = pListValue.toUpperCase();
+
+        if (iUpperValue.startsWith("VISIBLETEXT:"))
+        {
+            iSelect.selectByVisibleText(pListValue.substring("VISIBLETEXT:".length()).trim());
+        }
+        else if (iUpperValue.startsWith("VALUE:"))
+        {
+            iSelect.selectByValue(pListValue.substring("VALUE:".length()).trim());
+        }
+        else if (iUpperValue.startsWith("INDEX:"))
+        {
+            iSelect.selectByIndex(Integer.parseInt(pListValue.substring("INDEX:".length()).trim()));
+        }
+        else
+        {
+            iSelect.selectByVisibleText(pListValue);
+        }
+
+        log.info("[" + getCurrentTimestamp() + "] NATIVE SELECT | Selected: '" + pListValue + "'");
+    }
+
+    private static void pressEscape(WebDriver pDriver)
+    {
+        try
+        {
+            pDriver.switchTo().activeElement().sendKeys(Keys.ESCAPE);
+        }
+        catch (Exception ignored) {}
+    }
     private static void performDragDrop(WebDriver pDriver, WebDriverWait pWait, By pSourceBy, String pValue)
     {
         if (pValue == null || pValue.trim().isEmpty())
@@ -740,14 +894,133 @@ public class CommonFunctions
         scrollIntoView(pDriver, iElement);
     }
 
-    private static void performWaitInvisible(WebDriverWait pWait, By pBy, String pObjectName)
+    private static void performWaitInvisible(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
     {
-        boolean iInvisible = pWait.until(ExpectedConditions.invisibilityOfElementLocated(pBy));
+        // ── Resolve the parent MDC container locator from whatever locator was passed ──────────
+        // Whether the caller passes the SVG circle locator or the parent div locator,
+        // we always resolve and watch the parent .mdc-circular-progress container
+        // because that is the element MDC actually toggles aria-hidden on.
+        By iParentBy = resolveSpinnerParentLocator(pBy, pObjectName);
 
-        if (!iInvisible)
+        log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — watching locator : " + pObjectName);
+
+        try
         {
-            throw new RuntimeException("Element is still visible after waiting for invisibility. Locator : " + pObjectName);
+            // ── Strategy 1 : aria-hidden="true" on parent container ──────────────────────────
+            // MDC sets aria-hidden="true" on the .mdc-circular-progress div when spinner finishes.
+            // This is the primary and most reliable signal for MDC spinners.
+            pWait.until(iWebDriver ->
+            {
+                try
+                {
+                    java.util.List<WebElement> iElements = iWebDriver.findElements(iParentBy);
+
+                    if (iElements.isEmpty())
+                    {
+                        // Element gone from DOM entirely — spinner is definitely done
+                        log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — spinner container not found in DOM (already removed).");
+                        return true;
+                    }
+
+                    WebElement iSpinner    = iElements.get(0);
+                    String     iAriaHidden = iSpinner.getAttribute("aria-hidden");
+                    boolean    iIsHidden   = "true".equalsIgnoreCase(iAriaHidden);
+                    boolean    iIsGone     = !iSpinner.isDisplayed();
+
+                    if (iIsHidden || iIsGone)
+                    {
+                        log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — spinner resolved"
+                                + " | aria-hidden=" + iAriaHidden
+                                + " | isDisplayed=" + iSpinner.isDisplayed());
+                        return true;
+                    }
+
+                    return false;
+                }
+                catch (org.openqa.selenium.StaleElementReferenceException iStale)
+                {
+                    // Element was removed from DOM mid-check — spinner is gone
+                    log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — spinner element went stale (removed from DOM).");
+                    return true;
+                }
+            });
+
+            log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — spinner dismissed successfully : " + pObjectName);
         }
+        catch (org.openqa.selenium.TimeoutException iTimeout)
+        {
+            // ── Strategy 2 : JS opacity/visibility check as last resort ──────────────────────
+            // If WebDriverWait timed out, try a direct JS check on the computed style.
+            // Some MDC implementations fade the spinner out via CSS opacity transition.
+            try
+            {
+                java.util.List<WebElement> iElements = pDriver.findElements(iParentBy);
+
+                if (iElements.isEmpty())
+                {
+                    log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — spinner not in DOM after timeout — treating as dismissed.");
+                    return;
+                }
+
+                WebElement iSpinner = iElements.get(0);
+                String     iOpacity = (String) ((JavascriptExecutor) pDriver)
+                        .executeScript("return window.getComputedStyle(arguments[0]).opacity;", iSpinner);
+                String     iDisplay = (String) ((JavascriptExecutor) pDriver)
+                        .executeScript("return window.getComputedStyle(arguments[0]).display;",  iSpinner);
+
+                boolean iGoneByStyle = "0".equals(iOpacity) || "none".equals(iDisplay);
+
+                if (iGoneByStyle)
+                {
+                    log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — spinner dismissed via JS computed style"
+                            + " | opacity=" + iOpacity + " | display=" + iDisplay);
+                    return;
+                }
+
+                // Still visible after all strategies — throw to fail the step cleanly
+                throw new RuntimeException("WAITINVISIBLE timed out. Spinner still visible after all strategies."
+                        + " | opacity=" + iOpacity
+                        + " | display=" + iDisplay
+                        + " | Locator: " + pObjectName);
+            }
+            catch (RuntimeException iRe)
+            {
+                throw iRe;
+            }
+            catch (Exception iJsException)
+            {
+                throw new RuntimeException("WAITINVISIBLE failed. Spinner did not dismiss within wait period. Locator : " + pObjectName, iJsException);
+            }
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolveSpinnerParentLocator
+    // Description   : When the caller passes the deep SVG circle locator, this resolves it upward
+    //                 to the nearest .mdc-circular-progress parent div which is the element that
+    //                 actually carries the aria-hidden attribute MDC toggles.
+    //                 If a non-SVG locator is passed, it is returned unchanged.
+    // Parameters    : pBy         (By)    - original locator from iAction call
+    //                 pObjectName (String) - raw locator string for string-based inspection
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private static By resolveSpinnerParentLocator(By pBy, String pObjectName)
+    {
+        // If the caller passed the SVG circle locator — redirect to the MDC parent container.
+        // The parent is what MDC actually toggles aria-hidden on, not the SVG child.
+        if (pObjectName != null && (
+                pObjectName.contains("mdc-circular-progress__gap-patch") ||
+                        pObjectName.contains("name()='circle'")                  ||
+                        pObjectName.contains("name()='svg'")))
+        {
+            log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — SVG spinner locator detected."
+                    + " Resolving to parent .mdc-circular-progress container for aria-hidden check.");
+            return By.cssSelector(".mdc-circular-progress");
+        }
+
+        // Non-SVG locator — use as-is (covers custom spinners, overlays, etc.)
+        return pBy;
     }
 
     private static void performScrollToElement(WebDriver pDriver, WebDriverWait pWait, By pBy)
@@ -1010,7 +1283,7 @@ public class CommonFunctions
                     break;
 
                 case "WAITINVISIBLE":
-                    performWaitInvisible(iWait, iBy, pObjectName);
+                    performWaitInvisible(iDriver,iWait, iBy, pObjectName);
                     break;
 
                 case "SCROLLTOELEMENT":
@@ -1523,4 +1796,5 @@ public class CommonFunctions
 
         return iDataFormatter.formatCellValue(pRow.getCell(pColumnIndex));
     }
+
 }
