@@ -74,7 +74,7 @@ public class CommonFunctions
     private static final String iExecutionControlFilePath          = System.getProperty("execution.control.path",     "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
     private static final String iReportDocsDirectoryPath           = System.getProperty("report.docs.path",           "Test_Report/docs");
     private static final String iReportScreenshotsDirectoryPath    = System.getProperty("report.screenshots.path",    "Test_Report/screenshots");
-    private static final int    iExplicitWaitSeconds               = Integer.parseInt(System.getProperty("explicit.wait.seconds", "20"));
+    private static final int    iExplicitWaitSeconds               = Integer.parseInt(System.getProperty("explicit.wait.seconds", "30"));
 
     // -------------------------------------------------------------------------------------------------------------------------------
     // Shared Utilities
