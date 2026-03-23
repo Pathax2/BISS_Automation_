@@ -1,358 +1,350 @@
-// ===================================================================================================================================
-// File          : DBConnectionTest.java
-// Package       : database
-// Description   : Standalone Oracle DB verification test.
-//                 Run this independently — completely separate from Selenium and Cucumber.
-//                 Checks connection health, prints DB metadata, and outputs all herd numbers
-//                 for a given scheme year to the IntelliJ console and logs/db_execution.log
-//
-// ═══════════════════════════════════════════════════════════════════
-//  HOW TO RUN
-// ═══════════════════════════════════════════════════════════════════
-//  Right-click DBConnectionTest.java in IntelliJ
-//  → Run 'verifyConnectionAndPrintHerdNumbers'
-//
-//  Output goes to:
-//    1. IntelliJ Run console (immediately visible)
-//    2. logs/db_execution.log (persistent, rolling 5MB)
-//
-//  ⚠  Credentials are NOT hardcoded — loaded from db.properties
-//     Add db.properties to .gitignore before committing
-//
-// ═══════════════════════════════════════════════════════════════════
-//  db.properties — create at src/test/resources/db.properties
-// ═══════════════════════════════════════════════════════════════════
-//  db.url      = jdbc:oracle:thin:@//dbconn.agriculture.gov.ie:1532/DEVC.agriculture.gov.ie
-//  db.username = DPS_DATA
-//  db.password = DPS_DATA
-//
-// ═══════════════════════════════════════════════════════════════════
-//  pom.xml — ojdbc8 dependency required
-// ═══════════════════════════════════════════════════════════════════
-//  <dependency>
-//      <groupId>com.oracle.database.jdbc</groupId>
-//      <artifactId>ojdbc8</artifactId>
-//      <version>21.9.0.0</version>
-//  </dependency>
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Precondition  : ojdbc8.jar on classpath; db.properties at src/test/resources/db.properties
-// Date Created  : 07-03-2026
-// ===================================================================================================================================
-
 package database;
-
-import org.junit.jupiter.api.Test;
 
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.sql.*;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
+import java.util.*;
 import java.util.Date;
-import java.util.List;
-import java.util.Properties;
 import java.util.logging.*;
 
-public class DBConnection {
+/**
+ * DBRouter (multi-DB, Option B)
+ * ------------------------------------------------------------------------
+ * Usage:
+ *   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "1");
+ *   String herd = DBRouter.getValue("APP_HERD_NO");
+ *
+ *   DBRouter.runDB("INET", "Get Login Id for herd", herd);
+ *   String username = DBRouter.getValue("USERNAME");
+ *
+ * Properties:
+ *   src/test/resources/db.properties
+ *     # DATA DB (BISS_DATA)
+ *     db.url=...
+ *     db.username=...
+ *     db.password=...
+ *
+ *     # INET DB (BPS_CONNECT)
+ *     db.inet.url=...
+ *     db.inet.username=...
+ *     db.inet.password=...
+ */
+public class DBRouter {
 
-    // ── Logger — writes to IntelliJ console AND logs/db_execution.log ────────
-    private static final Logger log = Logger.getLogger(DBConnectionTest.class.getName());
+    // =====================================================================
+    // STATIC RESULT STORE
+    // =====================================================================
+    public static List<Map<String, Object>> lastRows = new ArrayList<>();
+    public static Object lastScalar = null;
+    public static String lastLabel = "";
 
-    static {
-        setupLogger();
-    }
+    // =====================================================================
+    // DB CONFIGURATION
+    // =====================================================================
+    private static final Logger log = Logger.getLogger(DBRouter.class.getName());
+    private static final String PROPERTIES_FILE = "src/test/resources/db.properties"; // keeps your existing path
 
-    // ── Credentials loaded from file — never hardcoded in source ─────────────
-    private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
-
-    // ── Scheme year to query — change this to whichever year you need ─────────
-    private static final int SCHEME_YEAR = 2022;
-
+    // DATA (default) — existing keys
     private static String DB_URL;
     private static String DB_USER;
     private static String DB_PASSWORD;
 
+    // INET — new keys
+    private static String DB_INET_URL;
+    private static String DB_INET_USER;
+    private static String DB_INET_PASSWORD;
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : verifyConnectionAndPrintHerdNumbers
-    // Description   : JUnit 5 entry point — right-click this method in IntelliJ and run it directly.
-    //                 Executes in sequence:
-    //                   Step 1 → Load db.properties (credentials, URL)
-    //                   Step 2 → Open connection and print Oracle DB metadata
-    //                   Step 3 → Call get_hold() to confirm custom function is accessible
-    //                   Step 4 → Query tddp_application for all herd numbers for SCHEME_YEAR
-    //                   Step 5 → Print each herd number to console and log file
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 07-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @Test
-    public void verifyConnectionAndPrintHerdNumbers() {
-
-        printBanner("DB VERIFICATION TEST — STARTING");
-
-        // ── Step 1 : Load credentials from db.properties ─────────────────
+    static {
+        setupLogger();
         loadDBProperties();
-
-        // ── Step 2 : Test connection and print DB metadata ────────────────
-        testConnection();
-
-        // ── Step 3 : Verify get_hold() function is callable ───────────────
-        // Replace with any valid herd number from your test data
-        verifyGetHoldFunction("K1234567");
-
-        // ── Step 4 & 5 : Query and print all herd numbers ─────────────────
-        List<String> iHerdNumbers = fetchAndPrintHerdNumbers(SCHEME_YEAR);
-
-        // ── Final summary ─────────────────────────────────────────────────
-        printBanner("DB VERIFICATION TEST — COMPLETE | " + iHerdNumbers.size() + " HERD NUMBER(S) FOUND");
     }
 
+    // =====================================================================
+    // PUBLIC API — Option B ONLY (no ambiguous overloads)
+    // =====================================================================
+    /**
+     * Run a labeled SQL on the chosen DB.
+     *
+     * @param dbKey  "DATA" or "INET"
+     * @param label  logical query label
+     * @param params label parameters (if any)
+     */
+    public static void runDB(String dbKey, String label, String... params) {
+        Objects.requireNonNull(dbKey, "dbKey cannot be null");
+        Objects.requireNonNull(label, "label cannot be null");
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : loadDBProperties
-    // Description   : Reads db.url, db.username, db.password from db.properties file.
-    //                 Throws immediately with a clear message if any property is missing.
-    // Parameters    : None
-    // ***************************************************************************************************************************************************************************************
-    private void loadDBProperties() {
+        final String which = normalizeDb(dbKey);  // "DATA" or "INET"
+        final String key   = normalize(label);
 
-        log.info("Loading DB properties from: " + PROPERTIES_FILE);
+        lastLabel = label;
 
-        Properties iProps = new Properties();
+        String sql = null;
+        Object[] jdbcParams = new Object[0];
 
-        try (FileInputStream iFis = new FileInputStream(PROPERTIES_FILE)) {
-            iProps.load(iFis);
+        switch (key) {
 
-            DB_URL      = iProps.getProperty("db.url");
-            DB_USER     = iProps.getProperty("db.username");
-            DB_PASSWORD = iProps.getProperty("db.password");
+            // ------------------------------------------------------------
+            // DATA DB: list of herds with no errors (year, optional limit)
+            // ------------------------------------------------------------
+            case "LIST OF HERDS WITH NO ERRORS AT ALL": {
+                // params:
+                // params[0] = year (required)
+                // params[1] = limit (optional)
+                // params[2] = mode: NORMAL (default) or NOT_STARTED (NEW)
+                requireParamCountBetween(key, params, 1, 3);
 
-            if (DB_URL == null || DB_USER == null || DB_PASSWORD == null) {
-                throw new RuntimeException(
-                        "One or more properties missing in " + PROPERTIES_FILE + "\n" +
-                                "Required keys: db.url | db.username | db.password");
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+
+                // NEW: detection of mode
+                String mode = (params.length >= 3) ? params[2].trim().toUpperCase() : "NORMAL";
+
+                if (mode.equals("NOT_STARTED")) {
+                    // ----------------------------------------------------------
+                    // Mode 2 — Return NOT STARTED herds (app_mde_code = 1)
+                    // ----------------------------------------------------------
+                    sql =
+                            "SELECT app_herd_no, app_year, aph_herd_type " +
+                                    "FROM vwbs_application_herd " +
+                                    "WHERE app_mde_code = 1 " +     // 1 = NOT STARTED
+                                    "AND app_year = ? " +
+                                    "AND ROWNUM <= ? " +
+                                    "ORDER BY app_herd_no ASC";
+                    jdbcParams = new Object[]{ year, maxRows };
+                }
+                else {
+                    // ----------------------------------------------------------
+                    // Mode 1 — Original query (NO ERRORS)
+                    // ----------------------------------------------------------
+                    sql =
+                            "SELECT a.app_herd_no, a.aph_herd_no, a.applicant_type " +
+                                    "FROM vwbs_error e, vwbs_application_herd a " +
+                                    "WHERE e.eor_year (+) = a.app_year " +
+                                    "AND e.eor_app_id (+) = a.aph_app_id " +
+                                    "AND a.aph_id = NVL(e.eor_aph_id (+), a.aph_id) " +
+                                    "AND e.eor_app_id IS NULL " +
+                                    "AND a.mde_abbrev = 'I' " +
+                                    "AND a.app_year = ? " +
+                                    "AND ROWNUM <= ? " +
+                                    "ORDER BY a.app_herd_no, a.aph_herd_no, a.applicant_type";
+                    jdbcParams = new Object[]{ year, maxRows };
+                }
+
+                break;
             }
 
-            log.info("✔  Properties loaded | URL      : " + DB_URL);
-            log.info("                     | Username : " + DB_USER);
-            log.info("                     | Password : *** MASKED ***");
+            // ------------------------------------------------------------
+            // DATA DB: herds by scheme year (kept from your current router)
+            // ------------------------------------------------------------
+            case "HERDS BY SCHEME YEAR": {
+                requireParamCountBetween(key, params, 1, 1);
+                sql =
+                        "SELECT h.hld_herd_no " +
+                                "FROM tddp_application a " +
+                                "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
+                                "WHERE a.app_syr_code = ? " +
+                                "ORDER BY h.hld_herd_no";
+                jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
+                break;
+            }
 
+            // ------------------------------------------------------------
+            // DATA DB: get_hold (kept from your current router)
+            // ------------------------------------------------------------
+            case "GET HOLD ID FOR HERD": {
+                requireParamCountBetween(key, params, 1, 1);
+                sql = "SELECT get_hold(?) AS holding_id FROM dual";
+                jdbcParams = new Object[]{ params[0] };
+                break;
+            }
+
+            // ------------------------------------------------------------
+            // INET DB: get Username for a Herd (BPS_CONNECT)
+            // ------------------------------------------------------------
+            case "GET LOGIN ID FOR HERD": {
+                requireParamCountBetween(key, params, 1, 1);
+                // Returns HERDNO + USERNAME
+                sql =
+                        "SELECT hbcus.bcus_bus_id AS HERDNO, " +
+                                "       (SELECT ui.uri_username " +
+                                "          FROM tdcr_user_info ui " +
+                                "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
+                                "           AND ROWNUM = 1) AS USERNAME " +
+                                "  FROM tdco_customer_asscs ca, " +
+                                "       tdco_business_customers abcus, " +
+                                "       tdco_business_customers hbcus " +
+                                " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
+                                "   AND ca.ca_cac_code = 194 " +
+                                "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
+                                "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
+                                "   AND hbcus.bcus_bus_id  = ? " +
+                                " ORDER BY 2, 1";
+                jdbcParams = new Object[]{ params[0] };
+                break;
+            }
+
+            default:
+                throw new RuntimeException("Unknown DB label: " + label);
+        }
+
+        executeQuery(which, sql, jdbcParams);
+    }
+
+    // =====================================================================
+    // EXECUTE SQL (with DB choice)
+    // =====================================================================
+    private static void executeQuery(String whichDb, String sql, Object... params) {
+        lastRows = new ArrayList<>();
+        lastScalar = null;
+
+        try (Connection conn = "INET".equals(whichDb) ? getInetConnection() : getDataConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+            for (int i = 0; i < params.length; i++) {
+                stmt.setObject(i + 1, params[i]);
+            }
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                ResultSetMetaData md = rs.getMetaData();
+                int colCount = md.getColumnCount();
+
+                while (rs.next()) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int c = 1; c <= colCount; c++) {
+                        String col = md.getColumnLabel(c);
+                        if (col == null || col.isEmpty()) col = md.getColumnName(c);
+                        row.put(col.toUpperCase(Locale.ROOT), rs.getObject(c));
+                    }
+                    lastRows.add(row);
+                }
+                if (!lastRows.isEmpty()) {
+                    lastScalar = lastRows.get(0).values().iterator().next();
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("DB (" + whichDb + ") execution failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static Connection getDataConnection() throws SQLException {
+        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
+    }
+    private static Connection getInetConnection() throws SQLException {
+        return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
+    }
+
+    // =====================================================================
+    // HELPER ACCESSORS
+    // =====================================================================
+    /** First row’s column value (case-insensitive), or null if absent. */
+    public static String getValue(String column) {
+        if (lastRows.isEmpty()) return null;
+        Map<String, Object> first = lastRows.get(0);
+        for (String k : first.keySet())
+            if (k.equalsIgnoreCase(column))
+                return Objects.toString(first.get(k), null);
+        return null;
+    }
+
+    /** All rows of last result. */
+    public static List<Map<String, Object>> getRows() { return lastRows; }
+
+    /** True if last result has at least one row. */
+    public static boolean hasRows() { return !lastRows.isEmpty(); }
+
+    // =====================================================================
+    // PROPERTY LOADER
+    // =====================================================================
+    private static void loadDBProperties() {
+        Properties props = new Properties();
+        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE)) {
+            props.load(fis);
+
+            // DATA (existing keys)
+            DB_URL      = props.getProperty("db.url");
+            DB_USER     = props.getProperty("db.username");
+            DB_PASSWORD = props.getProperty("db.password");
+            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD)) {
+                throw new RuntimeException("Missing DATA DB properties (db.url / db.username / db.password)");
+            }
+
+            // INET (new keys)
+            DB_INET_URL      = props.getProperty("db.inet.url");
+            DB_INET_USER     = props.getProperty("db.inet.username");
+            DB_INET_PASSWORD = props.getProperty("db.inet.password");
+            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD)) {
+                throw new RuntimeException("Missing INET DB properties (db.inet.url / db.inet.username / db.inet.password)");
+            }
+
+            log.info("[DBRouter] Loaded DATA & INET connection properties.");
         } catch (IOException e) {
-            log.severe("✘  Cannot read " + PROPERTIES_FILE + " — " + e.getMessage());
-            log.severe("   Create the file at: src/test/resources/db.properties");
-            log.severe("   With contents:");
-            log.severe("     db.url      = jdbc:oracle:thin:@//dbconn.agriculture.gov.ie:1532/DEVC.agriculture.gov.ie");
-            log.severe("     db.username = DPS_DATA");
-            log.severe("     db.password = DPS_DATA");
-            throw new RuntimeException("db.properties not found at: " + PROPERTIES_FILE, e);
+            throw new RuntimeException("Cannot load DB properties at " + PROPERTIES_FILE + " : " + e.getMessage(), e);
         }
     }
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : testConnection
-    // Description   : Opens a JDBC connection to Oracle, checks it is valid, and prints
-    //                 full DB metadata — product name, version, driver, URL, user.
-    //                 This confirms you are connected to the correct database instance.
-    // Parameters    : None
-    // ***************************************************************************************************************************************************************************************
-    private void testConnection() {
-
-        printDivider("STEP 2 — CONNECTION TEST");
-
-        try (Connection iConn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-
-            if (iConn.isValid(5)) {
-                log.info("✔  Connection Status  : VALID and ACTIVE");
-            } else {
-                log.warning("⚠  Connection opened but isValid() returned FALSE — check DB health");
-            }
-
-            DatabaseMetaData iMeta = iConn.getMetaData();
-            log.info("   Database Product  : " + iMeta.getDatabaseProductName());
-            log.info("   Database Version  : " + iMeta.getDatabaseProductVersion());
-            log.info("   JDBC Driver       : " + iMeta.getDriverName() + " v" + iMeta.getDriverVersion());
-            log.info("   Connected URL     : " + iMeta.getURL());
-            log.info("   Connected User    : " + iMeta.getUserName());
-
-        } catch (SQLException e) {
-            log.severe("✘  CONNECTION FAILED");
-            log.severe("   Reason           : " + e.getMessage());
-            log.severe("   SQL State        : " + e.getSQLState());
-            log.severe("   Oracle Error Code: " + e.getErrorCode());
-            log.severe("   Check: VPN connected? DB listener up? Credentials correct?");
-            throw new RuntimeException("DB connection failed — cannot continue test.", e);
-        }
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : verifyGetHoldFunction
-    // Description   : Calls the Oracle get_hold() custom function via JDBC to confirm it is
-    //                 accessible under DPS_DATA schema. Prints the returned holding ID.
-    //                 If this fails, fetchAndPrintHerdNumbers() will also fail.
-    // Parameters    : pHerdNumber (String) — a known herd number from your test data
-    // ***************************************************************************************************************************************************************************************
-    private void verifyGetHoldFunction(String pHerdNumber) {
-
-        printDivider("STEP 3 — VERIFY get_hold() FUNCTION");
-
-        // Inline call to get_hold() — same as original SQL Developer script
-        String iSql = "SELECT get_hold(?) AS holding_id FROM dual";
-
-        try (Connection iConn        = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-             PreparedStatement iStmt = iConn.prepareStatement(iSql)) {
-
-            iStmt.setString(1, pHerdNumber);
-
-            try (ResultSet iRs = iStmt.executeQuery()) {
-                if (iRs.next()) {
-                    String iHoldingId = iRs.getString("holding_id");
-                    log.info("✔  get_hold('" + pHerdNumber + "') returned : " + iHoldingId);
-                } else {
-                    log.warning("⚠  get_hold('" + pHerdNumber + "') returned no result — herd number may not exist in DEVC");
-                }
-            }
-
-        } catch (SQLException e) {
-            log.warning("⚠  get_hold() call failed — function may not be accessible: " + e.getMessage());
-            log.warning("   SQL State: " + e.getSQLState() + " | Error Code: " + e.getErrorCode());
-        }
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : fetchAndPrintHerdNumbers
-    // Description   : Queries tddp_application joined to tdco_holding to retrieve all herd numbers
-    //                 for the given scheme year. Prints each one to console and log file with index.
-    //
-    //                 ⚠  COLUMN NAME NOTE:
-    //                 Before running, verify the actual herd number column name in SQL Developer:
-    //                   SELECT column_name FROM all_tab_columns
-    //                   WHERE  table_name  = 'TDCO_HOLDING'
-    //                   AND    column_name LIKE '%HERD%';
-    //                 Then update hld_herd_no below to match your schema if different.
-    //
-    // Parameters    : pSchemeYear (int) — scheme year to filter by (e.g. 2022)
-    // Returns       : List<String> — all herd numbers found; empty list if none
-    // ***************************************************************************************************************************************************************************************
-    private List<String> fetchAndPrintHerdNumbers(int pSchemeYear) {
-
-        printDivider("STEP 4 — FETCHING HERD NUMBERS | SCHEME YEAR : " + pSchemeYear);
-
-        List<String> iHerdNumbers = new ArrayList<>();
-
-        // ── UPDATE hld_herd_no if your column name is different ───────────
-        // ── Verify with: SELECT column_name FROM all_tab_columns          ──
-        // ──              WHERE table_name = 'TDCO_HOLDING'                ──
-        // ──              AND column_name LIKE '%HERD%';                   ──
-        String iSql =
-                "SELECT   h.hld_herd_no " +
-                        "FROM     tddp_application a " +
-                        "JOIN     tdco_holding     h  ON h.hld_id = a.app_applicant_holding_id " +
-                        "WHERE    a.app_syr_code  = ? " +
-                        "ORDER BY h.hld_herd_no";
-
-        try (Connection iConn        = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-             PreparedStatement iStmt = iConn.prepareStatement(iSql)) {
-
-            iStmt.setInt(1, pSchemeYear);
-
-            try (ResultSet iRs = iStmt.executeQuery()) {
-
-                int iCount = 0;
-
-                while (iRs.next()) {
-                    String iHerdNo = iRs.getString("hld_herd_no");
-                    iHerdNumbers.add(iHerdNo);
-                    iCount++;
-                    log.info(String.format("   [%04d]  %s", iCount, iHerdNo));
-                }
-
-                printDivider("STEP 5 — RESULTS");
-
-                if (iCount == 0) {
-                    log.warning("⚠  No herd numbers found for scheme year: " + pSchemeYear);
-                    log.warning("   Check: Does tddp_application have rows where app_syr_code = " + pSchemeYear + " ?");
-                    log.warning("   Verify in SQL Developer: SELECT COUNT(*) FROM tddp_application WHERE app_syr_code = " + pSchemeYear + ";");
-                } else {
-                    log.info("✔  Total herd numbers retrieved : " + iCount);
-                }
-            }
-
-        } catch (SQLException e) {
-            log.severe("✘  fetchAndPrintHerdNumbers FAILED | SchemeYear=" + pSchemeYear);
-            log.severe("   Reason     : " + e.getMessage());
-            log.severe("   SQL State  : " + e.getSQLState());
-            log.severe("   Error Code : " + e.getErrorCode());
-            log.severe("   Tip: Run this in SQL Developer to debug:");
-            log.severe("   SELECT h.hld_herd_no FROM tddp_application a");
-            log.severe("   JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id");
-            log.severe("   WHERE a.app_syr_code = " + pSchemeYear + ";");
-        }
-
-        return iHerdNumbers;
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : setupLogger
-    // Description   : Configures Logger to write simultaneously to:
-    //                   1. IntelliJ Run console  — visible immediately during execution
-    //                   2. logs/db_execution.log — persistent rolling file (5MB, 3 files kept)
-    //                 Log format: [yyyy-MM-dd HH:mm:ss] [LEVEL  ] message
-    // Parameters    : None
-    // ***************************************************************************************************************************************************************************************
+    // =====================================================================
+    // LOGGER
+    // =====================================================================
     private static void setupLogger() {
-
         try {
-            new java.io.File("logs").mkdirs();
+            Logger root = Logger.getLogger(DBRouter.class.getName());
+            root.setUseParentHandlers(false);
+            root.setLevel(Level.ALL);
 
-            Logger iLogger = Logger.getLogger(DBConnectionTest.class.getName());
-            iLogger.setLevel(Level.ALL);
-            iLogger.setUseParentHandlers(false);
-
-            Formatter iFormatter = new SimpleFormatter() {
+            // Fully-qualify to avoid ambiguity with java.util.Formatter
+            java.util.logging.Formatter fmt = new java.util.logging.Formatter() {
                 @Override
-                public String format(LogRecord record) {
-                    return String.format("[%s] [%-7s] %s%n",
-                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date(record.getMillis())),
-                            record.getLevel().getName(),
-                            record.getMessage());
+                public String format(LogRecord r) {
+                    return String.format("[%s] [%s] %s%n",
+                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date(r.getMillis())),
+                            r.getLevel(),
+                            r.getMessage());
                 }
             };
+            ConsoleHandler console = new ConsoleHandler();
+            console.setLevel(Level.ALL);
+            console.setFormatter(fmt);
 
-            // ── Console — IntelliJ Run window ─────────────────────────────
-            ConsoleHandler iConsoleHandler = new ConsoleHandler();
-            iConsoleHandler.setLevel(Level.ALL);
-            iConsoleHandler.setFormatter(iFormatter);
-
-            // ── File — logs/db_execution.log (5MB rolling, 3 files) ───────
-            FileHandler iFileHandler = new FileHandler(
-                    "logs/db_execution.log", 5 * 1024 * 1024, 3, true);
-            iFileHandler.setLevel(Level.ALL);
-            iFileHandler.setFormatter(iFormatter);
-
-            iLogger.addHandler(iConsoleHandler);
-            iLogger.addHandler(iFileHandler);
-
-        } catch (IOException e) {
+            for (Handler h : root.getHandlers()) root.removeHandler(h);
+            root.addHandler(console);
+        } catch (Exception e) {
             System.err.println("Logger setup failed: " + e.getMessage());
         }
     }
 
-    // ── Console formatting helpers ────────────────────────────────────────────
-    private void printBanner(String pMessage) {
-        log.info("╔══════════════════════════════════════════════════════════════════╗");
-        log.info("║  " + pMessage);
-        log.info("╚══════════════════════════════════════════════════════════════════╝");
+    // =====================================================================
+    // NORMALIZERS & VALIDATORS
+    // =====================================================================
+    private static String normalizeDb(String s) {
+        String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
+        if ("DATA".equals(v) || "INET".equals(v)) return v;
+        throw new IllegalArgumentException("dbKey must be 'DATA' or 'INET' (was: " + s + ")");
     }
 
-    private void printDivider(String pLabel) {
-        log.info("──────────────────────────────────────────────────────────────────");
-        log.info("  " + pLabel);
-        log.info("──────────────────────────────────────────────────────────────────");
+    private static String normalize(String s) {
+        if (s == null) return "";
+        return s.replace(':', ' ')
+                .replace("–", "-")
+                .replace("—", "-")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toUpperCase(Locale.ROOT);
     }
+
+    private static void requireParamCountBetween(String labelKey, String[] params, int min, int max) {
+        int n = (params == null) ? 0 : params.length;
+        if (n < min || n > max) {
+            throw new IllegalArgumentException(
+                    "Label '" + labelKey + "' expects between " + min + " and " + max + " parameter(s); got " + n
+            );
+        }
+    }
+
+    private static int parseInt(String s, String name) {
+        try { return Integer.parseInt(s.trim()); }
+        catch (Exception e) { throw new IllegalArgumentException("Expected integer for " + name + " but got: " + s); }
+    }
+
+    private static boolean isBlank(String s) { return s == null || s.trim().isEmpty(); }
 }
