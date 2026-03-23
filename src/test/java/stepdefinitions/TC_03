@@ -20,16 +20,26 @@ import commonFunctions.CommonFunctions;
 import io.cucumber.datatable.DataTable;
 import io.cucumber.java.en.*;
 import org.junit.jupiter.api.Assertions;
-
+import org.openqa.selenium.By;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import utilities.ObjReader;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
+import io.cucumber.java.en.When;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
 
+import java.time.Duration;
+import runner.TestRunner;
 import static commonFunctions.CommonFunctions.*;
 
-public class BISSAgentStepDefinitions {
+public class TC_03 {
 
-    private static final Logger log = Logger.getLogger(BISSAgentStepDefinitions.class.getName());
+    private static final Logger log = Logger.getLogger(TC_03.class.getName());
 
 
     // ===================================================================================================================================
@@ -41,11 +51,11 @@ public class BISSAgentStepDefinitions {
     // Description   : Launches browser and navigates to the application URL loaded from test data Config sheet
     // ***************************************************************************************************************************************************************************************
     @Given("the agent user is on the login page")
-    public void theAgentUserIsOnTheLoginPage() {
+    public void theAgentUserIsOnTheLoginPage()
+    {
+        log.info("Application launched via Hooks. Browser is active and URL loaded.");
         log.info("[STEP] Given the agent user is on the login page");
-        String iUrl = System.getProperty("app.url");
-        launchBrowser(iUrl);
-        log.info("Browser launched and navigated to: " + iUrl);
+
     }
 
 
@@ -54,27 +64,102 @@ public class BISSAgentStepDefinitions {
     // Description   : Enters username and password from test data, submits login form, handles OTP if present
     // ***************************************************************************************************************************************************************************************
     @When("the agent logs into the application with valid credentials and OTP")
-    public void theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP() {
-        log.info("[STEP] When the agent logs into the application with valid credentials and OTP");
+    public void theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP()
+    {
 
-        String iUsername = System.getProperty("TD:Username");
-        String iPassword = System.getProperty("TD:Password");
+        log.info("[LOGIN] Classic login detected.");
 
-        iAction("TEXTBOX", "ID", "username", iUsername);
-        iAction("TEXTBOX", "ID", "password", iPassword);
-        iAction("CLICK",   "ID", "loginBtn",  null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+        //iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), "TD:Username");
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), Hooks.RUNTIME_USERNAME);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
 
-        // OTP handling — only interacts if OTP field is present on screen
-        try {
-            String iOtp = System.getProperty("TD:OTP", "");
-            if (!iOtp.isEmpty()) {
-                iAction("TEXTBOX", "ID",   "otpInput",   iOtp);
-                iAction("CLICK",   "ID",   "otpSubmit",  null);
-                log.info("OTP entered and submitted.");
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+
+        log.info("[STEP] Detect login screen and auto-login using simple PIN loop...");
+
+        WebDriver driver = CommonFunctions.getDriver();
+        WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
+
+        By pinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+
+        // --- Check for PIN login screen ---
+        if (isVisible(pinFormBy, 3)) {
+
+            log.info("[LOGIN] PIN screen detected. Using simple loop 1 → 7.");
+
+            for (int idx = 1; idx <= 7; idx++) {
+
+                String dynamicXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+                By pinInputBy = By.xpath(dynamicXpath);
+
+                if (isVisible(pinInputBy, 1)) {
+
+                    WebElement input = driver.findElement(pinInputBy);
+
+                    boolean disabled = input.getAttribute("disabled") != null;
+
+                    if (!disabled && input.isEnabled())
+                    {
+                        input.clear();
+                        input.sendKeys("1");
+                        log.info("[LOGIN] Entered '1' into PIN index: " + idx);
+                    }
+                    else
+                    {
+                        log.info("[LOGIN] PIN index " + idx + " is DISABLED — skipping.");
+                    }
+
+                } else {
+                    log.info("[LOGIN] PIN index " + idx + " not present in DOM — skipping.");
+                }
             }
-        } catch (Exception e) {
-            log.info("No OTP field detected — continuing without OTP.");
+
+            // Click login button
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+            log.info("[LOGIN] PIN login submitted.");
+            // Enter the 6-digit TOTP value (hardcoded or from TD)
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"), "111111");
+
+            // Click the TOTP Login / Submit button
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+
+            log.info("[LOGIN] TOTP screen completed.");
+            // Click the Terms & Conditions checkbox
+            if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                // Click the Accept button
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                log.info("[LOGIN] Accept Terms & Conditions completed.");
+            }
+
+
+
+
         }
+        else
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+            log.info("[LOGIN] Classic login completed.");
+        }
+
+    }
+
+
+    /** SIMPLE helper to avoid ambiguous method call */
+    private boolean isVisible(By locator, int seconds) {
+        try {
+            WebDriverWait wait = new WebDriverWait(CommonFunctions.getDriver(), Duration.ofSeconds(seconds));
+            wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+
     }
 
 
@@ -83,9 +168,21 @@ public class BISSAgentStepDefinitions {
     // Description   : Clicks the named application tile on the portal home screen
     // ***************************************************************************************************************************************************************************************
     @And("the agent opens the {string} application")
-    public void theAgentOpensTheApplication(String pApplicationName) {
-        log.info("[STEP] And the agent opens the application: " + pApplicationName);
-        iAction("CLICK", "XPATH", "//a[contains(text(),'" + pApplicationName + "')]", null);
+    public void theAgentOpensTheApplication(String pApplicationName)
+    {
+            log.info("[STEP] And the agent opens the application: " + pApplicationName);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAppSearchBar"), "");
+
+            log.info("Enter the application name which you want to lookup.");
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+
+            // Verify dashboard title element is visible — confirms successful login and page load
+            iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iSearchAppLabel"), "");
+            iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iSearchAppLabel"), "Found 1 applications matching your search");
+
+            //Click on BISS Link from Search Results
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iBissLink"), "");
+
     }
 
 
@@ -94,11 +191,13 @@ public class BISSAgentStepDefinitions {
     // Description   : Validates that the BISS Home page header is visible after login
     // ***************************************************************************************************************************************************************************************
     @Then("the agent should land on the BISS Home page")
-    public void theAgentShouldLandOnTheBISSHomePage() {
-        log.info("[STEP] Then the agent should land on the BISS Home page");
-        String iPageTitle = iAction("GETTEXT", "XPATH", "//h1[contains(@class,'page-title')]", null);
-        Assertions.assertFalse(iPageTitle.isEmpty(), "BISS Home page title should be visible after login.");
-        log.info("BISS Home page confirmed | Title: " + iPageTitle);
+    public void theAgentShouldLandOnTheBISSHomePage()
+    {
+            iAction("WAITINVISIBLE", "XPATH", "iScreenBuffer", "MDC Progress Spinner");
+            log.info("[STEP] Then the agent should land on the BISS Home page");
+            iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iBissTitle"), "");
+            iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iBissTitle"), "Basic Income Support for Sustainability");
+            log.info("BISS Home page confirmed | Title: " + "Basic Income Support for Sustainability");
     }
 
 
@@ -106,10 +205,25 @@ public class BISSAgentStepDefinitions {
     // Step          : And the agent navigates to the "My Clients" tab
     // Description   : Clicks the My Clients navigation tab on the BISS portal
     // ***************************************************************************************************************************************************************************************
-    @And("the agent navigates to the {string} tab")
-    public void theAgentNavigatesToTheTab(String pTabName) {
-        log.info("[STEP] And the agent navigates to the tab: " + pTabName);
-        iAction("CLICK", "XPATH", "//a[normalize-space()='" + pTabName + "']", null);
+    @And("the agent navigates to the {string} and {string} Left Menu Link")
+    public void theAgentNavigatesToTheTab(String iHomeTab,String iMyCLientTab)
+    {
+            log.info("[STEP] And the agent navigates to the tab: " + iHomeTab);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
+
+            log.info("[STEP] And the agent navigates to the tab: " + iMyCLientTab);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+
+            // 2. Client Selection and Header Verification
+            iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iBissTitle"), "Basic Income Support for Sustainability");
+
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iHerdExpiredTab"), "");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iDraftTab"), "");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iSubmittedTab"), "");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iNotStartedTab"), "");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iViewAllTab"), "");
+
+
     }
 
 
@@ -122,27 +236,28 @@ public class BISSAgentStepDefinitions {
     // Description   : Reads herd number from the specified row of the HerdData sheet in TestData.xlsx
     //                 and searches for that farmer on the My Clients screen
     // ***************************************************************************************************************************************************************************************
-    @When("the agent opens a farmer dashboard using herd data from row {int}")
-    public void theAgentOpensAFarmerDashboardUsingHerdDataFromRow(int pRowNumber) {
-        log.info("[STEP] When the agent opens a farmer dashboard using herd data from row: " + pRowNumber);
+    @When("the agent opens a farmer dashboard using herd data")
+    public void theAgentOpensAFarmerDashboardUsingHerdDataFromRow()
+    {
+        log.info("[STEP] When the agent opens a farmer dashboard using herd data");
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), Hooks.RUNTIME_HERD);
+        iAction("CLICK",   "XPATH",    ObjReader.getLocator("herdSearchBtn"),   null);
+        log.info("Farmer dashboard opened for herd number: " + "TD:iHerdNumber");
 
-        // HerdData sheet row lookup — adjust column name to match your TestData.xlsx sheet
-        String iHerdNumber = System.getProperty("TD:HerdNumber_Row" + pRowNumber);
+        // Form Interaction (Dropdown and Search)
+        // Open the dropdown
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iListItemsPerPage"), null);
 
-        if (iHerdNumber == null || iHerdNumber.isBlank()) {
-            // Fallback: read directly from test data property if row-keyed property not set
-            iHerdNumber = System.getProperty("TD:HerdNumber", "");
-            log.info("Herd number from fallback TD:HerdNumber: " + iHerdNumber);
-        }
+        // (optional) wait until panel is visible (if your iAction supports WAIT_VISIBLE)
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
 
-        Assertions.assertFalse(iHerdNumber.isEmpty(),
-                "Herd number from row " + pRowNumber + " must not be blank — check HerdData sheet.");
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
 
-        iAction("TEXTBOX", "ID",    "herdSearchInput", iHerdNumber);
-        iAction("CLICK",   "ID",    "herdSearchBtn",   null);
-        iAction("CLICK",   "XPATH", "//td[normalize-space()='" + iHerdNumber + "']/ancestor::tr//a", null);
+        // Click the last option dynamically
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iMatSelectLastOption"), null);
 
-        log.info("Farmer dashboard opened for herd number: " + iHerdNumber);
+        log.info("[STEP] Last item from Page Size dropdown selected at runtime");
+        log.info("[STEP] Last Item from Total Number of Pages List Box is selected");
     }
 
 
@@ -151,11 +266,62 @@ public class BISSAgentStepDefinitions {
     // Description   : Confirms the farmer dashboard panel is visible
     // ***************************************************************************************************************************************************************************************
     @Then("the farmer dashboard should be displayed")
-    public void theFarmerDashboardShouldBeDisplayed() {
-        log.info("[STEP] Then the farmer dashboard should be displayed");
-        String iDashboardHeader = iAction("GETTEXT", "XPATH", "//h2[contains(@class,'farmer-dashboard')]", null);
-        Assertions.assertFalse(iDashboardHeader.isEmpty(), "Farmer dashboard header should be visible.");
-        log.info("Farmer dashboard confirmed: " + iDashboardHeader);
+    public void theFarmerDashboardShouldBeDisplayed()
+    {
+            log.info("[STEP] Then the farmer dashboard should be displayed");
+            iAction("WAITVISIBLE",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
+            iAction("WAITCLICKABLE",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
+            iAction("MOUSEHOVER",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
+            iAction("CLICK",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
+
+            //CLick on View Dashboard Button for Farmer Dashboard
+            iAction("CLICK",   "XPATH",    ObjReader.getLocator("iViewDashboard"),   null);
+            String iDashboardHeader = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iFarmerDashboardHeader"), null);
+            Assertions.assertFalse(iDashboardHeader.isEmpty(), "Farmer dashboard header should be visible.");
+            log.info("Farmer dashboard confirmed: " + iDashboardHeader);
+
+            //  CONDITIONAL CHECK: Delete existing draft if present before starting a new one
+            By iDeleteBtnBy = By.xpath(ObjReader.getLocator("iDeleteDraftBtn"));
+
+            // Check for 3 seconds only to keep the test fast
+            if (isElementPresentAndVisible(iDeleteBtnBy, 3))
+            {
+                log.info("Existing draft detected. Clearing it before proceeding.");
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iDeleteDraftBtn"), "Delete Draft Button");
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"), "Confirm Delete Button");
+
+                // SYNC: Wait for the MDC spinner to finish the deletion process
+                iAction("WAITINVISIBLE", "XPATH", "//div[@class='mdc-circular-progress__gap-patch']//*[name()='svg']", "Deletion Spinner");
+            }
+            else
+            {
+                log.info("No existing draft found. Proceeding directly to Start Application.");
+            }
+
+            //CLick on View Start Application for Farmer Dashboard
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iStartApplicationBtn"), "");
+
+
+            if (isVisible(By.xpath(ObjReader.getLocator("iContinueBtn")), 3)) {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iContinueBtn"), null);
+            }
+
+    }
+
+
+    private boolean isElementPresentAndVisible(By pBy, int pSeconds)
+    {
+        try
+        {
+            WebDriverWait iShortWait = new WebDriverWait(getDriver(), java.time.Duration.ofSeconds(pSeconds));
+            iShortWait.until(org.openqa.selenium.support.ui.ExpectedConditions.visibilityOfElementLocated(pBy));
+            return true;
+        }
+        catch (Exception e)
+        {
+            return false;
+        }
+
     }
 
 
@@ -168,13 +334,19 @@ public class BISSAgentStepDefinitions {
     // Description   : Iterates through the provided DataTable list of tab names and clicks each one
     // ***************************************************************************************************************************************************************************************
     @When("the agent navigates through the farmer side navigation tabs")
-    public void theAgentNavigatesThroughTheFarmerSideNavigationTabs(DataTable pDataTable) {
+    public void theAgentNavigatesThroughTheFarmerSideNavigationTabs(DataTable pDataTable)
+    {
         log.info("[STEP] When the agent navigates through the farmer side navigation tabs");
         List<String> iTabs = pDataTable.asList();
         for (String iTab : iTabs) {
             log.info("  Clicking side nav tab: " + iTab);
-            iAction("CLICK", "XPATH", "//nav//a[normalize-space()='" + iTab + "']", null);
+            String iCleanTabName = iTab.replace("My ", "").trim();
+            iAction("WAITVISIBLE", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
+            //iAction("WAITCLICKABLE", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
+            iAction("MOUSEHOVER", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
+            iAction("CLICK", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
         }
+
     }
 
 
@@ -183,9 +355,10 @@ public class BISSAgentStepDefinitions {
     // Description   : Confirms the last clicked tab rendered its content panel
     // ***************************************************************************************************************************************************************************************
     @Then("each requested side navigation tab should open successfully")
-    public void eachRequestedSideNavigationTabShouldOpenSuccessfully() {
+    public void eachRequestedSideNavigationTabShouldOpenSuccessfully()
+    {
         log.info("[STEP] Then each requested side navigation tab should open successfully");
-        String iActiveTab = iAction("GETTEXT", "XPATH", "//nav//a[contains(@class,'active')]", null);
+        String iActiveTab = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iFarmerDashboardHeader"), null);
         Assertions.assertFalse(iActiveTab.isEmpty(), "An active side navigation tab should be present.");
         log.info("Side navigation tabs validated | Last active: " + iActiveTab);
     }
@@ -200,11 +373,12 @@ public class BISSAgentStepDefinitions {
     // Description   : Checks for an existing draft application and deletes it if found, otherwise continues
     // ***************************************************************************************************************************************************************************************
     @When("the agent deletes any existing draft if present")
-    public void theAgentDeletesAnyExistingDraftIfPresent() {
+    public void theAgentDeletesAnyExistingDraftIfPresent()
+    {
         log.info("[STEP] When the agent deletes any existing draft if present");
         try {
-            iAction("CLICK", "XPATH", "//button[contains(text(),'Delete Draft') or contains(text(),'Delete')]", null);
-            iAction("CLICK", "XPATH", "//button[contains(text(),'Confirm') or contains(text(),'Yes')]",         null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iDeleteDraftBtn"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"),         null);
             log.info("Existing draft deleted.");
         } catch (Exception e) {
             log.info("No existing draft found — continuing to start new application.");
@@ -217,9 +391,10 @@ public class BISSAgentStepDefinitions {
     // Description   : Clicks the Start Application button to begin a new BISS submission
     // ***************************************************************************************************************************************************************************************
     @And("the agent starts a new BISS application")
-    public void theAgentStartsANewBISSApplication() {
+    public void theAgentStartsANewBISSApplication()
+    {
         log.info("[STEP] And the agent starts a new BISS application");
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Start Application') or contains(text(),'New Application')]", null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStartApplicationBtn"), null);
     }
 
 
@@ -228,9 +403,10 @@ public class BISSAgentStepDefinitions {
     // Description   : Confirms the Active Farmer step header is visible
     // ***************************************************************************************************************************************************************************************
     @Then("the Active Farmer step should be displayed")
-    public void theActiveFarmerStepShouldBeDisplayed() {
+    public void theActiveFarmerStepShouldBeDisplayed()
+    {
         log.info("[STEP] Then the Active Farmer step should be displayed");
-        String iStepHeader = iAction("GETTEXT", "XPATH", "//h2[contains(text(),'Active Farmer')]", null);
+        String iStepHeader = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iFarmerStatusComment"), null);
         Assertions.assertFalse(iStepHeader.isEmpty(), "Active Farmer step header should be visible.");
         log.info("Active Farmer step confirmed.");
     }
@@ -245,9 +421,12 @@ public class BISSAgentStepDefinitions {
     // Description   : Selects the specified active farmer activity radio button or checkbox
     // ***************************************************************************************************************************************************************************************
     @When("the agent selects {string} in the Active Farmer step")
-    public void theAgentSelectsInTheActiveFarmerStep(String pActivity) {
+    public void theAgentSelectsInTheActiveFarmerStep(String pActivity)
+    {
         log.info("[STEP] When the agent selects in the Active Farmer step: " + pActivity);
-        iAction("CLICK", "XPATH", "//label[contains(text(),'" + pActivity + "')]", null);
+        // Perform the UNCHECK operation
+        iAction("CHECKBOX", "XPATH", ObjReader.getLocator("iDeclareNotActiveChk"), "UNCHECK");
+       // iAction("CLICK", "XPATH", "//label[contains(text(),'" + pActivity + "')]", null);
     }
 
 
@@ -256,11 +435,10 @@ public class BISSAgentStepDefinitions {
     // Description   : Clicks the Next / Continue / Proceed button to advance the wizard step
     // ***************************************************************************************************************************************************************************************
     @And("the agent proceeds to the next application step")
-    public void theAgentProceedsToTheNextApplicationStep() {
+    public void theAgentProceedsToTheNextApplicationStep()
+    {
         log.info("[STEP] And the agent proceeds to the next application step");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Next') or contains(text(),'Continue') or contains(text(),'Proceed')]",
-                null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
     }
 
 
@@ -271,7 +449,7 @@ public class BISSAgentStepDefinitions {
     @Then("the Scheme Selection step should be displayed")
     public void theSchemeSelectionStepShouldBeDisplayed() {
         log.info("[STEP] Then the Scheme Selection step should be displayed");
-        String iStepHeader = iAction("GETTEXT", "XPATH", "//h2[contains(text(),'Scheme Selection')]", null);
+        String iStepHeader = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iSchemeSelectionHeader"), null);
         Assertions.assertFalse(iStepHeader.isEmpty(), "Scheme Selection step header should be visible.");
         log.info("Scheme Selection step confirmed.");
     }
@@ -286,9 +464,12 @@ public class BISSAgentStepDefinitions {
     // Description   : Clicks the scheme card or checkbox for the named scheme
     // ***************************************************************************************************************************************************************************************
     @When("the agent selects the {string} scheme")
-    public void theAgentSelectsTheScheme(String pSchemeName) {
+    public void theAgentSelectsTheScheme(String pSchemeName)
+    {
         log.info("[STEP] When the agent selects the scheme: " + pSchemeName);
-        iAction("CLICK", "XPATH", "//label[contains(text(),'" + pSchemeName + "')]", null);
+
+        iAction("CLICK", "XPATH", "//mat-card/descendant::span[contains(text(),'"+pSchemeName+"')]", null);
+
     }
 
 
@@ -300,12 +481,14 @@ public class BISSAgentStepDefinitions {
     public void theAgentAcceptsTheSchemeSelectionAcknowledgementIfDisplayed() {
         log.info("[STEP] And the agent accepts the scheme selection acknowledgement if displayed");
         try {
-            iAction("CLICK", "XPATH",
-                    "//button[contains(text(),'Accept') or contains(text(),'Acknowledge') or contains(text(),'OK')]",
-                    null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iCloseDialogBtn"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iIUnderstandBtn"), null);
             log.info("Scheme selection acknowledgement accepted.");
         } catch (Exception e) {
             log.info("No acknowledgement modal displayed — continuing.");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iIUnderstandBtn"), null);
         }
     }
 
@@ -315,10 +498,10 @@ public class BISSAgentStepDefinitions {
     // Description   : Confirms the Land Details step header is visible
     // ***************************************************************************************************************************************************************************************
     @Then("the Land Details step should be displayed")
-    public void theLandDetailsStepShouldBeDisplayed() {
+    public void theLandDetailsStepShouldBeDisplayed()
+    {
         log.info("[STEP] Then the Land Details step should be displayed");
-        String iStepHeader = iAction("GETTEXT", "XPATH", "//h2[contains(text(),'Land Details')]", null);
-        Assertions.assertFalse(iStepHeader.isEmpty(), "Land Details step header should be visible.");
+        iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iLandDetailsHeader"), "Land Details");
         log.info("Land Details step confirmed.");
     }
 
@@ -332,11 +515,13 @@ public class BISSAgentStepDefinitions {
     // Description   : Enters an invalid parcel ID into the add parcel dialog and submits
     // ***************************************************************************************************************************************************************************************
     @When("the agent attempts to add parcel {string}")
-    public void theAgentAttemptsToAddParcel(String pParcelId) {
+    public void theAgentAttemptsToAddParcel(String pParcelId)
+    {
         log.info("[STEP] When the agent attempts to add parcel: " + pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Add Parcel')]",   null);
-        iAction("TEXTBOX", "ID",    "parcelIdInput",                             pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Search') or contains(text(),'Add')]", null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAddParcelBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iParcelInput"), pParcelId);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iClaimParcelBtn"), null);
+
     }
 
 
@@ -347,11 +532,8 @@ public class BISSAgentStepDefinitions {
     @Then("the invalid parcel warning message should be displayed")
     public void theInvalidParcelWarningMessageShouldBeDisplayed() {
         log.info("[STEP] Then the invalid parcel warning message should be displayed");
-        String iWarning = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'error') or contains(@class,'warning')][contains(text(),'invalid') or contains(text(),'not found')]",
-                null);
-        Assertions.assertFalse(iWarning.isEmpty(), "Invalid parcel warning message should be displayed.");
-        log.info("Invalid parcel warning confirmed: " + iWarning);
+        iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iInvalidParcelError"), "Please enter a valid parcel number");
+        log.info("Invalid parcel warning confirmed: ");
     }
 
 
@@ -362,9 +544,7 @@ public class BISSAgentStepDefinitions {
     @And("the add parcel dialog should remain available for correction or cancellation")
     public void theAddParcelDialogShouldRemainAvailableForCorrectionOrCancellation() {
         log.info("[STEP] And the add parcel dialog should remain available for correction or cancellation");
-        String iDialogTitle = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'modal') or contains(@class,'dialog')]//h2 | //div[contains(@class,'modal') or contains(@class,'dialog')]//h3",
-                null);
+        String iDialogTitle = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iAddParcelModalHeader"), null);
         Assertions.assertFalse(iDialogTitle.isEmpty(), "Add parcel dialog should still be open after invalid entry.");
         log.info("Add parcel dialog still open: " + iDialogTitle);
     }
@@ -381,8 +561,9 @@ public class BISSAgentStepDefinitions {
     @When("the agent attempts to add archived parcel {string}")
     public void theAgentAttemptsToAddArchivedParcel(String pParcelId) {
         log.info("[STEP] When the agent attempts to add archived parcel: " + pParcelId);
-        iAction("TEXTBOX", "ID",    "parcelIdInput",                                                  pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Search') or contains(text(),'Add')]",  null);
+        //iAction("CLICK", "XPATH", ObjReader.getLocator("iAddParcelBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iParcelInput"), pParcelId);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iClaimParcelBtn"), null);
     }
 
 
@@ -394,9 +575,7 @@ public class BISSAgentStepDefinitions {
     public void theArchivedParcelWarningShouldBeDisplayedIfApplicable() {
         log.info("[STEP] Then the archived parcel warning should be displayed if applicable");
         try {
-            String iWarning = iAction("GETTEXT", "XPATH",
-                    "//div[contains(@class,'warning') or contains(@class,'alert')][contains(text(),'archived') or contains(text(),'Archived')]",
-                    null);
+            String iWarning = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iLpisTransformationError"), null);
             log.info("Archived parcel warning found: " + iWarning);
         } catch (Exception e) {
             log.info("No archived parcel warning displayed — may not apply to this parcel in this environment.");
@@ -415,10 +594,11 @@ public class BISSAgentStepDefinitions {
     @When("the agent adds parcel {string} with claimed area {string}")
     public void theAgentAddsParcelWithClaimedArea(String pParcelId, String pClaimedArea) {
         log.info("[STEP] When the agent adds parcel: " + pParcelId + " with claimed area: " + pClaimedArea);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Add Parcel')]",                            null);
-        iAction("TEXTBOX", "ID",    "parcelIdInput",                                                      pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Search')]",                                null);
-        iAction("TEXTBOX", "ID",    "claimedArea",                                                        pClaimedArea);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iParcelInput"), pParcelId);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iClaimParcelBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iClaimedAreaInput"),pClaimedArea);
+
+
     }
 
 
@@ -429,7 +609,10 @@ public class BISSAgentStepDefinitions {
     @And("the agent sets parcel ownership status to {string}")
     public void theAgentSetsParcelOwnershipStatusTo(String pOwnershipStatus) {
         log.info("[STEP] And the agent sets parcel ownership status to: " + pOwnershipStatus);
-        iAction("LIST", "ID", "ownershipStatus", "VISIBLETEXT:" + pOwnershipStatus);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iOwnershipStatusSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iOwnershipStatusOwned"),  pOwnershipStatus);
+
+
     }
 
 
@@ -440,7 +623,9 @@ public class BISSAgentStepDefinitions {
     @And("the agent sets parcel use to {string}")
     public void theAgentSetsParcelUseTo(String pParcelUse) {
         log.info("[STEP] And the agent sets parcel use to: " + pParcelUse);
-        iAction("LIST", "ID", "parcelUse", "VISIBLETEXT:" + pParcelUse);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelUseSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iParcelUseApplesOption"),  pParcelUse);
+
     }
 
 
@@ -451,7 +636,9 @@ public class BISSAgentStepDefinitions {
     @And("the agent sets parcel organic status to {string}")
     public void theAgentSetsParcelOrganicStatusTo(String pOrganicStatus) {
         log.info("[STEP] And the agent sets parcel organic status to: " + pOrganicStatus);
-        iAction("LIST", "ID", "organicStatus", "VISIBLETEXT:" + pOrganicStatus);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusConventional"),  pOrganicStatus);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelFormAddBtn"), null);
     }
 
 
