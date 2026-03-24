@@ -1,448 +1,201 @@
-package utilities;
+# ===================================================================================================================================
+# File          : TC_003_AddPlot_ObjectRepository.properties
+# Description   : Object repository for TC_003 — Add Plot dialog (biss-add-plot component).
+#                 All locators extracted directly from the Add Plot dialog DOM structure.
+#
+#                 Format : OBJECT_KEY=LOCATORTYPE##LOCATORVALUE
+#
+#                 Key naming convention:
+#                   ElementType_Dialog_FieldName
+#                   Btn_  = Button
+#                   Lst_  = mat-select / searchable mat-select dropdown
+#                   Inp_  = Input field
+#                   Chk_  = Checkbox
+#                   Rdb_  = Radio button
+#                   Dlg_  = Dialog container
+#                   Lbl_  = Label
+#
+#                 IMPORTANT — Searchable dropdowns (County, Townland, Plot Use):
+#                   These use <lib-biss-select-search> + <ngx-mat-select-search> which renders
+#                   a search input as the first disabled mat-option inside the panel.
+#                   Use the dedicated searchable locators (Lst_AddPlot_County_SearchInput etc.)
+#                   to type into the filter before selecting the option.
+#                   See TC_003_AddPlotStepDefinitions.java for the correct interaction pattern.
+#
+# Author        : Aniket Pathare | aniket.pathare@government.ie
+# Date Created  : 24-03-2026
+# ===================================================================================================================================
 
-import org.openqa.selenium.By;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.text.Normalizer;
-import java.util.*;
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 1 : Dialog Container
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-/**
- * ***************************************************************************************************************************************************************************************
- * File Name    : ObjectRepositoryExtractor.java
- * Description  : Extracts useful automation elements from the current runtime page and writes them into a single properties file
- *                grouped by Page and then by Category.
- * Author       : Aniket Pathare
- * Date Modified: 14-03-2026
- * ***************************************************************************************************************************************************************************************
- */
-public class ObjectRepositoryExtractor
-{
-    private final WebDriver iDriver;
+# Main Add Plot dialog container — used for WAITVISIBLE to confirm dialog is open
+Dlg_AddPlot_Container=XPATH##//biss-add-plot
 
-    public ObjectRepositoryExtractor(WebDriver pDriver)
-    {
-        this.iDriver = pDriver;
-    }
+# Dialog title text — verify "Add Plot" is displayed
+Lbl_AddPlot_DialogTitle=XPATH##//biss-add-plot//div[@class='dialog-title']//span
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : extractPageObjects
-    // Description   : Extracts all useful objects from the current page and appends them into a single properties file grouped by page and category
-    // Parameters    : pPageName (String) - Logical page name like Home, MyClients, FarmerDashboard
-    //                 pOutputFilePath (String) - Properties file path
-    // Author        : Aniket Pathare
-    // Precondition  : Target page must already be opened
-    // Date Created  : 14-03-2026
-    // ***************************************************************************************************************************************************************************************
-    public void extractPageObjects(String pPageName, String pOutputFilePath)
-    {
-        Map<String, List<LocatorEntry>> iCategorizedEntries = new LinkedHashMap<>();
-        Map<String, Integer> iDuplicateCounterMap = new HashMap<>();
+# Close (X) button — top right of dialog
+Btn_AddPlot_Close=XPATH##//biss-add-plot//button[contains(@class,'btn-close-on-top')]
 
-        iCategorizedEntries.put("Buttons", new ArrayList<>());
-        iCategorizedEntries.put("Links", new ArrayList<>());
-        iCategorizedEntries.put("Textboxes", new ArrayList<>());
-        iCategorizedEntries.put("TextAreas", new ArrayList<>());
-        iCategorizedEntries.put("Dropdowns", new ArrayList<>());
-        iCategorizedEntries.put("Checkboxes", new ArrayList<>());
-        iCategorizedEntries.put("RadioButtons", new ArrayList<>());
-        iCategorizedEntries.put("Images", new ArrayList<>());
-        iCategorizedEntries.put("Labels", new ArrayList<>());
-        iCategorizedEntries.put("Tables", new ArrayList<>());
-        iCategorizedEntries.put("Icons", new ArrayList<>());
-        iCategorizedEntries.put("OtherElements", new ArrayList<>());
+# Cancel button — bottom of dialog
+Btn_AddPlot_Cancel=XPATH##//biss-add-plot//button[.//span[normalize-space()='Cancel']]
 
-        List<WebElement> iElements = getAllUsefulElements();
+# Next button — bottom of dialog — submits the Add Plot form
+Btn_AddPlot_Next=XPATH##//biss-add-plot//button[.//span[normalize-space()='Next']]
 
-        for (WebElement iElement : iElements)
-        {
-            try
-            {
-                if (!iElement.isDisplayed())
-                {
-                    continue;
-                }
+# Hidden submit button — triggers Angular form validation (do not use directly)
+# Btn_AddPlot_HiddenSubmit=XPATH##//biss-add-plot//button[@type='submit' and contains(@class,'hidden')]
 
-                String iCategory = getCategory(iElement);
-                String iBaseKey = buildRepositoryKey(pPageName, iElement);
 
-                if (iBaseKey == null || iBaseKey.trim().isEmpty())
-                {
-                    continue;
-                }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 2 : County — Searchable mat-select (lib-biss-select-search)
+# This is a searchable dropdown — must type county name into the search input AFTER opening
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-                String iFinalKey = makeUnique(iBaseKey, iDuplicateCounterMap);
-                String iXPath = buildXPath(iElement);
-                String iCss = buildCss(iElement);
+# County mat-select trigger — click this to open the county panel
+Lst_AddPlot_County=XPATH##//lib-biss-select-search[@formcontrolname='county']//mat-select
 
-                iCategorizedEntries.get(iCategory).add(new LocatorEntry(iFinalKey, iXPath, iCss));
-            }
-            catch (Exception iException)
-            {
-                System.out.println("Skipping element due to error: " + iException.getMessage());
-            }
-        }
+# County search input — appears inside the panel after the trigger is clicked
+# Type the county name here to filter the options list
+Lst_AddPlot_County_SearchInput=XPATH##//input[@placeholder='Enter county']
 
-        writeToPropertiesFile(pPageName, iCategorizedEntries, pOutputFilePath);
-    }
+# County field error message — "Please select a county."
+Lbl_AddPlot_County_Error=XPATH##//lib-biss-select-search[@formcontrolname='county']//mat-error//span
 
-    private List<WebElement> getAllUsefulElements()
-    {
-        return iDriver.findElements(By.xpath(
-                "//button | //a | //input | //textarea | //select | //img | //label | //table | //mat-select | //mat-checkbox | //mat-radio-button | //mat-icon | //*[@role='button'] | //*[@role='link'] | //*[@role='textbox'] | //*[@role='checkbox'] | //*[@role='radio'] | //*[@role='combobox']"
-        ));
-    }
 
-    private String getCategory(WebElement pElement)
-    {
-        String iTag = lower(pElement.getTagName());
-        String iType = lower(pElement.getAttribute("type"));
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 3 : Townland — Searchable mat-select (lib-biss-select-search)
+# Townland is DISABLED until a County is selected — wait for it to become enabled
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-        if ("button".equals(iTag) || "submit".equals(iType) || "button".equals(iType) || hasRole(pElement, "button"))
-        {
-            return "Buttons";
-        }
-        else if ("a".equals(iTag) || hasRole(pElement, "link"))
-        {
-            return "Links";
-        }
-        else if ("input".equals(iTag) && Arrays.asList("text", "password", "email", "number", "search", "tel", "url", "").contains(iType))
-        {
-            return "Textboxes";
-        }
-        else if ("textarea".equals(iTag) || hasRole(pElement, "textbox"))
-        {
-            return "TextAreas";
-        }
-        else if ("select".equals(iTag) || "mat-select".equals(iTag) || hasRole(pElement, "combobox"))
-        {
-            return "Dropdowns";
-        }
-        else if (("input".equals(iTag) && "checkbox".equals(iType)) || "mat-checkbox".equals(iTag) || hasRole(pElement, "checkbox"))
-        {
-            return "Checkboxes";
-        }
-        else if (("input".equals(iTag) && "radio".equals(iType)) || "mat-radio-button".equals(iTag) || hasRole(pElement, "radio"))
-        {
-            return "RadioButtons";
-        }
-        else if ("img".equals(iTag))
-        {
-            return "Images";
-        }
-        else if ("label".equals(iTag))
-        {
-            return "Labels";
-        }
-        else if ("table".equals(iTag))
-        {
-            return "Tables";
-        }
-        else if ("mat-icon".equals(iTag))
-        {
-            return "Icons";
-        }
+# Townland mat-select trigger — disabled until County is selected
+Lst_AddPlot_Townland=XPATH##//lib-biss-select-search[@formcontrolname='townland']//mat-select
 
-        return "OtherElements";
-    }
+# Townland search input — appears inside the panel after County has been selected and Townland is clicked
+Lst_AddPlot_Townland_SearchInput=XPATH##//input[@placeholder='Enter townland']
 
-    private String buildRepositoryKey(String pPageName, WebElement pElement)
-    {
-        String iTag = lower(pElement.getTagName());
-        String iType = lower(pElement.getAttribute("type"));
-        String iNamePart = bestName(pElement);
+# Townland field error message — "Please select a townland."
+Lbl_AddPlot_Townland_Error=XPATH##//lib-biss-select-search[@formcontrolname='townland']//mat-error//span
 
-        if (iNamePart == null || iNamePart.isBlank())
-        {
-            iNamePart = "Element";
-        }
 
-        iNamePart = toPascalCase(iNamePart);
-        String iPagePrefix = toPascalCase(pPageName);
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 4 : Plot Reference — Text input
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-        if ("button".equals(iTag) || "submit".equals(iType) || "button".equals(iType) || hasRole(pElement, "button"))
-        {
-            return "iBtn_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if ("a".equals(iTag) || hasRole(pElement, "link"))
-        {
-            return "iLnk_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if ("input".equals(iTag) && Arrays.asList("text", "password", "email", "number", "search", "tel", "url", "").contains(iType))
-        {
-            return "iTxt_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if ("textarea".equals(iTag) || hasRole(pElement, "textbox"))
-        {
-            return "iTxtArea_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if ("select".equals(iTag) || "mat-select".equals(iTag) || hasRole(pElement, "combobox"))
-        {
-            return "iDrp_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if (("input".equals(iTag) && "checkbox".equals(iType)) || "mat-checkbox".equals(iTag) || hasRole(pElement, "checkbox"))
-        {
-            return "iChk_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if (("input".equals(iTag) && "radio".equals(iType)) || "mat-radio-button".equals(iTag) || hasRole(pElement, "radio"))
-        {
-            return "iRdo_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if ("img".equals(iTag))
-        {
-            return "iImg_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if ("label".equals(iTag))
-        {
-            return "iLbl_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if ("table".equals(iTag))
-        {
-            return "iTbl_" + iPagePrefix + "_" + iNamePart;
-        }
-        else if ("mat-icon".equals(iTag))
-        {
-            return "iIcn_" + iPagePrefix + "_" + iNamePart;
-        }
+# Plot Reference input field — id="plotReference"
+Inp_AddPlot_PlotReference=XPATH##//input[@id='plotReference']
 
-        return "iElm_" + iPagePrefix + "_" + iNamePart;
-    }
 
-    private String bestName(WebElement pElement)
-    {
-        List<String> iCandidates = Arrays.asList(
-                trimToNull(pElement.getText()),
-                trimToNull(pElement.getAttribute("id")),
-                trimToNull(pElement.getAttribute("name")),
-                trimToNull(pElement.getAttribute("placeholder")),
-                trimToNull(pElement.getAttribute("aria-label")),
-                trimToNull(pElement.getAttribute("title")),
-                trimToNull(pElement.getAttribute("alt")),
-                trimToNull(pElement.getAttribute("value")),
-                trimToNull(pElement.getAttribute("formcontrolname"))
-        );
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 5 : Ownership Status — Standard mat-select (no search input)
+# id="ownershipStatus" formcontrolname="ownershipStatus"
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-        for (String iCandidate : iCandidates)
-        {
-            if (iCandidate != null && !iCandidate.isBlank())
-            {
-                return sanitize(iCandidate);
-            }
-        }
+# Ownership Status mat-select trigger
+Lst_AddPlot_OwnershipStatus=XPATH##//mat-select[@id='ownershipStatus']
 
-        return "Element";
-    }
+# Label — "Select Ownership Status"
+Lbl_AddPlot_OwnershipStatus=XPATH##//label[@for='ownershipStatus']
 
-    private String buildXPath(WebElement pElement)
-    {
-        String iTag = pElement.getTagName();
 
-        if (trimToNull(pElement.getAttribute("id")) != null)
-        {
-            return "//*[@" + "id='" + pElement.getAttribute("id") + "']";
-        }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 6 : Organic Status — Standard mat-select (no search input)
+# id="organicStatus" formcontrolname="organicStatus"
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-        if (trimToNull(pElement.getAttribute("name")) != null)
-        {
-            return "//" + iTag + "[@name='" + pElement.getAttribute("name") + "']";
-        }
+# Organic Status mat-select trigger
+Lst_AddPlot_OrganicStatus=XPATH##//mat-select[@id='organicStatus']
 
-        if (trimToNull(pElement.getAttribute("formcontrolname")) != null)
-        {
-            return "//" + iTag + "[@formcontrolname='" + pElement.getAttribute("formcontrolname") + "']";
-        }
+# Label — "Select Organic Status"
+Lbl_AddPlot_OrganicStatus=XPATH##//label[@for='organicStatus']
 
-        if (trimToNull(pElement.getAttribute("placeholder")) != null)
-        {
-            return "//" + iTag + "[@placeholder='" + pElement.getAttribute("placeholder") + "']";
-        }
 
-        if (trimToNull(pElement.getAttribute("aria-label")) != null)
-        {
-            return "//" + iTag + "[@aria-label='" + pElement.getAttribute("aria-label") + "']";
-        }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 7 : Claimed Area — Number input
+# id="claimedArea" formcontrolname="claimedArea"
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-        if (trimToNull(pElement.getText()) != null)
-        {
-            return "//" + iTag + "[contains(normalize-space(.),'" + pElement.getText().trim() + "')]";
-        }
+# Claimed Area input field — accepts numeric values only
+Inp_AddPlot_ClaimedArea=XPATH##//input[@id='claimedArea']
 
-        return "//" + iTag;
-    }
+# Label — "Claimed Area (ha)"
+Lbl_AddPlot_ClaimedArea=XPATH##//label[@for='claimedArea']
 
-    private String buildCss(WebElement pElement)
-    {
-        String iTag = lower(pElement.getTagName());
 
-        if (trimToNull(pElement.getAttribute("id")) != null)
-        {
-            return "#" + pElement.getAttribute("id");
-        }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 8 : Checkboxes — Commonage Plot and Island Plot
+# Native <input type="checkbox"> inside mat-checkbox
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-        if (trimToNull(pElement.getAttribute("name")) != null)
-        {
-            return iTag + "[name='" + pElement.getAttribute("name") + "']";
-        }
+# Commonage Plot checkbox — id="commonage-checkbox-input"
+Chk_AddPlot_CommonagePlot=XPATH##//input[@id='commonage-checkbox-input']
 
-        if (trimToNull(pElement.getAttribute("formcontrolname")) != null)
-        {
-            return iTag + "[formcontrolname='" + pElement.getAttribute("formcontrolname") + "']";
-        }
+# Commonage Plot label
+Lbl_AddPlot_CommonagePlot=XPATH##//label[@for='commonage-checkbox-input']
 
-        if (trimToNull(pElement.getAttribute("placeholder")) != null)
-        {
-            return iTag + "[placeholder='" + pElement.getAttribute("placeholder") + "']";
-        }
+# Island Plot checkbox — id="island-checkbox-input"
+Chk_AddPlot_IslandPlot=XPATH##//input[@id='island-checkbox-input']
 
-        if (trimToNull(pElement.getAttribute("aria-label")) != null)
-        {
-            return iTag + "[aria-label='" + pElement.getAttribute("aria-label") + "']";
-        }
+# Island Plot label
+Lbl_AddPlot_IslandPlot=XPATH##//label[@for='island-checkbox-input']
 
-        if (trimToNull(pElement.getAttribute("class")) != null)
-        {
-            String[] iClasses = pElement.getAttribute("class").trim().split("\\s+");
-            if (iClasses.length > 0)
-            {
-                return iTag + "." + iClasses[0];
-            }
-        }
 
-        return iTag;
-    }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 9 : Plot Use — Searchable mat-select (lib-biss-select-search)
+# formcontrolname="plotUse" — uses ngx-mat-select-search same as County
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-    private void writeToPropertiesFile(String pPageName, Map<String, List<LocatorEntry>> pCategorizedEntries, String pOutputFilePath)
-    {
-        try
-        {
-            File iFile = new File(pOutputFilePath);
-            boolean iFileExists = iFile.exists();
+# Plot Use mat-select trigger — id="mat-select-28"
+Lst_AddPlot_PlotUse=XPATH##//lib-biss-select-search[@formcontrolname='plotUse']//mat-select
 
-            BufferedWriter iWriter = new BufferedWriter(new FileWriter(iFile, true));
+# Plot Use search input — appears inside the panel after trigger is clicked
+Lst_AddPlot_PlotUse_SearchInput=XPATH##//lib-biss-select-search[@formcontrolname='plotUse']//input[contains(@class,'mat-select-search-input') and not(contains(@class,'mat-select-search-hidden'))]
 
-            if (!iFileExists)
-            {
-                iWriter.write("# Object Repository");
-                iWriter.newLine();
-                iWriter.newLine();
-            }
 
-            iWriter.write("# ======================================================================");
-            iWriter.newLine();
-            iWriter.write("# Page : " + pPageName);
-            iWriter.newLine();
-            iWriter.write("# ======================================================================");
-            iWriter.newLine();
-            iWriter.newLine();
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 10 : Map Amendment Type — Radio buttons (mat-radio-group)
+# formcontrolname="mapAmendmentType" — three options with native radio inputs
+# value="1" = Edit Map Online | value="2" = Upload Map | value="3" = Submit Paper Map By Post
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-            for (Map.Entry<String, List<LocatorEntry>> iEntry : pCategorizedEntries.entrySet())
-            {
-                if (iEntry.getValue().isEmpty())
-                {
-                    continue;
-                }
+# Edit Map Online — value="1" — radio input
+Rdb_AddPlot_MapAmend_EditOnline=XPATH##//input[@type='radio' and @value='1' and contains(@id,'mat-radio')]
 
-                iWriter.write("# ------------------------- " + iEntry.getKey() + " -------------------------");
-                iWriter.newLine();
+# Edit Map Online — label text
+Lbl_AddPlot_MapAmend_EditOnline=XPATH##//label[@for='mat-radio-2-input']
 
-                for (LocatorEntry iLocatorEntry : iEntry.getValue())
-                {
-                    iWriter.write(iLocatorEntry.iKey + ".xpath=" + iLocatorEntry.iXPath);
-                    iWriter.newLine();
-                    iWriter.write(iLocatorEntry.iKey + ".css=" + iLocatorEntry.iCss);
-                    iWriter.newLine();
-                    iWriter.newLine();
-                }
-            }
+# Upload Map — value="2" — radio input
+Rdb_AddPlot_MapAmend_UploadMap=XPATH##//input[@type='radio' and @value='2' and contains(@id,'mat-radio')]
 
-            iWriter.close();
-            System.out.println("Objects extracted successfully for page: " + pPageName);
-        }
-        catch (IOException iException)
-        {
-            throw new RuntimeException("Failed writing properties file", iException);
-        }
-    }
+# Upload Map — label text
+Lbl_AddPlot_MapAmend_UploadMap=XPATH##//label[@for='mat-radio-3-input']
 
-    private String makeUnique(String pBaseKey, Map<String, Integer> pDuplicateCounterMap)
-    {
-        if (!pDuplicateCounterMap.containsKey(pBaseKey))
-        {
-            pDuplicateCounterMap.put(pBaseKey, 1);
-            return pBaseKey;
-        }
+# Submit Paper Map By Post — value="3" — radio input
+Rdb_AddPlot_MapAmend_PaperMap=XPATH##//input[@type='radio' and @value='3' and contains(@id,'mat-radio')]
 
-        int iCount = pDuplicateCounterMap.get(pBaseKey) + 1;
-        pDuplicateCounterMap.put(pBaseKey, iCount);
-        return pBaseKey + "_" + iCount;
-    }
+# Submit Paper Map By Post — label text
+Lbl_AddPlot_MapAmend_PaperMap=XPATH##//label[@for='mat-radio-4-input']
 
-    private String sanitize(String pValue)
-    {
-        return Normalizer.normalize(pValue, Normalizer.Form.NFD)
-                .replaceAll("[^\\p{ASCII}]", "")
-                .replaceAll("[^a-zA-Z0-9 ]", " ")
-                .replaceAll("\\s+", " ")
-                .trim();
-    }
+# Radio group container — used for WAITVISIBLE to confirm section loaded
+Rdb_AddPlot_MapAmend_Group=XPATH##//mat-radio-group[@formcontrolname='mapAmendmentType']
 
-    private String toPascalCase(String pValue)
-    {
-        String[] iWords = pValue.split("\\s+");
-        StringBuilder iBuilder = new StringBuilder();
 
-        for (String iWord : iWords)
-        {
-            if (!iWord.isBlank())
-            {
-                iBuilder.append(iWord.substring(0, 1).toUpperCase(Locale.ENGLISH));
-                if (iWord.length() > 1)
-                {
-                    iBuilder.append(iWord.substring(1));
-                }
-            }
-        }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# SECTION 11 : Panel selectors — used internally by performMatSelect and performSearchableMatSelect
+# These are body-level overlays — NOT inside the dialog container
+# -----------------------------------------------------------------------------------------------------------------------------------
 
-        return iBuilder.toString();
-    }
+# Standard mat-select panel (ownershipStatus, organicStatus)
+# Matches the open panel regardless of dynamic ID suffix
+Panel_MatSelect_Open=CSS##div[role='listbox'].mdc-menu-surface--open
 
-    private String trimToNull(String pValue)
-    {
-        if (pValue == null)
-        {
-            return null;
-        }
+# Searchable mat-select panel — contains ngx-mat-select-search as first disabled option
+# Identified by the presence of mat-select-search-input inside the panel
+Panel_SearchableMatSelect_Open=CSS##div[role='listbox'].mdc-menu-surface--open
 
-        String iTrimmed = pValue.trim();
-        return iTrimmed.isEmpty() ? null : iTrimmed;
-    }
-
-    private String lower(String pValue)
-    {
-        return pValue == null ? "" : pValue.trim().toLowerCase(Locale.ENGLISH);
-    }
-
-    private boolean hasRole(WebElement pElement, String pRole)
-    {
-        String iRole = trimToNull(pElement.getAttribute("role"));
-        return iRole != null && iRole.equalsIgnoreCase(pRole);
-    }
-
-    private static class LocatorEntry
-    {
-        private final String iKey;
-        private final String iXPath;
-        private final String iCss;
-
-        private LocatorEntry(String pKey, String pXPath, String pCss)
-        {
-            this.iKey = pKey;
-            this.iXPath = pXPath;
-            this.iCss = pCss;
-        }
-    }
-}
+# mat-option items within any open panel — excludes the disabled search row
+# Use: //mat-option[not(contains(@class,'contains-mat-select-search'))]
+Panel_MatOption_Selectable=XPATH##//div[role='listbox'][contains(@class,'mdc-menu-surface--open')]//mat-option[not(contains(@class,'contains-mat-select-search'))]
