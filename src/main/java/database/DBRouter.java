@@ -1,0 +1,350 @@
+package database;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.sql.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.Date;
+import java.util.logging.*;
+
+/**
+ * DBRouter (multi-DB, Option B)
+ * ------------------------------------------------------------------------
+ * Usage:
+ *   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "1");
+ *   String herd = DBRouter.getValue("APP_HERD_NO");
+ *
+ *   DBRouter.runDB("INET", "Get Login Id for herd", herd);
+ *   String username = DBRouter.getValue("USERNAME");
+ *
+ * Properties:
+ *   src/test/resources/db.properties
+ *     # DATA DB (BISS_DATA)
+ *     db.url=...
+ *     db.username=...
+ *     db.password=...
+ *
+ *     # INET DB (BPS_CONNECT)
+ *     db.inet.url=...
+ *     db.inet.username=...
+ *     db.inet.password=...
+ */
+public class DBRouter {
+
+    // =====================================================================
+    // STATIC RESULT STORE
+    // =====================================================================
+    public static List<Map<String, Object>> lastRows = new ArrayList<>();
+    public static Object lastScalar = null;
+    public static String lastLabel = "";
+
+    // =====================================================================
+    // DB CONFIGURATION
+    // =====================================================================
+    private static final Logger log = Logger.getLogger(DBRouter.class.getName());
+    private static final String PROPERTIES_FILE = "src/test/resources/db.properties"; // keeps your existing path
+
+    // DATA (default) — existing keys
+    private static String DB_URL;
+    private static String DB_USER;
+    private static String DB_PASSWORD;
+
+    // INET — new keys
+    private static String DB_INET_URL;
+    private static String DB_INET_USER;
+    private static String DB_INET_PASSWORD;
+
+    static {
+        setupLogger();
+        loadDBProperties();
+    }
+
+    // =====================================================================
+    // PUBLIC API — Option B ONLY (no ambiguous overloads)
+    // =====================================================================
+    /**
+     * Run a labeled SQL on the chosen DB.
+     *
+     * @param dbKey  "DATA" or "INET"
+     * @param label  logical query label
+     * @param params label parameters (if any)
+     */
+    public static void runDB(String dbKey, String label, String... params) {
+        Objects.requireNonNull(dbKey, "dbKey cannot be null");
+        Objects.requireNonNull(label, "label cannot be null");
+
+        final String which = normalizeDb(dbKey);  // "DATA" or "INET"
+        final String key   = normalize(label);
+
+        lastLabel = label;
+
+        String sql = null;
+        Object[] jdbcParams = new Object[0];
+
+        switch (key) {
+
+            // ------------------------------------------------------------
+            // DATA DB: list of herds with no errors (year, optional limit)
+            // ------------------------------------------------------------
+            case "LIST OF HERDS WITH NO ERRORS AT ALL": {
+                // params:
+                // params[0] = year (required)
+                // params[1] = limit (optional)
+                // params[2] = mode: NORMAL (default) or NOT_STARTED (NEW)
+                requireParamCountBetween(key, params, 1, 3);
+
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+
+                // NEW: detection of mode
+                String mode = (params.length >= 3) ? params[2].trim().toUpperCase() : "NORMAL";
+
+                if (mode.equals("NOT_STARTED")) {
+                    // ----------------------------------------------------------
+                    // Mode 2 — Return NOT STARTED herds (app_mde_code = 1)
+                    // ----------------------------------------------------------
+                    sql =
+                            "SELECT app_herd_no, app_year, aph_herd_type " +
+                                    "FROM vwbs_application_herd " +
+                                    "WHERE app_mde_code = 1 " +     // 1 = NOT STARTED
+                                    "AND app_year = ? " +
+                                    "AND ROWNUM <= ? " +
+                                    "ORDER BY app_herd_no ASC";
+                    jdbcParams = new Object[]{ year, maxRows };
+                }
+                else {
+                    // ----------------------------------------------------------
+                    // Mode 1 — Original query (NO ERRORS)
+                    // ----------------------------------------------------------
+                    sql =
+                            "SELECT a.app_herd_no, a.aph_herd_no, a.applicant_type " +
+                                    "FROM vwbs_error e, vwbs_application_herd a " +
+                                    "WHERE e.eor_year (+) = a.app_year " +
+                                    "AND e.eor_app_id (+) = a.aph_app_id " +
+                                    "AND a.aph_id = NVL(e.eor_aph_id (+), a.aph_id) " +
+                                    "AND e.eor_app_id IS NULL " +
+                                    "AND a.mde_abbrev = 'I' " +
+                                    "AND a.app_year = ? " +
+                                    "AND ROWNUM <= ? " +
+                                    "ORDER BY a.app_herd_no, a.aph_herd_no, a.applicant_type";
+                    jdbcParams = new Object[]{ year, maxRows };
+                }
+
+                break;
+            }
+
+            // ------------------------------------------------------------
+            // DATA DB: herds by scheme year (kept from your current router)
+            // ------------------------------------------------------------
+            case "HERDS BY SCHEME YEAR": {
+                requireParamCountBetween(key, params, 1, 1);
+                sql =
+                        "SELECT h.hld_herd_no " +
+                                "FROM tddp_application a " +
+                                "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
+                                "WHERE a.app_syr_code = ? " +
+                                "ORDER BY h.hld_herd_no";
+                jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
+                break;
+            }
+
+            // ------------------------------------------------------------
+            // DATA DB: get_hold (kept from your current router)
+            // ------------------------------------------------------------
+            case "GET HOLD ID FOR HERD": {
+                requireParamCountBetween(key, params, 1, 1);
+                sql = "SELECT get_hold(?) AS holding_id FROM dual";
+                jdbcParams = new Object[]{ params[0] };
+                break;
+            }
+
+            // ------------------------------------------------------------
+            // INET DB: get Username for a Herd (BPS_CONNECT)
+            // ------------------------------------------------------------
+            case "GET LOGIN ID FOR HERD": {
+                requireParamCountBetween(key, params, 1, 1);
+                // Returns HERDNO + USERNAME
+                sql =
+                        "SELECT hbcus.bcus_bus_id AS HERDNO, " +
+                                "       (SELECT ui.uri_username " +
+                                "          FROM tdcr_user_info ui " +
+                                "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
+                                "           AND ROWNUM = 1) AS USERNAME " +
+                                "  FROM tdco_customer_asscs ca, " +
+                                "       tdco_business_customers abcus, " +
+                                "       tdco_business_customers hbcus " +
+                                " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
+                                "   AND ca.ca_cac_code = 194 " +
+                                "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
+                                "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
+                                "   AND hbcus.bcus_bus_id  = ? " +
+                                " ORDER BY 2, 1";
+                jdbcParams = new Object[]{ params[0] };
+                break;
+            }
+
+            default:
+                throw new RuntimeException("Unknown DB label: " + label);
+        }
+
+        executeQuery(which, sql, jdbcParams);
+    }
+
+    // =====================================================================
+    // EXECUTE SQL (with DB choice)
+    // =====================================================================
+    private static void executeQuery(String whichDb, String sql, Object... params) {
+        lastRows = new ArrayList<>();
+        lastScalar = null;
+
+        try (Connection conn = "INET".equals(whichDb) ? getInetConnection() : getDataConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+            for (int i = 0; i < params.length; i++) {
+                stmt.setObject(i + 1, params[i]);
+            }
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                ResultSetMetaData md = rs.getMetaData();
+                int colCount = md.getColumnCount();
+
+                while (rs.next()) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int c = 1; c <= colCount; c++) {
+                        String col = md.getColumnLabel(c);
+                        if (col == null || col.isEmpty()) col = md.getColumnName(c);
+                        row.put(col.toUpperCase(Locale.ROOT), rs.getObject(c));
+                    }
+                    lastRows.add(row);
+                }
+                if (!lastRows.isEmpty()) {
+                    lastScalar = lastRows.get(0).values().iterator().next();
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("DB (" + whichDb + ") execution failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static Connection getDataConnection() throws SQLException {
+        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
+    }
+    private static Connection getInetConnection() throws SQLException {
+        return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
+    }
+
+    // =====================================================================
+    // HELPER ACCESSORS
+    // =====================================================================
+    /** First row’s column value (case-insensitive), or null if absent. */
+    public static String getValue(String column) {
+        if (lastRows.isEmpty()) return null;
+        Map<String, Object> first = lastRows.get(0);
+        for (String k : first.keySet())
+            if (k.equalsIgnoreCase(column))
+                return Objects.toString(first.get(k), null);
+        return null;
+    }
+
+    /** All rows of last result. */
+    public static List<Map<String, Object>> getRows() { return lastRows; }
+
+    /** True if last result has at least one row. */
+    public static boolean hasRows() { return !lastRows.isEmpty(); }
+
+    // =====================================================================
+    // PROPERTY LOADER
+    // =====================================================================
+    private static void loadDBProperties() {
+        Properties props = new Properties();
+        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE)) {
+            props.load(fis);
+
+            // DATA (existing keys)
+            DB_URL      = props.getProperty("db.url");
+            DB_USER     = props.getProperty("db.username");
+            DB_PASSWORD = props.getProperty("db.password");
+            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD)) {
+                throw new RuntimeException("Missing DATA DB properties (db.url / db.username / db.password)");
+            }
+
+            // INET (new keys)
+            DB_INET_URL      = props.getProperty("db.inet.url");
+            DB_INET_USER     = props.getProperty("db.inet.username");
+            DB_INET_PASSWORD = props.getProperty("db.inet.password");
+            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD)) {
+                throw new RuntimeException("Missing INET DB properties (db.inet.url / db.inet.username / db.inet.password)");
+            }
+
+            log.info("[DBRouter] Loaded DATA & INET connection properties.");
+        } catch (IOException e) {
+            throw new RuntimeException("Cannot load DB properties at " + PROPERTIES_FILE + " : " + e.getMessage(), e);
+        }
+    }
+
+    // =====================================================================
+    // LOGGER
+    // =====================================================================
+    private static void setupLogger() {
+        try {
+            Logger root = Logger.getLogger(DBRouter.class.getName());
+            root.setUseParentHandlers(false);
+            root.setLevel(Level.ALL);
+
+            // Fully-qualify to avoid ambiguity with java.util.Formatter
+            java.util.logging.Formatter fmt = new java.util.logging.Formatter() {
+                @Override
+                public String format(LogRecord r) {
+                    return String.format("[%s] [%s] %s%n",
+                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date(r.getMillis())),
+                            r.getLevel(),
+                            r.getMessage());
+                }
+            };
+            ConsoleHandler console = new ConsoleHandler();
+            console.setLevel(Level.ALL);
+            console.setFormatter(fmt);
+
+            for (Handler h : root.getHandlers()) root.removeHandler(h);
+            root.addHandler(console);
+        } catch (Exception e) {
+            System.err.println("Logger setup failed: " + e.getMessage());
+        }
+    }
+
+    // =====================================================================
+    // NORMALIZERS & VALIDATORS
+    // =====================================================================
+    private static String normalizeDb(String s) {
+        String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
+        if ("DATA".equals(v) || "INET".equals(v)) return v;
+        throw new IllegalArgumentException("dbKey must be 'DATA' or 'INET' (was: " + s + ")");
+    }
+
+    private static String normalize(String s) {
+        if (s == null) return "";
+        return s.replace(':', ' ')
+                .replace("–", "-")
+                .replace("—", "-")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toUpperCase(Locale.ROOT);
+    }
+
+    private static void requireParamCountBetween(String labelKey, String[] params, int min, int max) {
+        int n = (params == null) ? 0 : params.length;
+        if (n < min || n > max) {
+            throw new IllegalArgumentException(
+                    "Label '" + labelKey + "' expects between " + min + " and " + max + " parameter(s); got " + n
+            );
+        }
+    }
+
+    private static int parseInt(String s, String name) {
+        try { return Integer.parseInt(s.trim()); }
+        catch (Exception e) { throw new IllegalArgumentException("Expected integer for " + name + " but got: " + s); }
+    }
+
+    private static boolean isBlank(String s) { return s == null || s.trim().isEmpty(); }
+}
