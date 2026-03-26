@@ -73,7 +73,7 @@ public class TestRunner
     private static final Logger log = Logger.getLogger(TestRunner.class.getName());
 
     // -------------------------------------------------------------------------------------------------------------------------------
-    // Framework paths — all overridable via -D JVM system properties for Bamboo plan configuration
+    // FrameworkS paths — all overridable via -D JVM system properties for Bamboo plan configuration
     // -------------------------------------------------------------------------------------------------------------------------------
     public static final String iExecutionControlFilePath  = System.getProperty(
             "execution.control.path",  "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");

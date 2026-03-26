@@ -71,7 +71,7 @@ public class Hooks
 {
     // -------------------------------------------------------------------------------------------------------------------------------
     // Public state — shared with step definitions for screenshot and test identity access
-    // iDocument and iDocPath are used by step definitions to add screenshots mid-scenario
+    // iDocumentS and iDocPath are used by step definitions to add screenshots mid-scenario
     // -------------------------------------------------------------------------------------------------------------------------------
     public static XWPFDocument iDocument    = null;
     public static String       iDocPath     = "";
