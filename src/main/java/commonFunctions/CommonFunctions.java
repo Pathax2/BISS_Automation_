@@ -21,14 +21,7 @@ import org.apache.poi.xwpf.usermodel.ParagraphAlignment;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
-import org.openqa.selenium.By;
-import org.openqa.selenium.ElementClickInterceptedException;
-import org.openqa.selenium.JavascriptExecutor;
-import org.openqa.selenium.Keys;
-import org.openqa.selenium.OutputType;
-import org.openqa.selenium.TakesScreenshot;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
+import org.openqa.selenium.*;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.edge.EdgeDriver;
@@ -36,9 +29,7 @@ import org.openqa.selenium.edge.EdgeOptions;
 import org.openqa.selenium.firefox.FirefoxDriver;
 import org.openqa.selenium.firefox.FirefoxOptions;
 import org.openqa.selenium.interactions.Actions;
-import org.openqa.selenium.support.ui.ExpectedConditions;
-import org.openqa.selenium.support.ui.Select;
-import org.openqa.selenium.support.ui.WebDriverWait;
+import org.openqa.selenium.support.ui.*;
 import utilities.ExcelUtilities ;
 import java.io.IOException;
 import java.io.File;
@@ -407,19 +398,11 @@ public class CommonFunctions
             JavascriptExecutor iJavaScriptExecutor = (JavascriptExecutor) pDriver;
             String iOriginalStyle = pElement.getAttribute("style");
 
-            iJavaScriptExecutor.executeScript(
-                    "arguments[0].setAttribute('style', arguments[1]);",
-                    pElement,
-                    "border: 3px solid red; background: rgba(255,0,0,0.03);"
-            );
+            iJavaScriptExecutor.executeScript("arguments[0].setAttribute('style', arguments[1]);", pElement, "border: 3px solid red; background: rgba(255,0,0,0.03);");
 
-            new Actions(pDriver).pause(Duration.ofMillis(300)).perform();
+            new Actions(pDriver).pause(Duration.ofMillis(400)).perform();
 
-            iJavaScriptExecutor.executeScript(
-                    "arguments[0].setAttribute('style', arguments[1]);",
-                    pElement,
-                    iOriginalStyle == null ? "" : iOriginalStyle
-            );
+            iJavaScriptExecutor.executeScript("arguments[0].setAttribute('style', arguments[1]);", pElement, iOriginalStyle == null ? "" : iOriginalStyle);
         }
         catch (Exception iException)
         {
@@ -690,122 +673,220 @@ public class CommonFunctions
         }
     }
 
-    private static void performMatSelect(WebDriver pDriver, WebDriverWait pWait, WebElement pElement, String pValue)
+    // ***************************************************************************************************************************************************************************************
+// Function Name : performMatSelect
+// Description   : Intelligent Angular Material <mat-select> handler.
+//
+//                 Supports BOTH:
+//                   ✔ Standard mat-select
+//                   ✔ Searchable mat-select (lib-biss-select-search + ngx-mat-select-search)
+//
+//                 Key capabilities:
+//                   1. Detects search-enabled dropdowns dynamically
+//                   2. Types into <input class="mat-select-search-input"> to filter options
+//                   3. Skips disabled mat-option search row (contains-mat-select-search)
+//                   4. Uses mat-option.optionListItem for correct BISS filtering behavior
+//                   5. Handles stale elements after Angular re-render
+//                   6. Robust waits for panel open and close
+//                   7. Supports INDEX:, VISIBLETEXT:, VALUE:, or plain text
+//
+// Parameters    : pDriver  (WebDriver)
+//                 pWait    (WebDriverWait)
+//                 pElement (WebElement) - the mat-select trigger
+//                 pValue   (String)     - selection directive
+//
+// Author        : Aniket Pathare
+// Date Updated  : 24-03-2026
+// ***************************************************************************************************************************************************************************************
+    private static void performMatSelect(WebDriver pDriver, WebDriverWait pWait,
+                                         WebElement pElement, String pValue)
     {
-        // ── Step 1 : Click the mat-select to open the options panel ──────────────────────────
-        // ── Step 1 : Click the mat-select to open the options panel ──────────────────────────
+        // ───────────────────────────────────────────────────────────────────────────────
+        // STEP 1 : OPEN PANEL
+        // ───────────────────────────────────────────────────────────────────────────────
         try
         {
-            // Check if already expanded to avoid redundant clicks
             String iIsExpanded = pElement.getAttribute("aria-expanded");
-            if ("true".equalsIgnoreCase(iIsExpanded)) {
-                log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | already expanded. Skipping trigger click.");
-            } else {
+            if (!"true".equalsIgnoreCase(iIsExpanded))
+            {
                 pElement.click();
+            }
+            else
+            {
+                log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel already open.");
             }
         }
         catch (ElementClickInterceptedException iEx)
         {
-            log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | Click intercepted by backdrop. Retrying with JS click.");
+            log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | Click intercepted → Using JS click");
             ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", pElement);
         }
 
-        // ── Step 2 : Wait for the overlay panel to appear in DOM ─────────────────────────────
-        // The panel is injected at body level — NOT inside the mat-select element
-        // role="listbox" is the reliable hook regardless of dynamic class names
-        By iPanelBy = By.cssSelector("div[role='listbox'].mat-mdc-select-panel, " +
-                "div[role='listbox'].mdc-menu-surface--open, " +
-                "div[role='listbox']");
+        // ───────────────────────────────────────────────────────────────────────────────
+        // STEP 2 : WAIT FOR PANEL
+        // ───────────────────────────────────────────────────────────────────────────────
+        By iPanelBy = By.cssSelector(
+                "div[role='listbox'].mat-mdc-select-panel, " +
+                        "div[role='listbox'].mdc-menu-surface--open, " +
+                        "div[role='listbox']"
+        );
 
-        WebElement iPanel = pWait.until(ExpectedConditions.visibilityOfElementLocated(iPanelBy));
+        WebElement iPanel = pWait.until(
+                ExpectedConditions.visibilityOfElementLocated(iPanelBy)
+        );
 
-        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened successfully.");
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened.");
 
-        // ── Step 3 : Resolve selection value and strategy ────────────────────────────────────
-        String iUpperValue = pValue.toUpperCase();
+        // ───────────────────────────────────────────────────────────────────────────────
+        // STEP 3 : DETECT SEARCH MODE (ngx-mat-select-search)
+        // ───────────────────────────────────────────────────────────────────────────────
+        boolean iIsSearchable =
+                !iPanel.findElements(By.cssSelector("mat-option.contains-mat-select-search")).isEmpty();
 
-        if (iUpperValue.startsWith("INDEX:"))
+        if (iIsSearchable)
         {
-            // ── INDEX selection — click the nth mat-option (0-based) ─────────
+            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Search-enabled mat-select detected.");
+        }
+
+        // ───────────────────────────────────────────────────────────────────────────────
+        // STEP 4 : RESOLVE VALUE STRATEGY
+        // ───────────────────────────────────────────────────────────────────────────────
+        String iUpper = pValue.toUpperCase();
+
+        // ============================
+        // INDEX: selection
+        // ============================
+        if (iUpper.startsWith("INDEX:"))
+        {
             int iIndex = Integer.parseInt(pValue.substring("INDEX:".length()).trim());
 
-            java.util.List<WebElement> iOptions = pWait.until(iWebDriver ->
+            By iOptionLocator = iIsSearchable
+                    ? By.cssSelector("mat-option.optionListItem")
+                    : By.cssSelector("mat-option:not(.contains-mat-select-search)");
+
+            java.util.List<WebElement> iOptions = pWait.until(driver ->
             {
-                java.util.List<WebElement> iOpts = iPanel.findElements(By.cssSelector("mat-option"));
-                return iOpts.size() > iIndex ? iOpts : null;
+                java.util.List<WebElement> opts = iPanel.findElements(iOptionLocator);
+                return (opts.size() > iIndex) ? opts : null;
             });
 
-            WebElement iTargetOption = iOptions.get(iIndex);
-            scrollIntoView(pDriver, iTargetOption);
-            highlightElement(pDriver, iTargetOption);
-            iTargetOption.click();
+            WebElement iTarget = iOptions.get(iIndex);
+            scrollIntoView(pDriver, iTarget);
+            highlightElement(pDriver, iTarget);
+            iTarget.click();
 
-            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by INDEX: " + iIndex);
+            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by INDEX = " + iIndex);
         }
         else
         {
-            // ── VISIBLETEXT / VALUE / plain text — match by trimmed span text ─
-            // VALUE: on mat-select has no attribute equivalent — treat as visible text
-            String iTargetText;
+            // ============================
+            // TEXT selection
+            // ============================
+            String iText;
 
-            if (iUpperValue.startsWith("VISIBLETEXT:"))
+            if (iUpper.startsWith("VISIBLETEXT:"))
+                iText = pValue.substring("VISIBLETEXT:".length()).trim();
+            else if (iUpper.startsWith("VALUE:"))
             {
-                iTargetText = pValue.substring("VISIBLETEXT:".length()).trim();
-            }
-            else if (iUpperValue.startsWith("VALUE:"))
-            {
-                iTargetText = pValue.substring("VALUE:".length()).trim();
-                log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | VALUE: prefix used on mat-select — "
-                        + "mat-select has no value attribute. Treating as VISIBLETEXT: '" + iTargetText + "'");
+                iText = pValue.substring("VALUE:".length()).trim();
+                log.warning("MAT-SELECT | VALUE: prefix treated as visible text.");
             }
             else
+                iText = pValue.trim();
+
+            final String iFinalText = iText;
+
+            // ───────────────────────────────────────────────────────────────
+            // SEARCH INPUT FILTERING
+            // ───────────────────────────────────────────────────────────────
+            if (iIsSearchable)
             {
-                iTargetText = pValue.trim();
+                By iSearchInputBy = By.cssSelector(
+                        "mat-option.contains-mat-select-search input.mat-select-search-input:not(.mat-select-search-hidden)"
+                );
+
+                WebElement iSearchInput = pWait.until(
+                        ExpectedConditions.visibilityOfElementLocated(iSearchInputBy)
+                );
+
+                iSearchInput.clear();
+                iSearchInput.sendKeys(iFinalText);
+
+                log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Search typed: '" + iFinalText + "'");
+
+                // Wait for filtered results
+                pWait.until(driver ->
+                        !iPanel.findElements(By.cssSelector("mat-option.optionListItem")).isEmpty()
+                );
             }
 
-            final String iFinalTargetText = iTargetText;
+            // ───────────────────────────────────────────────────────────────
+            // FIND MATCHING OPTION
+            // ───────────────────────────────────────────────────────────────
+            By iOptionsBy = iIsSearchable
+                    ? By.cssSelector("mat-option.optionListItem")
+                    : By.cssSelector("mat-option:not(.contains-mat-select-search)");
 
-            // Wait until at least one mat-option is present in the panel
-            pWait.until(iWebDriver -> iPanel.findElements(By.cssSelector("mat-option")).size() > 0);
-
-            // Find the mat-option whose trimmed text matches the target
-            // Matches against the inner <span class="mdc-list-item__primary-text"> text
-            WebElement iTargetOption = pWait.until(iWebDriver ->
+            WebElement iTarget = pWait.until(driver ->
             {
-                java.util.List<WebElement> iOptions = iPanel.findElements(By.cssSelector("mat-option"));
+                java.util.List<WebElement> options = iPanel.findElements(iOptionsBy);
 
-                for (WebElement iOption : iOptions)
+                for (WebElement opt : options)
                 {
-                    String iOptionText = iOption.getText().trim();
-
-                    if (iOptionText.equalsIgnoreCase(iFinalTargetText))
+                    try
                     {
-                        return iOption;
+                        if (opt.getText().trim().equalsIgnoreCase(iFinalText))
+                            return opt;
+                    }
+                    catch (StaleElementReferenceException stale)
+                    {
+                        return null; // retry next poll
                     }
                 }
                 return null;
             });
 
-            if (iTargetOption == null)
+            if (iTarget == null)
             {
-                // Close the panel before throwing to leave the page in a clean state
+                // Get available options for debugging
+                StringBuilder buf = new StringBuilder();
+                try
+                {
+                    iPanel.findElements(By.cssSelector(
+                            "mat-option.optionListItem, mat-option:not(.contains-mat-select-search)")
+                    ).forEach(o -> buf.append("'").append(o.getText().trim()).append("' | "));
+                }
+                catch (Exception ignored) {}
+
                 pressEscape(pDriver);
-                throw new RuntimeException("MAT-SELECT | Option not found: '" + iFinalTargetText
-                        + "' | Check the exact visible text of the mat-option in the panel.");
+                throw new RuntimeException(
+                        "MAT-SELECT | No option found matching: '" + iFinalText + "'\n" +
+                                "Available: " + buf
+                );
             }
 
-            scrollIntoView(pDriver, iTargetOption);
-            highlightElement(pDriver, iTargetOption);
-            iTargetOption.click();
+            scrollIntoView(pDriver, iTarget);
+            highlightElement(pDriver, iTarget);
+            iTarget.click();
 
-            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by text: '" + iFinalTargetText + "'");
+            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected option: '" + iFinalText + "'");
         }
 
-        // ── Step 4 : Wait for the panel to close ─────────────────────────────────────────────
-        pWait.until(ExpectedConditions.invisibilityOfElementLocated(
-                By.cssSelector("div[role='listbox'].mdc-menu-surface--open")));
+        // ───────────────────────────────────────────────────────────────────────────────
+        // STEP 5 : WAIT FOR PANEL TO CLOSE
+        // ───────────────────────────────────────────────────────────────────────────────
+        try
+        {
+            pWait.until(ExpectedConditions.invisibilityOfElementLocated(
+                    By.cssSelector("div[role='listbox'].mdc-menu-surface--open")
+            ));
+        }
+        catch (Exception ignored)
+        {
+            // Panel already closed
+        }
 
-        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel closed — selection complete.");
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selection complete.");
     }
 
     private static void performNativeSelect(WebElement pElement, String pListValue)
@@ -883,8 +964,24 @@ public class CommonFunctions
 
     private static void performWaitVisible(WebDriver pDriver, WebDriverWait pWait, By pBy)
     {
-        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
-        scrollIntoView(pDriver, iElement);
+        try {
+            // Use fluent wait first – more robust and prevents stale failures
+            Wait<WebDriver> fluentWait = new FluentWait<>(pDriver)
+                    .withTimeout(Duration.ofSeconds(20))
+                    .pollingEvery(Duration.ofMillis(500))
+                    .ignoring(NoSuchElementException.class)
+                    .ignoring(StaleElementReferenceException.class);
+
+            WebElement element = fluentWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+
+            // After visible, use existing framework mechanics
+            scrollIntoView(pDriver, element);
+            highlightElement(pDriver, element);
+
+        } catch (Exception e) {
+            throw new RuntimeException("WAITVISIBLE failed for locator: " + pBy.toString()
+                    + " | Reason: " + e.getMessage(), e);
+        }
     }
 
     private static void performWaitClickable(WebDriver pDriver, WebDriverWait pWait, By pBy)
@@ -1796,5 +1893,37 @@ public class CommonFunctions
 
         return iDataFormatter.formatCellValue(pRow.getCell(pColumnIndex));
     }
+    public static void waitForAngular() {
+        WebDriver driver = getDriver();
 
+        JavascriptExecutor js = (JavascriptExecutor) driver;
+
+        // Wait for document ready (DOM complete)
+        getWait().until(d -> js.executeScript("return document.readyState").equals("complete"));
+
+        // Wait for Angular to finish pending tasks
+        js.executeAsyncScript(
+                "var callback = arguments[arguments.length - 1];" +
+                        "if (window.getAllAngularTestabilities) {" +
+                        "  var testabilities = window.getAllAngularTestabilities();" +
+                        "  var count = testabilities.length;" +
+                        "  testabilities.forEach(function (testability) {" +
+                        "    testability.whenStable(function () {" +
+                        "      count--;" +
+                        "      if (count === 0) callback(); });" +
+                        "  });" +
+                        "} else { callback(); }");
+    }
+
+    public static WebElement waitForVisibilityOfElement(By locator, int timeInSec) {
+        WebDriver driver = getDriver();
+
+        Wait<WebDriver> wait = new FluentWait<>(driver)
+                .withTimeout(Duration.ofSeconds(timeInSec))
+                .pollingEvery(Duration.ofMillis(500))
+                .ignoring(NoSuchElementException.class)
+                .ignoring(StaleElementReferenceException.class);
+
+        return wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
+    }
 }
