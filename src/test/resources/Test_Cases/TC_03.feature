@@ -4,7 +4,6 @@ Feature: BISS Agent completes an end-to-end farmer application journey
   # Purpose:
   #   Single end-to-end regression journey covering the major business flow in the BISS Application Portal.
   #
-  # Coverage mapped from old scenarios:
   #   - Login and portal navigation
   #   - Farmer dashboard access
   #   - Side navigation tab validation
@@ -37,7 +36,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     When the agent logs into the application with valid credentials and OTP
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
-    And the agent navigates to the "My Clients" tab
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
 
   @regression @e2e @biss
   Scenario: AT-E2E-01 - Agent completes the end-to-end BISS farmer application flow
@@ -45,20 +44,20 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     # Farmer selection and dashboard validation
     # -----------------------------------------
-    When the agent opens a farmer dashboard using herd data from row 4
+    When the agent opens a farmer dashboard using herd data
     Then the farmer dashboard should be displayed
 
     # -----------------------------------------
     # Side navigation validation
     # -----------------------------------------
     When the agent navigates through the farmer side navigation tabs
-      | Applications           |
-      | Farm Details           |
-      | Entitlements / Usage   |
-      | Transfer               |
-      | NR-CISYF               |
-      | Correspondence         |
-      | Farmer Dashboard       |
+      | Applications / Payments           |
+      | Farm Details                      |
+      |Entitlements / Usage              |
+      | Transfers                         |
+      | NR-CISYF                          |
+      | My Correspondence                 |
+      | Farmer Dashboard                  |
     Then each requested side navigation tab should open successfully
 
     # -----------------------------------------
@@ -133,7 +132,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
       | townland          | Addergoole - C11501 |
       | claimedArea       | 4                  |
       | ownershipStatus   | Owned              |
-      | parcelUse         | Beet               |
+      | parcelUse         | Beetroot               |
       | organicStatus     | Conventional       |
     Then the GIS-selected parcel should be added successfully
 
