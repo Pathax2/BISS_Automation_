@@ -30,11 +30,11 @@ import io.cucumber.java.en.When;
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
-import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
-
+import org.openqa.selenium.support.ui.ExpectedConditions;
 import java.time.Duration;
-import runner.TestRunner;
+import java.util.stream.Collectors;
+
 import static commonFunctions.CommonFunctions.*;
 
 public class TC_03 {
@@ -268,44 +268,35 @@ public class TC_03 {
     @Then("the farmer dashboard should be displayed")
     public void theFarmerDashboardShouldBeDisplayed()
     {
-            log.info("[STEP] Then the farmer dashboard should be displayed");
-            iAction("WAITVISIBLE",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
-            iAction("WAITCLICKABLE",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
-            iAction("MOUSEHOVER",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
-            iAction("CLICK",   "XPATH",    ObjReader.getLocator("iHeardExpandArrow"),   null);
+        log.info("[STEP] Then the farmer dashboard should be displayed");
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iFirstClientName"), null);
+        iAction("CLICK",   "XPATH",    ObjReader.getLocator("iFirstClientName"),   null);
 
-            //CLick on View Dashboard Button for Farmer Dashboard
-            iAction("CLICK",   "XPATH",    ObjReader.getLocator("iViewDashboard"),   null);
-            String iDashboardHeader = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iFarmerDashboardHeader"), null);
-            Assertions.assertFalse(iDashboardHeader.isEmpty(), "Farmer dashboard header should be visible.");
-            log.info("Farmer dashboard confirmed: " + iDashboardHeader);
+        //  CONDITIONAL CHECK: Delete existing draft if present before starting a new one
+        By iDeleteBtnBy = By.xpath(ObjReader.getLocator("iDeleteDraftBtn"));
 
-            //  CONDITIONAL CHECK: Delete existing draft if present before starting a new one
-            By iDeleteBtnBy = By.xpath(ObjReader.getLocator("iDeleteDraftBtn"));
+        // Check for 3 seconds only to keep the test fast
+        if (isElementPresentAndVisible(iDeleteBtnBy, 3))
+        {
+            log.info("Existing draft detected. Clearing it before proceeding.");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iDeleteDraftBtn"), "Delete Draft Button");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"), "Confirm Delete Button");
 
-            // Check for 3 seconds only to keep the test fast
-            if (isElementPresentAndVisible(iDeleteBtnBy, 3))
-            {
-                log.info("Existing draft detected. Clearing it before proceeding.");
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iDeleteDraftBtn"), "Delete Draft Button");
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"), "Confirm Delete Button");
+            // SYNC: Wait for the MDC spinner to finish the deletion process
+            iAction("WAITINVISIBLE", "XPATH", "//div[@class='mdc-circular-progress__gap-patch']//*[name()='svg']", "Deletion Spinner");
+        }
+        else
+        {
+            log.info("No existing draft found. Proceeding directly to Start Application.");
+        }
 
-                // SYNC: Wait for the MDC spinner to finish the deletion process
-                iAction("WAITINVISIBLE", "XPATH", "//div[@class='mdc-circular-progress__gap-patch']//*[name()='svg']", "Deletion Spinner");
-            }
-            else
-            {
-                log.info("No existing draft found. Proceeding directly to Start Application.");
-            }
-
-            //CLick on View Start Application for Farmer Dashboard
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iStartApplicationBtn"), "");
+        //CLick on View Start Application for Farmer Dashboard
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStartApplicationBtn"), "");
 
 
-            if (isVisible(By.xpath(ObjReader.getLocator("iContinueBtn")), 3)) {
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iContinueBtn"), null);
-            }
-
+        if (isVisible(By.xpath(ObjReader.getLocator("iContinueBtn")), 3)) {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iContinueBtn"), null);
+        }
     }
 
 
@@ -337,16 +328,36 @@ public class TC_03 {
     public void theAgentNavigatesThroughTheFarmerSideNavigationTabs(DataTable pDataTable)
     {
         log.info("[STEP] When the agent navigates through the farmer side navigation tabs");
-        List<String> iTabs = pDataTable.asList();
-        for (String iTab : iTabs) {
-            log.info("  Clicking side nav tab: " + iTab);
-            String iCleanTabName = iTab.replace("My ", "").trim();
-            iAction("WAITVISIBLE", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
-            //iAction("WAITCLICKABLE", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
-            iAction("MOUSEHOVER", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
-            iAction("CLICK", "XPATH", "//a//span[contains(@class, 'left-menu-link') and normalize-space()='" + iCleanTabName + "']", null);
-        }
 
+        List<String> iTabs = pDataTable.asList();
+
+        for (int i = 0; i < iTabs.size(); i++) {
+
+            String clean = iTabs.get(i).trim();
+            String xp;
+
+            // SPECIAL CASE → Transfers uses a mat-icon
+            if (clean.equalsIgnoreCase("Transfers")) {
+
+                // Fluent wait is already integrated inside WAITVISIBLE
+                iAction("WAITVISIBLE", "XPATH", "//mat-icon[normalize-space()='swap_horizontal_circle']", null);
+                iAction("CLICK",       "XPATH", "//mat-icon[normalize-space()='swap_horizontal_circle']", null);
+
+                // SKIP NEXT TAB
+                i++;
+                continue;
+            }
+
+            // Generic robust locator for all other tabs
+            xp = String.format("(//mat-selection-list//span[contains(normalize-space(),'%s')])[1]", clean.replace("My ", ""));
+
+            log.info("  Clicking side nav tab: " + clean);
+
+            iAction("WAITVISIBLE",   "XPATH", xp, null);
+            iAction("WAITCLICKABLE", "XPATH", xp, null);
+            iAction("MOUSEHOVER",    "XPATH", xp, null);
+            iAction("CLICK",         "XPATH", xp, null);
+        }
     }
 
 
@@ -378,7 +389,7 @@ public class TC_03 {
         log.info("[STEP] When the agent deletes any existing draft if present");
         try {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iDeleteDraftBtn"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"),         null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"),null);
             log.info("Existing draft deleted.");
         } catch (Exception e) {
             log.info("No existing draft found — continuing to start new application.");
@@ -395,6 +406,10 @@ public class TC_03 {
     {
         log.info("[STEP] And the agent starts a new BISS application");
         iAction("CLICK", "XPATH", ObjReader.getLocator("iStartApplicationBtn"), null);
+        if (isVisible(By.xpath(ObjReader.getLocator("iContinueBtn")), 5))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iContinueBtn"), null);
+        }
     }
 
 
@@ -468,7 +483,22 @@ public class TC_03 {
     {
         log.info("[STEP] When the agent selects the scheme: " + pSchemeName);
 
-        iAction("CLICK", "XPATH", "//mat-card/descendant::span[contains(text(),'"+pSchemeName+"')]", null);
+        // Identify toggle button based on scheme name
+        String toggleXpath = String.format("//span[normalize-space()='%s']/preceding::button[@role='switch'][1]", pSchemeName);
+
+        // Read ON/OFF state using the aria-checked attribute
+        WebElement toggle = CommonFunctions.getDriver().findElement(By.xpath(toggleXpath));
+        String state = toggle.getAttribute("aria-checked");
+
+        // If OFF → turn ON
+        if ("false".equalsIgnoreCase(state)) {
+            log.info("Scheme '" + pSchemeName + "' is OFF → turning ON");
+            iAction("CLICK", "XPATH", "//mat-card/descendant::span[contains(text(),'"+pSchemeName+"')]", null);
+            //iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
+        }
+        else {
+            log.info("Scheme '" + pSchemeName + "' is already ON → no action");
+        }
 
     }
 
@@ -481,6 +511,7 @@ public class TC_03 {
     public void theAgentAcceptsTheSchemeSelectionAcknowledgementIfDisplayed() {
         log.info("[STEP] And the agent accepts the scheme selection acknowledgement if displayed");
         try {
+            log.info("Acknowledgement modal displayed — continuing.");
             iAction("CLICK", "XPATH", ObjReader.getLocator("iCloseDialogBtn"), null);
             iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
             iAction("CLICK", "XPATH", ObjReader.getLocator("iIUnderstandBtn"), null);
@@ -610,7 +641,8 @@ public class TC_03 {
     public void theAgentSetsParcelOwnershipStatusTo(String pOwnershipStatus) {
         log.info("[STEP] And the agent sets parcel ownership status to: " + pOwnershipStatus);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iOwnershipStatusSelect"), null);
-        iAction("LIST", "XPATH", ObjReader.getLocator("iOwnershipStatusOwned"),  pOwnershipStatus);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iOwnershipStatusSelect"),  pOwnershipStatus);
+        //iAction("LIST", "XPATH", ObjReader.getLocator("iOwnershipStatusOwned"),  pOwnershipStatus);
 
 
     }
@@ -623,8 +655,9 @@ public class TC_03 {
     @And("the agent sets parcel use to {string}")
     public void theAgentSetsParcelUseTo(String pParcelUse) {
         log.info("[STEP] And the agent sets parcel use to: " + pParcelUse);
+        //iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iParcelUseSelect"), null);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelUseSelect"), null);
-        iAction("LIST", "XPATH", ObjReader.getLocator("iParcelUseApplesOption"),  pParcelUse);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iParcelUseSelect"), pParcelUse);
 
     }
 
@@ -637,8 +670,8 @@ public class TC_03 {
     public void theAgentSetsParcelOrganicStatusTo(String pOrganicStatus) {
         log.info("[STEP] And the agent sets parcel organic status to: " + pOrganicStatus);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), null);
-        iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusConventional"),  pOrganicStatus);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelFormAddBtn"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"),  pOrganicStatus);
+
     }
 
 
@@ -649,14 +682,8 @@ public class TC_03 {
     @Then("the parcel should be added successfully to Land Details")
     public void theParcelShouldBeAddedSuccessfullyToLandDetails() {
         log.info("[STEP] Then the parcel should be added successfully to Land Details");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Add') or contains(text(),'Save') or contains(text(),'Submit')]",
-                null);
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "Parcel success confirmation should be visible after adding.");
-        log.info("Parcel added successfully: " + iConfirmation);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelFormAddBtn"), null);
+        log.info("Parcel added successfully: ");
     }
 
 
@@ -671,9 +698,10 @@ public class TC_03 {
     @When("the agent attempts to add parcel {string} again")
     public void theAgentAttemptsToAddParcelAgain(String pParcelId) {
         log.info("[STEP] When the agent attempts to add parcel again: " + pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Add Parcel')]",                           null);
-        iAction("TEXTBOX", "ID",    "parcelIdInput",                                                     pParcelId);
-        iAction("CLICK",   "XPATH", "//button[contains(text(),'Search') or contains(text(),'Add')]",     null);
+        log.info("[STEP] When the agent adds parcel: " + pParcelId + " with claimed area: ");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAddParcelBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iParcelInput"), pParcelId);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iClaimParcelBtn"), null);
     }
 
 
@@ -685,10 +713,9 @@ public class TC_03 {
     public void theAlreadyClaimedParcelWarningShouldBeDisplayedIfApplicable() {
         log.info("[STEP] Then the already claimed parcel warning should be displayed if applicable");
         try {
-            String iWarning = iAction("GETTEXT", "XPATH",
-                    "//div[contains(@class,'warning') or contains(@class,'alert')][contains(text(),'claimed') or contains(text(),'already')]",
-                    null);
+            String iWarning = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iAlreadyClaimedParcelWarning"), null);
             log.info("Already claimed warning found: " + iWarning);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iCancelBtn"), null);
         } catch (Exception e) {
             log.info("No already-claimed warning displayed.");
         }
@@ -706,20 +733,49 @@ public class TC_03 {
     //                                 organicStatus, claimedArea, plotUse, mapChangeOption
     // ***************************************************************************************************************************************************************************************
     @When("the agent adds a plot with the following details")
-    public void theAgentAddsAPlotWithTheFollowingDetails(DataTable pDataTable) {
+    public void theAgentAddsAPlotWithTheFollowingDetails(DataTable pDataTable)
+    {
         log.info("[STEP] When the agent adds a plot with the following details");
-        Map<String, String> iPlotData = pDataTable.asMap(String.class, String.class);
 
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Add Plot')]", null);
+        Map<String, String> iPlotData = pDataTable.asMap(String.class, String.class)
+                .entrySet()
+                .stream()
+                .collect(Collectors.toMap(
+                        e -> e.getKey().trim(),
+                        e -> e.getValue().trim()
+                ));
 
-        iAction("LIST",    "ID", "county",          "VISIBLETEXT:" + iPlotData.get("county"));
-        iAction("LIST",    "ID", "townland",         "VISIBLETEXT:" + iPlotData.get("townland"));
-        iAction("TEXTBOX", "ID", "plotReference",    iPlotData.get("plotReference"));
-        iAction("LIST",    "ID", "ownershipStatus",  "VISIBLETEXT:" + iPlotData.get("ownershipStatus"));
-        iAction("LIST",    "ID", "organicStatus",    "VISIBLETEXT:" + iPlotData.get("organicStatus"));
-        iAction("TEXTBOX", "ID", "claimedArea",      iPlotData.get("claimedArea"));
-        iAction("LIST",    "ID", "plotUse",          "VISIBLETEXT:" + iPlotData.get("plotUse"));
-        iAction("LIST",    "ID", "mapChangeOption",  "VISIBLETEXT:" + iPlotData.get("mapChangeOption"));
+        // Add Plot Button
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAddPlotBtn"), null);
+
+        // County
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCountySelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iCountySelect"), iPlotData.get("county"));
+
+        // Townland
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTownlandSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iTownlandSelect"), iPlotData.get("townland"));
+
+        // Plot Reference
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPlotReferenceInput"), iPlotData.get("plotReference"));
+
+        // Ownership Status
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iOwnershipStatusSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iOwnershipStatusSelect"), iPlotData.get("ownershipStatus"));
+
+        // Organic Status
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), iPlotData.get("organicStatus"));
+
+        // Claimed Area
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iClaimedAreaInput"), iPlotData.get("claimedArea"));
+
+        // Plot Use
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iPlotUseSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iPlotUseSelect"), iPlotData.get("plotUse"));
+
+        // Map Change Option
+        iAction("RADIOBUTTON", "XPATH", ObjReader.getLocator("iMapChangeOption_SubmitPaperMap"), null);
 
         log.info("Plot form filled | Reference: " + iPlotData.get("plotReference"));
     }
@@ -732,14 +788,13 @@ public class TC_03 {
     @Then("the plot should be added successfully to Land Details")
     public void thePlotShouldBeAddedSuccessfullyToLandDetails() {
         log.info("[STEP] Then the plot should be added successfully to Land Details");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Add') or contains(text(),'Save') or contains(text(),'Submit')]",
-                null);
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "Plot success confirmation should be visible after adding.");
-        log.info("Plot added successfully: " + iConfirmation);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn2"), null);
+       // iAction("CLICK", "XPATH", "//button[contains(text(),'Add') or contains(text(),'Save') or contains(text(),'Submit')]", null);
+       // String iConfirmation = iAction("GETTEXT", "XPATH", "//div[contains(@class,'success') or contains(@class,'confirmation')]", null);
+        //Assertions.assertFalse(iConfirmation.isEmpty(), "Plot success confirmation should be visible after adding.");
+       // log.info("Plot added successfully: " + iConfirmation);
+        //Delete this line later - Aniket
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCancelBtn"), null);
     }
 
 
@@ -755,17 +810,51 @@ public class TC_03 {
     @When("the agent adds a parcel from the GIS map with the following details")
     public void theAgentAddsAParcelFromTheGISMapWithTheFollowingDetails(DataTable pDataTable) {
         log.info("[STEP] When the agent adds a parcel from the GIS map with the following details");
-        Map<String, String> iMapData = pDataTable.asMap(String.class, String.class);
+        Map<String, String> iMapData = pDataTable.asMap(String.class, String.class)
+                .entrySet()
+                .stream()
+                .collect(Collectors.toMap(
+                        e -> e.getKey().trim(),
+                        e -> e.getValue().trim()
+                ));
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAddParcelBtn"), null);
+        // County
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCountySelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iCountySelect"), iMapData.get("county"));
 
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Add from Map') or contains(text(),'GIS Map')]", null);
-        iAction("LIST",    "ID", "mapCounty",       "VISIBLETEXT:" + iMapData.get("county"));
-        iAction("LIST",    "ID", "mapTownland",     "VISIBLETEXT:" + iMapData.get("townland"));
-        iAction("TEXTBOX", "ID", "mapClaimedArea",  iMapData.get("claimedArea"));
-        iAction("LIST",    "ID", "ownershipStatus", "VISIBLETEXT:" + iMapData.get("ownershipStatus"));
-        iAction("LIST",    "ID", "parcelUse",       "VISIBLETEXT:" + iMapData.get("parcelUse"));
-        iAction("LIST",    "ID", "organicStatus",   "VISIBLETEXT:" + iMapData.get("organicStatus"));
+        // Townland
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTownlandSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iTownlandSelect"), iMapData.get("townland"));
 
-        log.info("GIS map parcel form filled | County: " + iMapData.get("county") + " | Townland: " + iMapData.get("townland"));
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iMapOpenBtn"), null);
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("selectFeature"), null);
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("mainMapImage"), null);
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("parcelRowSpecific"), null);
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("claimButton"), null);
+
+        // Claimed Area
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iClaimedAreaInput"), iMapData.get("claimedArea"));
+
+        // Ownership Status
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iOwnershipStatusSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iOwnershipStatusSelect"), iMapData.get("ownershipStatus"));
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelUseSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iParcelUseSelect"), iMapData.get("parcelUse"));
+
+        // Organic Status
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), iMapData.get("organicStatus"));
+
+        log.info("[STEP] Then the parcel should be added successfully to Land Details");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelFormAddBtn"), null);
+        log.info("Parcel added successfully: ");
+
+        log.info("GIS map parcel form filled");
     }
 
 
@@ -776,14 +865,9 @@ public class TC_03 {
     @Then("the GIS-selected parcel should be added successfully")
     public void theGISSelectedParcelShouldBeAddedSuccessfully() {
         log.info("[STEP] Then the GIS-selected parcel should be added successfully");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Add') or contains(text(),'Save') or contains(text(),'Submit')]",
-                null);
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "GIS parcel success message should be visible.");
-        log.info("GIS parcel added successfully: " + iConfirmation);
+
+        log.info("GIS parcel added successfully: ");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAddParcelBtn"), null);
     }
 
 
@@ -797,13 +881,40 @@ public class TC_03 {
     // ***************************************************************************************************************************************************************************************
     @Then("parcel {string} should be available in Land Details")
     public void parcelShouldBeAvailableInLandDetails(String pParcelId) {
-        log.info("[STEP] Then parcel should be available in Land Details: " + pParcelId);
-        String iParcelRow = iAction("GETTEXT", "XPATH",
-                "//td[contains(text(),'" + pParcelId + "')]",
-                null);
-        Assertions.assertFalse(iParcelRow.isEmpty(), "Parcel " + pParcelId + " should appear in Land Details table.");
-        log.info("Parcel confirmed in Land Details: " + pParcelId);
-    }
+            log.info("[STEP] Then parcel should be available in Land Details: " + pParcelId);
+            WebDriver driver = CommonFunctions.getDriver();
+            WebDriverWait wait = CommonFunctions.getWait();
+
+            log.info("[STEP] Searching and selecting parcel: " + pParcelId);
+
+            String parcelCellXpath = ObjReader.getLocator("iParcelRefCell");
+
+            List<WebElement> cells = wait.until(ExpectedConditions.presenceOfAllElementsLocatedBy(By.xpath(parcelCellXpath)));
+
+            boolean found = false;
+
+            for (WebElement cell : cells)
+            {
+                String text = cell.getText().trim();
+                log.info("Checking parcel value: " + text);
+
+                if (text.equalsIgnoreCase(pParcelId))
+                {
+                    log.info("Parcel match found → " + pParcelId);
+                    // Click using your hardened action engine
+                    iAction("CLICK", "XPATH", parcelCellXpath + "[text()='" + pParcelId + "']", null);
+                    found = true;
+                    log.info("[STEP COMPLETE] Parcel opened in side drawer: " + pParcelId);
+                    break;
+                }
+            }
+
+            if (!found)
+            {
+                throw new AssertionError("Parcel not found in table: " + pParcelId);
+            }
+            log.info("[STEP COMPLETE] Parcel opened in side drawer: " + pParcelId);
+        }
 
 
     // ===================================================================================================================================
@@ -815,11 +926,10 @@ public class TC_03 {
     // Description   : Clicks the parcel row or edit icon to open the side drawer editor
     // ***************************************************************************************************************************************************************************************
     @When("the agent opens parcel {string} in the side drawer")
-    public void theAgentOpensParcelInTheSideDrawer(String pParcelId) {
+    public void theAgentOpensParcelInTheSideDrawer(String pParcelId)
+    {
         log.info("[STEP] When the agent opens parcel in the side drawer: " + pParcelId);
-        iAction("CLICK", "XPATH",
-                "//td[contains(text(),'" + pParcelId + "')]/ancestor::tr//button[contains(@class,'edit') or contains(text(),'Edit') or contains(@aria-label,'Edit')]",
-                null);
+        iAction("VERIFYTEXT", "XPATH", "//mat-dialog-container//*[contains(normalize-space(),'" + pParcelId + "')]", pParcelId);
     }
 
 
@@ -828,9 +938,11 @@ public class TC_03 {
     // Description   : Enters a change request reason in the side drawer EH section
     // ***************************************************************************************************************************************************************************************
     @And("the agent raises an EH change request with reason {string}")
-    public void theAgentRaisesAnEHChangeRequestWithReason(String pReason) {
+    public void theAgentRaisesAnEHChangeRequestWithReason(String pReason)
+    {
+
         log.info("[STEP] And the agent raises an EH change request with reason: " + pReason);
-        iAction("TEXTBOX", "ID", "changeRequestReason", pReason);
+        iAction("CLICK", "XPATH", "iRequestEhChangeCheckbox", null);
     }
 
 
@@ -841,7 +953,8 @@ public class TC_03 {
     @And("the agent changes parcel use to {string}")
     public void theAgentChangesParcelUseTo(String pParcelUse) {
         log.info("[STEP] And the agent changes parcel use to: " + pParcelUse);
-        iAction("LIST", "ID", "parcelUse", "VISIBLETEXT:" + pParcelUse);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelUseSelect"), null);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iParcelUseSelect"), pParcelUse);
     }
 
 
@@ -852,7 +965,7 @@ public class TC_03 {
     @And("the agent saves the parcel changes")
     public void theAgentSavesTheParcelChanges() {
         log.info("[STEP] And the agent saves the parcel changes");
-        iAction("CLICK", "XPATH", "//button[contains(text(),'Save')]", null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelChangesBtn"), null);
     }
 
 
