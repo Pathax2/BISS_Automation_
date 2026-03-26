@@ -85,7 +85,7 @@ public class ObjectRepositoryValidator
             }
 
             // 2. Check value is non-blank
-            String iValue = ObjReader.getLocatorValue(iKey);
+            String iValue = ObjReader.getLocator(iKey);
             if (iValue == null || iValue.trim().isEmpty())
             {
                 iErrors.add("EMPTY VALUE : Key '" + iKey + "' has a blank locator value in ObjectRepository.properties");
