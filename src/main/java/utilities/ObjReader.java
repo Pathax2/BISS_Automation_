@@ -12,7 +12,9 @@ package utilities;
 
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.util.HashSet;
 import java.util.Properties;
+import java.util.Set;
 import java.util.logging.Logger;
 
 public class ObjReader
@@ -21,7 +23,7 @@ public class ObjReader
     // Logger
     // -------------------------------------------------------------------------------------------------------------------------------
     private static final Logger log = Logger.getLogger(ObjReader.class.getName());
-
+    public static Set<String> getAllKeys() {return iProperties.stringPropertyNames();}
     // -------------------------------------------------------------------------------------------------------------------------------
     // Object Repository path — overridable via -Dobject.repository.path=... for CI environments
     // -------------------------------------------------------------------------------------------------------------------------------
@@ -59,7 +61,7 @@ public class ObjReader
     // Precondition  : ObjectRepository.properties must be loaded and key must exist
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static String getLocatorValue(String pKey)
+    public static String getLocator(String pKey)
     {
         if (pKey == null || pKey.trim().isEmpty())
         {
@@ -133,4 +135,5 @@ public class ObjReader
 
         return iProperties.containsKey(pKey.trim());
     }
+
 }
