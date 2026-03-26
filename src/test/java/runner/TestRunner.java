@@ -50,7 +50,7 @@
 //  ExcelUtilities finds the row where TestCase_ID = TC_Login_01 in sheet Data
 //  All columns from that row are loaded into memory for this test case
 //  Step definitions call iAction(..., "TD:Username") → resolves to "aga6029"
-//  Step definitions call iAction(..., "TD:Password") → resolves to ""
+//  Step definitions call iAction(..., "TD:Password") → resolves to "@c3ntst678!!"
 //
 // Author        : Aniket Pathare | aniket.pathare@goverment.ie
 // Date Created  : 10-03-2026
@@ -73,7 +73,7 @@ public class TestRunner
     private static final Logger log = Logger.getLogger(TestRunner.class.getName());
 
     // -------------------------------------------------------------------------------------------------------------------------------
-    // FrameworkS paths — all overridable via -D JVM system properties for Bamboo plan configuration
+    // Framework paths — all overridable via -D JVM system properties for Bamboo plan configuration
     // -------------------------------------------------------------------------------------------------------------------------------
     public static final String iExecutionControlFilePath  = System.getProperty(
             "execution.control.path",  "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
