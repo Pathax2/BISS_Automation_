@@ -507,20 +507,35 @@ public class CommonFunctions
 
     private static void performClick(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
     {
-        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
-        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
-        scrollIntoView(pDriver, iElement);
-        highlightElement(pDriver, iElement);
+        final int    MAX_RETRIES     = 3;
+        final int    TIMEOUT_SECONDS = 10;
+        final int    POLL_MILLIS     = 500;
 
-        try
+        Wait<WebDriver> iFluentWait = new FluentWait<>(pDriver)
+                .withTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+                .pollingEvery(Duration.ofMillis(POLL_MILLIS))
+                .ignoring(StaleElementReferenceException.class)
+                .withMessage("Element still stale after retries for : " + pObjectName);
+
+        iFluentWait.until(iDriver ->
         {
-            iElement.click();
-        }
-        catch (ElementClickInterceptedException iException)
-        {
-            log.warning("[" + getCurrentTimestamp() + "] Normal click intercepted. Retrying with JavaScript click for locator : " + pObjectName);
-            ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", iElement);
-        }
+            WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+            pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+            scrollIntoView(pDriver, iElement);
+            highlightElement(pDriver, iElement);
+
+            try
+            {
+                iElement.click();
+            }
+            catch (ElementClickInterceptedException iException)
+            {
+                log.warning("[" + getCurrentTimestamp() + "] Normal click intercepted. Retrying with JavaScript click for locator : " + pObjectName);
+                ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", iElement);
+            }
+
+            return true;
+        });
     }
 
     private static void performDoubleClick(WebDriver pDriver, WebDriverWait pWait, By pBy)
