@@ -25,6 +25,7 @@ public class Hooks
 
     private static final StringBuilder iAccumulatedErrors  = new StringBuilder();
     private static String              iLastScreenshotPath = "";
+    private static long                iScenarioStartTime  = 0L;   // FIX H1: records when each scenario starts for divider duration
 
     private static final String iTestDataFilePath  = "src/test/resources/Test_Data/TestData.xlsx";
     private static final String iTestDataSheetName = "Data";
@@ -32,6 +33,7 @@ public class Hooks
     private static final String iDefaultBrowser    = "CHROME";
     public static String RUNTIME_HERD = null;
     public static String RUNTIME_USERNAME = null;
+
     @BeforeAll
     public static void beforeAllExecution()
     {
@@ -52,6 +54,7 @@ public class Hooks
 
             CommonFunctions.log.info("========== EXECUTION START : " + iTestCaseID + " ==========");
             CommonFunctions.loadDescriptionCache();
+            CommonFunctions.clearStepLog();   // FIX H2: reset step log so each TC starts with a clean table
 
             ExcelUtilities iTestDataExcel = new ExcelUtilities(iTestDataFilePath);
             iTestDataExcel.loadCurrentTestDataRow(iTestDataSheetName, iTestCaseID);
@@ -63,15 +66,13 @@ public class Hooks
             if (iUrl.isEmpty()) { throw new RuntimeException("URL blank for environment : " + iEnvironment); }
 
             // =====================================================================================
-            // NEW: Bootstrap runtime Herd + Username BEFORE any scenario runs (DATA → INET)
+            // Bootstrap runtime Herd + Username BEFORE any scenario runs (DATA → INET)
             // =====================================================================================
-            // Runtime knobs (no code edits needed)
             String herdYear         = System.getProperty("herd.year",  "2026").trim();
-            String herdLimit        = System.getProperty("herd.limit", "25").trim();    // fetch 25 candidates
-            String herdRetry        = System.getProperty("herd.retry", "3").trim();    // attempts to re-fetch fresh candidates
+            String herdLimit        = System.getProperty("herd.limit", "25").trim();
+            String herdRetry        = System.getProperty("herd.retry", "3").trim();
             String usernameOverride = System.getProperty("usernameOverride", "").trim();
 
-            // If your sheet already has values (loaded above), read them (optional)
             String herdFromSheet  = "";
             String unameFromSheet = "";
             try { herdFromSheet  = ExcelUtilities.getCurrentTestDataValue("HerdNumber"); } catch (Exception ignored) {}
@@ -81,7 +82,6 @@ public class Hooks
             String runtimeUsername = null;
 
             if (!usernameOverride.isEmpty()) {
-                // Use provided username; keep herd from sheet if available
                 runtimeUsername = usernameOverride;
                 runtimeHerd     = herdFromSheet;
                 CommonFunctions.log.info("[BOOT] Using usernameOverride=" + runtimeUsername + ", herd(sheet)=" + runtimeHerd);
@@ -92,14 +92,12 @@ public class Hooks
                 boolean found = false;
 
                 for (int attempt = 1; attempt <= maxAttempts && !found; attempt++) {
-                    // --- DATA DB → fetch up to N candidate herds (ordered) ---
                     database.DBRouter.runDB("DATA", "List of herds with no errors at all", herdYear, String.valueOf(limit),"");
                     List<Map<String,Object>> rows = database.DBRouter.getRows();
                     if (rows == null || rows.isEmpty()) {
                         throw new RuntimeException("Runtime DB (DATA) returned no herds for year=" + herdYear + ", limit=" + limit);
                     }
 
-                    // Build candidate list (distinct, non-blank), then shuffle for randomness
                     List<String> candidates = new java.util.ArrayList<>();
                     for (Map<String,Object> r : rows) {
                         String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
@@ -111,7 +109,6 @@ public class Hooks
                             " — trying " + candidates.size() + " randomized candidate(s) from DATA (year=" +
                             herdYear + ", limit=" + limit + ")");
 
-                    // Try each candidate until one returns a USERNAME from INET
                     int idx = 0;
                     for (String candidate : candidates) {
                         idx++;
@@ -137,7 +134,6 @@ public class Hooks
                     }
                 }
 
-                // If still not found, consider fallback to sheet’s username (if present) or fail fast
                 if (!found) {
                     if (!unameFromSheet.isBlank()) {
                         runtimeUsername = unameFromSheet;
@@ -192,6 +188,7 @@ public class Hooks
     {
         SoftAssertManager.reset();
         RetryAnalyser.clearRetryState();
+        iScenarioStartTime = System.currentTimeMillis();   // FIX H3: record start so @After can compute duration
         CommonFunctions.log.info("---------- Scenario START : " + pScenario.getName() + " ----------");
     }
 
@@ -199,6 +196,18 @@ public class Hooks
     public void afterScenarioExecution(Scenario pScenario)
     {
         SoftAssertManager.assertAll();
+
+        // FIX H4: write green (PASS) or red (FAIL) scenario divider into Word report.
+        // Called here for every scenario regardless of outcome.
+        // appendScenarioDivider lives in ScreenshotManager — never existed in CommonFunctions.
+        long iScenarioDuration = System.currentTimeMillis() - iScenarioStartTime;
+        utilities.ScreenshotManager.appendScenarioDivider(
+                iDocument,
+                pScenario.getName(),
+                !pScenario.isFailed(),
+                iScenarioDuration
+        );
+
         try
         {
             if (pScenario.isFailed())
@@ -213,13 +222,20 @@ public class Hooks
 
                 try
                 {
-                    String iSafeName = iTestCaseID + "_" + pScenario.getName().replaceAll("[^a-zA-Z0-9]", "_");
-                    String iShotPath = CommonFunctions.takeScreenshot(iSafeName);
-                    iLastScreenshotPath = iShotPath;
-
+                    // FIX H5: single screenshot — addScreenshotToReport() handles both disk save
+                    // and Word embed in one call, and returns the PNG path.
+                    // Old code called takeScreenshot() AND addScreenshotToReport() separately,
+                    // taking two screenshots and discarding the return value of the second.
                     if (iDocument != null && !iDocPath.isEmpty())
                     {
-                        CommonFunctions.addScreenshotToReport(iDocument, iDocPath, iTestCaseID);
+                        iLastScreenshotPath = CommonFunctions.addScreenshotToReport(
+                                iDocument, iDocPath, iTestCaseID);
+                    }
+                    else
+                    {
+                        // Word doc not open — just capture to disk for ReportManager
+                        String iSafeName = iTestCaseID + "_" + pScenario.getName().replaceAll("[^a-zA-Z0-9]", "_");
+                        iLastScreenshotPath = CommonFunctions.takeScreenshot(iSafeName);
                     }
                 }
                 catch (Exception iShotException)
@@ -287,11 +303,9 @@ public class Hooks
         String command;
         try {
             if (os.contains("win")) {
-                // Windows requires .exe and specific flags /F (force) /T (tree)
                 String processWithExe = processName.endsWith(".exe") ? processName : processName + ".exe";
                 command = "taskkill /F /IM " + processWithExe + " /T";
             } else {
-                // Mac/Linux
                 command = "pkill -f " + processName;
             }
             Runtime.getRuntime().exec(command);
@@ -300,4 +314,43 @@ public class Hooks
             CommonFunctions.log.warning("Could not kill process " + processName + ": " + e.getMessage());
         }
     }
+
+// -------------------------------------------------------------------------------------------------------------------------------
+// BEFORE: Step definitions had no way to take screenshots on demand. The only screenshots
+//         in the Word report came from @After when a scenario failed. You couldn't capture
+//         "this page loaded correctly" evidence without introducing a failure.
+//
+// AFTER:  Call Hooks.captureStep("your label") from any step definition at any point.
+//         One line. The screenshot goes straight into the Word report with your label.
+// -------------------------------------------------------------------------------------------------------------------------------
+
+    // ***************************************************************************************************************************************************************************************
+// Function Name : captureStep
+// Description   : On-demand screenshot method for step definitions.
+//                 Takes a screenshot of the current browser state and embeds it into the
+//                 running Word report with the supplied label as the caption.
+//
+//                 This works because iDocument, iDocPath, and iTestCaseID are all already
+//                 held as public static fields on this class — step definitions don't need
+//                 to pass them.
+//
+// Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
+//                                       in the Word report. Be descriptive — this is what the
+//                                       reader sees when they open the .docx after the run.
+//
+//                 Examples:
+//                   Hooks.captureStep("Login page loaded");
+//                   Hooks.captureStep("Farmer dashboard — herd " + Hooks.RUNTIME_HERD);
+//                   Hooks.captureStep("Parcel A1190600017 added to Land Details");
+//                   Hooks.captureStep("ACRES panel 1 — warning accepted");
+//
+// Author        : Aniket Pathare | aniket.pathare@goverment.ie
+// Date Created  : 26-03-2026
+// ***************************************************************************************************************************************************************************************
+    public static void captureStep(String pStepLabel)
+    {
+        CommonFunctions.captureStepScreenshot(iDocument, iDocPath, pStepLabel);
+    }
+
+
 }

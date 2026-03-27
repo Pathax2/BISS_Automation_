@@ -6,6 +6,7 @@
 //                 Word report generation, screenshot capture, and structured step logging.
 // Author        : Aniket Pathare | aniket.pathare@goverment.ie
 // Date Created  : 10-03-2026
+// Updated       : 26-03-2026 — Phase 1: step log table, cover page metadata, clearStepLog()
 // ===================================================================================================================================
 
 package commonFunctions;
@@ -85,6 +86,14 @@ public class CommonFunctions
     // -------------------------------------------------------------------------------------------------------------------------------
     private static final Map<String, String> iDescriptionCache = new ConcurrentHashMap<>();
     private static volatile boolean          iDescriptionCacheLoaded = false;
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Phase 1 — Step log fields
+    // iStepLog     : accumulates one StepLogEntry per iAction() call; written as a table by finalizeWordReport()
+    // iStepCounter : increments with every iAction() call to provide a sequence number in the table
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final java.util.List<StepLogEntry> iStepLog = new java.util.ArrayList<>();
+    private static int iStepCounter = 0;
 
 
     // ===============================================================================================================================
@@ -655,18 +664,15 @@ public class CommonFunctions
 
         if ("mat-select".equals(iTagName))
         {
-            // ── Angular Material mat-select — click-based selection ───────────
             performMatSelect(pDriver, pWait, iElement, iListValue);
         }
         else if ("select".equals(iTagName))
         {
-            // ── Native HTML select — Selenium Select class ────────────────────
             pWait.until(iWebDriver -> new Select(iElement).getOptions().size() > 0);
             performNativeSelect(iElement, iListValue);
         }
         else
         {
-            // ── Unknown element type — attempt mat-select approach as fallback ─
             log.warning("[" + getCurrentTimestamp() + "] LIST | Unexpected tag <" + iTagName
                     + "> — attempting mat-select click approach as fallback.");
             performMatSelect(pDriver, pWait, iElement, iListValue);
@@ -674,36 +680,17 @@ public class CommonFunctions
     }
 
     // ***************************************************************************************************************************************************************************************
-// Function Name : performMatSelect
-// Description   : Intelligent Angular Material <mat-select> handler.
-//
-//                 Supports BOTH:
-//                   ✔ Standard mat-select
-//                   ✔ Searchable mat-select (lib-biss-select-search + ngx-mat-select-search)
-//
-//                 Key capabilities:
-//                   1. Detects search-enabled dropdowns dynamically
-//                   2. Types into <input class="mat-select-search-input"> to filter options
-//                   3. Skips disabled mat-option search row (contains-mat-select-search)
-//                   4. Uses mat-option.optionListItem for correct BISS filtering behavior
-//                   5. Handles stale elements after Angular re-render
-//                   6. Robust waits for panel open and close
-//                   7. Supports INDEX:, VISIBLETEXT:, VALUE:, or plain text
-//
-// Parameters    : pDriver  (WebDriver)
-//                 pWait    (WebDriverWait)
-//                 pElement (WebElement) - the mat-select trigger
-//                 pValue   (String)     - selection directive
-//
-// Author        : Aniket Pathare
-// Date Updated  : 24-03-2026
-// ***************************************************************************************************************************************************************************************
+    // Function Name : performMatSelect
+    // Description   : Intelligent Angular Material <mat-select> handler.
+    //                 Supports both standard and searchable mat-select (ngx-mat-select-search).
+    //                 Supports INDEX:, VISIBLETEXT:, VALUE:, or plain text selection strategies.
+    // Author        : Aniket Pathare
+    // Date Updated  : 24-03-2026
+    // ***************************************************************************************************************************************************************************************
     private static void performMatSelect(WebDriver pDriver, WebDriverWait pWait,
                                          WebElement pElement, String pValue)
     {
-        // ───────────────────────────────────────────────────────────────────────────────
-        // STEP 1 : OPEN PANEL
-        // ───────────────────────────────────────────────────────────────────────────────
+        // ── STEP 1 : OPEN PANEL ──────────────────────────────────────────────────────────
         try
         {
             String iIsExpanded = pElement.getAttribute("aria-expanded");
@@ -722,9 +709,7 @@ public class CommonFunctions
             ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", pElement);
         }
 
-        // ───────────────────────────────────────────────────────────────────────────────
-        // STEP 2 : WAIT FOR PANEL
-        // ───────────────────────────────────────────────────────────────────────────────
+        // ── STEP 2 : WAIT FOR PANEL ──────────────────────────────────────────────────────
         By iPanelBy = By.cssSelector(
                 "div[role='listbox'].mat-mdc-select-panel, " +
                         "div[role='listbox'].mdc-menu-surface--open, " +
@@ -737,9 +722,7 @@ public class CommonFunctions
 
         log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened.");
 
-        // ───────────────────────────────────────────────────────────────────────────────
-        // STEP 3 : DETECT SEARCH MODE (ngx-mat-select-search)
-        // ───────────────────────────────────────────────────────────────────────────────
+        // ── STEP 3 : DETECT SEARCH MODE ──────────────────────────────────────────────────
         boolean iIsSearchable =
                 !iPanel.findElements(By.cssSelector("mat-option.contains-mat-select-search")).isEmpty();
 
@@ -748,14 +731,9 @@ public class CommonFunctions
             log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Search-enabled mat-select detected.");
         }
 
-        // ───────────────────────────────────────────────────────────────────────────────
-        // STEP 4 : RESOLVE VALUE STRATEGY
-        // ───────────────────────────────────────────────────────────────────────────────
+        // ── STEP 4 : RESOLVE VALUE STRATEGY ──────────────────────────────────────────────
         String iUpper = pValue.toUpperCase();
 
-        // ============================
-        // INDEX: selection
-        // ============================
         if (iUpper.startsWith("INDEX:"))
         {
             int iIndex = Integer.parseInt(pValue.substring("INDEX:".length()).trim());
@@ -779,9 +757,6 @@ public class CommonFunctions
         }
         else
         {
-            // ============================
-            // TEXT selection
-            // ============================
             String iText;
 
             if (iUpper.startsWith("VISIBLETEXT:"))
@@ -796,9 +771,6 @@ public class CommonFunctions
 
             final String iFinalText = iText;
 
-            // ───────────────────────────────────────────────────────────────
-            // SEARCH INPUT FILTERING
-            // ───────────────────────────────────────────────────────────────
             if (iIsSearchable)
             {
                 By iSearchInputBy = By.cssSelector(
@@ -814,15 +786,11 @@ public class CommonFunctions
 
                 log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Search typed: '" + iFinalText + "'");
 
-                // Wait for filtered results
                 pWait.until(driver ->
                         !iPanel.findElements(By.cssSelector("mat-option.optionListItem")).isEmpty()
                 );
             }
 
-            // ───────────────────────────────────────────────────────────────
-            // FIND MATCHING OPTION
-            // ───────────────────────────────────────────────────────────────
             By iOptionsBy = iIsSearchable
                     ? By.cssSelector("mat-option.optionListItem")
                     : By.cssSelector("mat-option:not(.contains-mat-select-search)");
@@ -840,7 +808,7 @@ public class CommonFunctions
                     }
                     catch (StaleElementReferenceException stale)
                     {
-                        return null; // retry next poll
+                        return null;
                     }
                 }
                 return null;
@@ -848,7 +816,6 @@ public class CommonFunctions
 
             if (iTarget == null)
             {
-                // Get available options for debugging
                 StringBuilder buf = new StringBuilder();
                 try
                 {
@@ -872,9 +839,7 @@ public class CommonFunctions
             log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected option: '" + iFinalText + "'");
         }
 
-        // ───────────────────────────────────────────────────────────────────────────────
-        // STEP 5 : WAIT FOR PANEL TO CLOSE
-        // ───────────────────────────────────────────────────────────────────────────────
+        // ── STEP 5 : WAIT FOR PANEL TO CLOSE ─────────────────────────────────────────────
         try
         {
             pWait.until(ExpectedConditions.invisibilityOfElementLocated(
@@ -883,7 +848,6 @@ public class CommonFunctions
         }
         catch (Exception ignored)
         {
-            // Panel already closed
         }
 
         log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selection complete.");
@@ -922,6 +886,7 @@ public class CommonFunctions
         }
         catch (Exception ignored) {}
     }
+
     private static void performDragDrop(WebDriver pDriver, WebDriverWait pWait, By pSourceBy, String pValue)
     {
         if (pValue == null || pValue.trim().isEmpty())
@@ -965,7 +930,6 @@ public class CommonFunctions
     private static void performWaitVisible(WebDriver pDriver, WebDriverWait pWait, By pBy)
     {
         try {
-            // Use fluent wait first – more robust and prevents stale failures
             Wait<WebDriver> fluentWait = new FluentWait<>(pDriver)
                     .withTimeout(Duration.ofSeconds(20))
                     .pollingEvery(Duration.ofMillis(500))
@@ -974,7 +938,6 @@ public class CommonFunctions
 
             WebElement element = fluentWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
 
-            // After visible, use existing framework mechanics
             scrollIntoView(pDriver, element);
             highlightElement(pDriver, element);
 
@@ -993,19 +956,12 @@ public class CommonFunctions
 
     private static void performWaitInvisible(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
     {
-        // ── Resolve the parent MDC container locator from whatever locator was passed ──────────
-        // Whether the caller passes the SVG circle locator or the parent div locator,
-        // we always resolve and watch the parent .mdc-circular-progress container
-        // because that is the element MDC actually toggles aria-hidden on.
         By iParentBy = resolveSpinnerParentLocator(pBy, pObjectName);
 
         log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — watching locator : " + pObjectName);
 
         try
         {
-            // ── Strategy 1 : aria-hidden="true" on parent container ──────────────────────────
-            // MDC sets aria-hidden="true" on the .mdc-circular-progress div when spinner finishes.
-            // This is the primary and most reliable signal for MDC spinners.
             pWait.until(iWebDriver ->
             {
                 try
@@ -1014,7 +970,6 @@ public class CommonFunctions
 
                     if (iElements.isEmpty())
                     {
-                        // Element gone from DOM entirely — spinner is definitely done
                         log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — spinner container not found in DOM (already removed).");
                         return true;
                     }
@@ -1036,7 +991,6 @@ public class CommonFunctions
                 }
                 catch (org.openqa.selenium.StaleElementReferenceException iStale)
                 {
-                    // Element was removed from DOM mid-check — spinner is gone
                     log.info("[" + getCurrentTimestamp() + "] WAITINVISIBLE — spinner element went stale (removed from DOM).");
                     return true;
                 }
@@ -1046,9 +1000,6 @@ public class CommonFunctions
         }
         catch (org.openqa.selenium.TimeoutException iTimeout)
         {
-            // ── Strategy 2 : JS opacity/visibility check as last resort ──────────────────────
-            // If WebDriverWait timed out, try a direct JS check on the computed style.
-            // Some MDC implementations fade the spinner out via CSS opacity transition.
             try
             {
                 java.util.List<WebElement> iElements = pDriver.findElements(iParentBy);
@@ -1074,7 +1025,6 @@ public class CommonFunctions
                     return;
                 }
 
-                // Still visible after all strategies — throw to fail the step cleanly
                 throw new RuntimeException("WAITINVISIBLE timed out. Spinner still visible after all strategies."
                         + " | opacity=" + iOpacity
                         + " | display=" + iDisplay
@@ -1104,8 +1054,6 @@ public class CommonFunctions
     // ***************************************************************************************************************************************************************************************
     private static By resolveSpinnerParentLocator(By pBy, String pObjectName)
     {
-        // If the caller passed the SVG circle locator — redirect to the MDC parent container.
-        // The parent is what MDC actually toggles aria-hidden on, not the SVG child.
         if (pObjectName != null && (
                 pObjectName.contains("mdc-circular-progress__gap-patch") ||
                         pObjectName.contains("name()='circle'")                  ||
@@ -1116,7 +1064,6 @@ public class CommonFunctions
             return By.cssSelector(".mdc-circular-progress");
         }
 
-        // Non-SVG locator — use as-is (covers custom spinners, overlays, etc.)
         return pBy;
     }
 
@@ -1181,12 +1128,6 @@ public class CommonFunctions
             iActualText = iValueAttribute == null ? "" : iValueAttribute.trim();
         }
 
-        // ----------------------------------------------------
-        // Verification mode resolution:
-        //   EXACT:value     — full case-insensitive equality
-        //   CONTAINS:value  — case-insensitive substring match (default)
-        //   STARTSWITH:value — case-insensitive prefix check
-        // ----------------------------------------------------
         String iResolvedExpected;
         boolean iVerificationPassed;
         String  iMatchMode;
@@ -1205,7 +1146,6 @@ public class CommonFunctions
         }
         else
         {
-            // Default: CONTAINS (also handles explicit "CONTAINS:" prefix)
             iResolvedExpected  = pValue.trim().toUpperCase().startsWith("CONTAINS:")
                     ? pValue.trim().substring("CONTAINS:".length()).trim()
                     : pValue.trim();
@@ -1410,11 +1350,13 @@ public class CommonFunctions
 
             long iDuration = System.currentTimeMillis() - iStartTime;
             logStepPass(iActionType, pIdentifyBy, pObjectName, iResolvedValue, iDuration);
+            appendToStepLog(iActionType, pObjectName, iResolvedValue, "PASS", iDuration, ""); // ← Phase 1: record PASS
         }
         catch (Exception iException)
         {
             long iDuration = System.currentTimeMillis() - iStartTime;
             logStepFail(pActionType, pIdentifyBy, pObjectName, pValueToEnter, iDuration, iException.getMessage());
+            appendToStepLog(pActionType, pObjectName, pValueToEnter, "FAIL", iDuration, iException.getMessage()); // ← Phase 1: record FAIL
             throw new RuntimeException("iAction failed | Action=[" + pActionType + "] | Object=[" + pObjectName + "] | Reason : " + iException.getMessage(), iException);
         }
 
@@ -1471,7 +1413,7 @@ public class CommonFunctions
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : takeScreenshot
-    // Description   : Captures a real-time screenshot of the current browser window and saves it to the framework screenshot folder
+    // Description   : Captures a viewport screenshot and saves to disk. Delegates to ScreenshotManager.
     // Parameters    : pStepName (String) - logical step name used in screenshot file naming
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
     // Precondition  : launchBrowser() must have been called on this thread
@@ -1479,37 +1421,7 @@ public class CommonFunctions
     // ***************************************************************************************************************************************************************************************
     public static String takeScreenshot(String pStepName)
     {
-        try
-        {
-            WebDriver iDriver = iDriverHolder.get();
-
-            if (iDriver == null)
-            {
-                throw new RuntimeException("Driver is not initialised on this thread. Cannot capture screenshot.");
-            }
-
-            File iScreenshotsDirectory = new File(iReportScreenshotsDirectoryPath);
-
-            if (!iScreenshotsDirectory.exists())
-            {
-                iScreenshotsDirectory.mkdirs();
-            }
-
-            String iSafeStepName        = sanitizeFileName(pStepName);
-            String iTimeStamp           = LocalDateTime.now().format(iFileDateTimeFormatterWithMilliSeconds);
-            String iScreenshotFileName  = iSafeStepName + "_" + iTimeStamp + ".png";
-            String iPngPath             = iScreenshotsDirectory.getAbsolutePath() + File.separator + iScreenshotFileName;
-
-            File iSourceFile = ((TakesScreenshot) iDriver).getScreenshotAs(OutputType.FILE);
-            Files.copy(iSourceFile.toPath(), new File(iPngPath).toPath(), StandardCopyOption.REPLACE_EXISTING);
-
-            log.info("[" + getCurrentTimestamp() + "] Screenshot captured : " + iPngPath);
-            return iPngPath;
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Failed to capture screenshot : " + iException.getMessage(), iException);
-        }
+        return utilities.ScreenshotManager.captureViewport(iDriverHolder.get(), pStepName);
     }
 
 
@@ -1518,14 +1430,59 @@ public class CommonFunctions
     // ===============================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
+    // Function Name : clearStepLog
+    // Description   : Resets the step log list and counter for a new test case.
+    //                 Called from Hooks.@BeforeAll so every test case starts with a clean log.
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void clearStepLog()
+    {
+        iStepLog.clear();
+        iStepCounter = 0;
+        log.info("[" + getCurrentTimestamp() + "] Step log cleared for new test case.");
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : appendToStepLog
+    // Description   : Records one iAction() execution result into the in-memory step log.
+    //                 Private — called only from the success path and catch block of iAction().
+    //                 Masks the value for TEXTBOX actions when the value text contains "password" or "pin".
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void appendToStepLog(String pAction, String pLocator, String pValue,
+                                        String pStatus, long pDurationMs, String pFailReason)
+    {
+        try
+        {
+            iStepCounter++;
+
+            String iDisplayValue = pValue;
+            if ("TEXTBOX".equalsIgnoreCase(pAction) && pValue != null
+                    && (pValue.toLowerCase().contains("password") || pValue.toLowerCase().contains("pin")))
+            {
+                iDisplayValue = "****";
+            }
+
+            iStepLog.add(new StepLogEntry(iStepCounter, pAction, pLocator,
+                    iDisplayValue, pStatus, pDurationMs, pFailReason));
+        }
+        catch (Exception iException)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] Step log append failed: " + iException.getMessage());
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
     // Function Name : startWordReport
-    // Description   : Creates a Word (.docx) report for the selected test case by reading its description from
-    //                 ExecutionControl.xlsx. Returns the document object and file path as Object[]{XWPFDocument, String}.
-    //                 The document is written to disk once here and only saved again on finalizeWordReport().
+    // Description   : Creates a Word (.docx) report with a full cover page and metadata table.
+    //                 Returns {XWPFDocument, String} — document object and file path.
+    //                 The document is written to disk once here; all screenshots accumulate in
+    //                 memory and the final write happens in finalizeWordReport().
     // Parameters    : pTestCaseID (String) - currently executing test case ID
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : ExecutionControl.xlsx must exist and contain TestCase_ID and Description columns
-    // Date Created  : 10-03-2026
+    // Date Created  : 10-03-2026 | Updated: 26-03-2026 (cover page + metadata table)
     // ***************************************************************************************************************************************************************************************
     public static Object[] startWordReport(String pTestCaseID)
     {
@@ -1537,38 +1494,96 @@ public class CommonFunctions
             }
 
             String iDescription = getDescriptionFromExecutionControl(pTestCaseID);
-            String iTimeStamp   = getCurrentFileTimestamp();
+            String iTimestamp   = getCurrentFileTimestamp();
+            String iStartedAt   = getCurrentTimestamp();
+
+            // Resolve run metadata from system properties set by TestRunner + Hooks
+            String iEnvironment = System.getProperty("environment",         "—");
+            String iBrowser     = System.getProperty("browser",             "—");
+            String iBuildNumber = System.getProperty("bamboo.buildNumber",  "LOCAL");
+            String iBuildPlan   = System.getProperty("bamboo.buildPlanKey", "—");
+            String iRetryCount  = System.getProperty("retry.count",         "1");
+            String iHerd        = System.getProperty("TD:HerdNumber",       "—");
+            String iUsername    = System.getProperty("TD:Username",         "—");
 
             File iDocsDirectory = new File(iReportDocsDirectoryPath);
+            if (!iDocsDirectory.exists()) { iDocsDirectory.mkdirs(); }
 
-            if (!iDocsDirectory.exists())
+            String       iFileName = sanitizeFileName(pTestCaseID) + "_" + iTimestamp + ".docx";
+            String       iFullPath = iDocsDirectory.getAbsolutePath() + File.separator + iFileName;
+            XWPFDocument iDocument = new XWPFDocument();
+
+            // ── TITLE ──────────────────────────────────────────────────────────────────────
+            XWPFParagraph iTitlePara = iDocument.createParagraph();
+            iTitlePara.setAlignment(ParagraphAlignment.CENTER);
+            XWPFRun iTitleRun = iTitlePara.createRun();
+            iTitleRun.setBold(true);
+            iTitleRun.setFontSize(18);
+            iTitleRun.setFontFamily("Calibri");
+            iTitleRun.setText("BISS Automation — Test Execution Report");
+            iTitleRun.addBreak();
+
+            // ── SUBTITLE ───────────────────────────────────────────────────────────────────
+            XWPFParagraph iSubPara = iDocument.createParagraph();
+            iSubPara.setAlignment(ParagraphAlignment.CENTER);
+            XWPFRun iSubRun = iSubPara.createRun();
+            iSubRun.setBold(true);
+            iSubRun.setFontSize(13);
+            iSubRun.setFontFamily("Calibri");
+            iSubRun.setText(pTestCaseID + "  —  " + iDescription);
+            iSubRun.addBreak();
+            iSubRun.addBreak();
+
+            // ── METADATA TABLE ─────────────────────────────────────────────────────────────
+            String[][] iMetaRows = {
+                    { "Test Case ID",  pTestCaseID  },
+                    { "Description",   iDescription },
+                    { "Environment",   iEnvironment },
+                    { "Browser",       iBrowser     },
+                    { "Herd Number",   iHerd        },
+                    { "Username",      iUsername    },
+                    { "Build Number",  iBuildNumber },
+                    { "Build Plan",    iBuildPlan   },
+                    { "Retry Count",   iRetryCount  },
+                    { "Started At",    iStartedAt   }
+            };
+
+            org.apache.poi.xwpf.usermodel.XWPFTable iMetaTable = iDocument.createTable(iMetaRows.length, 2);
+            iMetaTable.setWidth("80%");
+
+            for (int i = 0; i < iMetaRows.length; i++)
             {
-                iDocsDirectory.mkdirs();
+                org.apache.poi.xwpf.usermodel.XWPFTableRow iRow = iMetaTable.getRow(i);
+
+                // Label cell — grey background, bold
+                org.apache.poi.xwpf.usermodel.XWPFTableCell iLabel = iRow.getCell(0);
+                iLabel.setColor("D9D9D9");
+                XWPFRun iLabelRun = iLabel.getParagraphArray(0).createRun();
+                iLabelRun.setBold(true);
+                iLabelRun.setFontSize(10);
+                iLabelRun.setFontFamily("Calibri");
+                iLabelRun.setText(iMetaRows[i][0]);
+
+                // Value cell — white background
+                XWPFRun iValueRun = iRow.getCell(1).getParagraphArray(0).createRun();
+                iValueRun.setFontSize(10);
+                iValueRun.setFontFamily("Calibri");
+                iValueRun.setText(iMetaRows[i][1]);
             }
 
-            String       iFileName  = sanitizeFileName(pTestCaseID) + "_" + iTimeStamp + ".docx";
-            String       iFullPath  = iDocsDirectory.getAbsolutePath() + File.separator + iFileName;
-            XWPFDocument iDocument  = new XWPFDocument();
-
-            XWPFParagraph iHeadingParagraph = iDocument.createParagraph();
-            iHeadingParagraph.setAlignment(ParagraphAlignment.CENTER);
-            XWPFRun iHeadingRun = iHeadingParagraph.createRun();
-            iHeadingRun.setBold(true);
-            iHeadingRun.setFontSize(16);
-            iHeadingRun.setText("Test Report: " + pTestCaseID);
-
-            XWPFParagraph iDescriptionParagraph = iDocument.createParagraph();
-            XWPFRun iDescriptionRun = iDescriptionParagraph.createRun();
-            iDescriptionRun.setText("Description: " + iDescription);
-
-            XWPFParagraph iStartTimeParagraph = iDocument.createParagraph();
-            XWPFRun iStartTimeRun = iStartTimeParagraph.createRun();
-            iStartTimeRun.setText("Started at: " + getCurrentTimestamp());
+            // ── SPACER + SECTION HEADING ───────────────────────────────────────────────────
+            iDocument.createParagraph().createRun().addBreak();
+            XWPFRun iSectionRun = iDocument.createParagraph().createRun();
+            iSectionRun.setBold(true);
+            iSectionRun.setFontSize(12);
+            iSectionRun.setFontFamily("Calibri");
+            iSectionRun.setText("Execution Log");
+            iSectionRun.addBreak();
 
             // Initial write — creates the file on disk
-            try (FileOutputStream iFileOutputStream = new FileOutputStream(iFullPath))
+            try (FileOutputStream iOut = new FileOutputStream(iFullPath))
             {
-                iDocument.write(iFileOutputStream);
+                iDocument.write(iOut);
             }
 
             log.info("[" + getCurrentTimestamp() + "] Word report created : " + iFullPath);
@@ -1582,94 +1597,43 @@ public class CommonFunctions
     }
 
     // ***************************************************************************************************************************************************************************************
+    // Function Name : captureStepScreenshot
+    // Description   : On-demand step screenshot — delegates to ScreenshotManager.captureAndEmbed().
+    //                 Called via Hooks.captureStep("label") from any step definition.
+    // Parameters    : pDocument  (XWPFDocument) - the in-memory Word doc (Hooks.iDocument)
+    //                 pDocPath   (String)        - report file path (used for logging only)
+    //                 pStepLabel (String)        - descriptive caption shown in the Word report
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void captureStepScreenshot(XWPFDocument pDocument, String pDocPath, String pStepLabel)
+    {
+        utilities.ScreenshotManager.captureAndEmbed(iDriverHolder.get(), pDocument, pStepLabel);
+    }
+
+    // ***************************************************************************************************************************************************************************************
     // Function Name : addScreenshotToReport
-    // Description   : Captures a screenshot from the browser and appends it into the in-memory Word document object.
-    //                 The document is NOT saved to disk here — it is accumulated in memory and written once by finalizeWordReport().
-    // Parameters    : pDocument   (XWPFDocument) - active in-memory Word document object
-    //                 pDocPath    (String)        - report full path (used only in log messages)
+    // Description   : Failure screenshot — delegates to ScreenshotManager.captureForFailure().
+    //                 Returns the PNG file path so Hooks can pass it to ReportManager.
+    // Parameters    : pDocument   (XWPFDocument) - the in-memory Word doc (Hooks.iDocument)
+    //                 pDocPath    (String)        - report file path (used for logging only)
     //                 pTestCaseID (String)        - currently executing test case ID
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : launchBrowser() must have been called; Word report must already be started
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static void addScreenshotToReport(XWPFDocument pDocument, String pDocPath, String pTestCaseID)
+    public static String addScreenshotToReport(XWPFDocument pDocument, String pDocPath, String pTestCaseID)
     {
-        try
-        {
-            WebDriver iDriver = iDriverHolder.get();
-
-            if (iDriver == null)
-            {
-                throw new RuntimeException("Driver is not initialised on this thread. Cannot capture screenshot for report.");
-            }
-
-            if (pDocument == null)
-            {
-                throw new RuntimeException("Word document object is null. Cannot append screenshot.");
-            }
-
-            if (pDocPath == null || pDocPath.trim().isEmpty())
-            {
-                throw new RuntimeException("Word document path is blank.");
-            }
-
-            File iScreenshotsDirectory = new File(iReportScreenshotsDirectoryPath);
-
-            if (!iScreenshotsDirectory.exists())
-            {
-                iScreenshotsDirectory.mkdirs();
-            }
-
-            String iTimeStamp   = LocalDateTime.now().format(iFileDateTimeFormatterWithMilliSeconds);
-            String iPngFileName = sanitizeFileName(pTestCaseID) + "_" + iTimeStamp + ".png";
-            String iPngPath     = iScreenshotsDirectory.getAbsolutePath() + File.separator + iPngFileName;
-
-            File iSourceFile = ((TakesScreenshot) iDriver).getScreenshotAs(OutputType.FILE);
-            Files.copy(iSourceFile.toPath(), new File(iPngPath).toPath(), StandardCopyOption.REPLACE_EXISTING);
-
-            String iDescription = getDescriptionFromExecutionControl(pTestCaseID);
-            String iCaption     = pTestCaseID + " - " + iDescription + " | Captured at: " + getCurrentTimestamp();
-
-            XWPFParagraph iCaptionParagraph = pDocument.createParagraph();
-            XWPFRun       iCaptionRun       = iCaptionParagraph.createRun();
-            iCaptionRun.setBold(true);
-            iCaptionRun.setText(iCaption);
-            iCaptionRun.addBreak();
-
-            XWPFParagraph iImageParagraph = pDocument.createParagraph();
-            XWPFRun       iImageRun       = iImageParagraph.createRun();
-
-            try (InputStream iImageInputStream = new FileInputStream(iPngPath))
-            {
-                iImageRun.addPicture(
-                        iImageInputStream,
-                        Document.PICTURE_TYPE_PNG,
-                        iPngFileName,
-                        Units.toEMU(450),
-                        Units.toEMU(300)
-                );
-            }
-
-            // NOTE: Document is NOT written to disk here.
-            // Accumulate all screenshots in memory and write once via finalizeWordReport().
-            log.info("[" + getCurrentTimestamp() + "] Screenshot appended to report (in-memory) : " + iPngPath);
-        }
-        catch (Exception iException)
-        {
-            log.severe("[" + getCurrentTimestamp() + "] Failed to append screenshot to report : " + iException.getMessage());
-            throw new RuntimeException("Failed to append screenshot to report : " + iException.getMessage(), iException);
-        }
+        return utilities.ScreenshotManager.captureForFailure(iDriverHolder.get(), pDocument, pTestCaseID);
     }
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : finalizeWordReport
-    // Description   : Writes the final in-memory Word document to disk and closes the document stream.
+    // Description   : Appends the full step execution log table then writes the document to disk.
     //                 This is the single disk-write point for the entire report — called once at end of test.
     // Parameters    : pDocument (XWPFDocument) - active in-memory Word document object
     //                 pDocPath  (String)        - report full file path
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : startWordReport() must have been called; all screenshots must already be appended
-    // Date Created  : 10-03-2026
+    // Date Created  : 10-03-2026 | Updated: 26-03-2026 (step log table added before save)
     // ***************************************************************************************************************************************************************************************
     public static void finalizeWordReport(XWPFDocument pDocument, String pDocPath)
     {
@@ -1686,13 +1650,92 @@ public class CommonFunctions
                 throw new RuntimeException("Word report path is blank. Cannot finalize report.");
             }
 
-            XWPFParagraph iEndTimeParagraph = pDocument.createParagraph();
-            XWPFRun       iEndTimeRun       = iEndTimeParagraph.createRun();
-            iEndTimeRun.setText("Ended at: " + getCurrentTimestamp());
-
-            try (FileOutputStream iFileOutputStream = new FileOutputStream(pDocPath))
+            // ── STEP LOG TABLE ─────────────────────────────────────────────────────────────
+            if (!iStepLog.isEmpty())
             {
-                pDocument.write(iFileOutputStream);
+                // Section heading
+                XWPFRun iHeadRun = pDocument.createParagraph().createRun();
+                iHeadRun.setBold(true);
+                iHeadRun.setFontSize(12);
+                iHeadRun.setFontFamily("Calibri");
+                iHeadRun.setText("Step Execution Log  (" + iStepLog.size() + " steps)");
+                iHeadRun.addBreak();
+
+                // Table: header row + one data row per step
+                org.apache.poi.xwpf.usermodel.XWPFTable iTable =
+                        pDocument.createTable(iStepLog.size() + 1, 6);
+                iTable.setWidth("100%");
+
+                // ── Header row — dark navy ─────────────────────────────────────────────────
+                String[] iHeaders = { "#", "Action", "Element (locator)", "Value", "Status", "Duration" };
+                org.apache.poi.xwpf.usermodel.XWPFTableRow iHeaderRow = iTable.getRow(0);
+                for (int c = 0; c < iHeaders.length; c++)
+                {
+                    org.apache.poi.xwpf.usermodel.XWPFTableCell iCell = iHeaderRow.getCell(c);
+                    iCell.setColor("1F4E79");
+                    XWPFRun iRun = iCell.getParagraphArray(0).createRun();
+                    iRun.setBold(true);
+                    iRun.setFontSize(9);
+                    iRun.setFontFamily("Calibri");
+                    iRun.setColor("FFFFFF");
+                    iRun.setText(iHeaders[c]);
+                }
+
+                // ── Data rows — light green for PASS, light red for FAIL ──────────────────
+                for (int r = 0; r < iStepLog.size(); r++)
+                {
+                    StepLogEntry iEntry  = iStepLog.get(r);
+                    boolean      iPassed = "PASS".equals(iEntry.iStatus);
+                    String       iColor  = iPassed ? "E2EFDA" : "FCE4D6";
+
+                    org.apache.poi.xwpf.usermodel.XWPFTableRow iRow = iTable.getRow(r + 1);
+
+                    String[] iValues = {
+                            String.valueOf(iEntry.iStepNumber),
+                            iEntry.iAction,
+                            iEntry.iLocator,
+                            iEntry.iValue,
+                            iEntry.iStatus,
+                            iEntry.iDurationMs + " ms"
+                                    + ((!iPassed && !iEntry.iFailReason.isEmpty()) ? "  —  " + iEntry.iFailReason : "")
+                    };
+
+                    for (int c = 0; c < iValues.length; c++)
+                    {
+                        org.apache.poi.xwpf.usermodel.XWPFTableCell iCell = iRow.getCell(c);
+                        iCell.setColor(iColor);
+                        XWPFRun iRun = iCell.getParagraphArray(0).createRun();
+                        iRun.setFontSize(8);
+                        iRun.setFontFamily("Calibri");
+                        iRun.setBold(c == 4);
+                        if (c == 4) { iRun.setColor(iPassed ? "375623" : "9C0006"); }
+                        iRun.setText(iValues[c]);
+                    }
+                }
+
+                pDocument.createParagraph().createRun().addBreak();
+            }
+            else
+            {
+                XWPFRun iNoSteps = pDocument.createParagraph().createRun();
+                iNoSteps.setFontSize(9);
+                iNoSteps.setFontFamily("Calibri");
+                iNoSteps.setColor("808080");
+                iNoSteps.setText("(No step log entries recorded for this test case.)");
+                iNoSteps.addBreak();
+            }
+
+            // ── END TIMESTAMP ──────────────────────────────────────────────────────────────
+            XWPFRun iEndRun = pDocument.createParagraph().createRun();
+            iEndRun.setBold(true);
+            iEndRun.setFontSize(9);
+            iEndRun.setFontFamily("Calibri");
+            iEndRun.setText("Execution completed at: " + getCurrentTimestamp());
+
+            // ── SINGLE DISK WRITE ──────────────────────────────────────────────────────────
+            try (FileOutputStream iOut = new FileOutputStream(pDocPath))
+            {
+                pDocument.write(iOut);
             }
 
             pDocument.close();
@@ -1893,15 +1936,14 @@ public class CommonFunctions
 
         return iDataFormatter.formatCellValue(pRow.getCell(pColumnIndex));
     }
+
     public static void waitForAngular() {
         WebDriver driver = getDriver();
 
         JavascriptExecutor js = (JavascriptExecutor) driver;
 
-        // Wait for document ready (DOM complete)
         getWait().until(d -> js.executeScript("return document.readyState").equals("complete"));
 
-        // Wait for Angular to finish pending tasks
         js.executeAsyncScript(
                 "var callback = arguments[arguments.length - 1];" +
                         "if (window.getAllAngularTestabilities) {" +
@@ -1925,5 +1967,49 @@ public class CommonFunctions
                 .ignoring(StaleElementReferenceException.class);
 
         return wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
+    }
+
+
+    // ===============================================================================================================================
+    // SECTION 14 : StepLogEntry — Inner class (Phase 1)
+    //
+    // Data model for one row in the step execution log table written by finalizeWordReport().
+    // One instance is created per iAction() call via appendToStepLog().
+    // ===============================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Inner Class : StepLogEntry
+    // Author      : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created: 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static class StepLogEntry
+    {
+        public final int    iStepNumber;
+        public final String iAction;
+        public final String iLocator;
+        public final String iValue;
+        public final String iStatus;       // PASS | FAIL
+        public final long   iDurationMs;
+        public final String iTimestamp;
+        public final String iFailReason;   // blank on PASS rows
+
+        public StepLogEntry(int pStep, String pAction, String pLocator,
+                            String pValue, String pStatus, long pDurationMs, String pFailReason)
+        {
+            this.iStepNumber = pStep;
+            this.iAction     = pAction     == null ? "" : pAction.trim();
+            this.iLocator    = pLocator    == null ? "" : cap(pLocator.trim(), 60);
+            this.iValue      = pValue      == null ? "" : pValue.trim();
+            this.iStatus     = pStatus     == null ? "FAIL" : pStatus.trim().toUpperCase();
+            this.iDurationMs = pDurationMs;
+            this.iTimestamp  = java.time.LocalDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS"));
+            this.iFailReason = pFailReason == null ? "" : cap(pFailReason.trim(), 120);
+        }
+
+        private static String cap(String s, int max)
+        {
+            return (s == null || s.length() <= max) ? s : s.substring(0, max) + "...";
+        }
     }
 }
