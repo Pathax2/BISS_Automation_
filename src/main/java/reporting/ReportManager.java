@@ -2,13 +2,14 @@
 // File          : ReportManager.java
 // Package       : reporting
 // Description   : Central execution data collector for the BISS automation framework.
-//                 Accumulates per-test-case results (status, duration, error, screenshot path, steps)
+//                 Accumulates per-test-case AND per-step results (status, duration, error, screenshot path, logs)
 //                 in a thread-safe list during the TestRunner execution loop.
 //                 At end of run, passes the complete dataset to HtmlReportGenerator and JUnitXmlGenerator.
 //
 // Integration Points:
 //   - TestRunner.java     : calls ReportManager.recordResult() after each test case
 //   - Hooks.java          : calls ReportManager.setScenarioError() on scenario failure
+//   - StepDefinitions     : calls ReportManager.recordStep() after each step execution
 //   - HtmlReportGenerator : consumes ReportManager.getResults() to build the HTML dashboard
 //   - JUnitXmlGenerator   : consumes ReportManager.getResults() to build Bamboo-compatible XML
 //
@@ -35,6 +36,9 @@ public class ReportManager
     // Thread-safe list — safe for concurrent writes if parallel execution is ever enabled
     private static final CopyOnWriteArrayList<TestCaseResult> iResults = new CopyOnWriteArrayList<>();
 
+    // Current test case being built (used to accumulate steps before final recordResult)
+    private static final ThreadLocal<TestCaseResult> iCurrentTestCase = new ThreadLocal<>();
+
     // Execution-level metadata
     private static String iSuiteStartTime  = "";
     private static String iSuiteEndTime    = "";
@@ -60,8 +64,8 @@ public class ReportManager
     public static void startSuite(String pEnvironment, String pBrowser)
     {
         iResults.clear();
-        iEnvironment   = pEnvironment == null ? "" : pEnvironment.trim();
-        iBrowser       = pBrowser     == null ? "" : pBrowser.trim();
+        iEnvironment    = pEnvironment == null ? "" : pEnvironment.trim();
+        iBrowser        = pBrowser     == null ? "" : pBrowser.trim();
         iSuiteStartTime = LocalDateTime.now().format(iDisplayFormatter);
 
         log.info("[ReportManager] Suite started | Environment=" + iEnvironment + " | Browser=" + iBrowser);
@@ -81,9 +85,103 @@ public class ReportManager
     }
 
     // ***************************************************************************************************************************************************************************************
+    // Function Name : beginTestCase
+    // Description   : Initialises a new TestCaseResult on the current thread so that subsequent
+    //                 recordStep() calls can attach step data before the final recordResult().
+    // Parameters    : pTestCaseID  (String) - test case identifier
+    //                 pDescription (String) - test case description from ExecutionControl
+    //                 pTags        (String) - Cucumber tags associated with the test case
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void beginTestCase(String pTestCaseID, String pDescription, String pTags)
+    {
+        TestCaseResult iResult = new TestCaseResult();
+        iResult.iTestCaseID  = pTestCaseID  == null ? "" : pTestCaseID.trim();
+        iResult.iDescription = pDescription == null ? "" : pDescription.trim();
+        iResult.iTags        = pTags        == null ? "" : pTags.trim();
+        iCurrentTestCase.set(iResult);
+
+        log.info("[ReportManager] Test case started : " + iResult.iTestCaseID);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : recordStep
+    // Description   : Records the result of a single Gherkin step (Given / When / Then / And / But).
+    //                 Called from CucumberStepListener or from each step-definition method.
+    //                 If beginTestCase() was not called beforehand, this method is a no-op and logs a warning.
+    // Parameters    : pStepKeyword   (String) - Gherkin keyword (Given, When, Then, And, But)
+    //                 pStepText      (String) - step text as written in the .feature file
+    //                 pStatus        (String) - PASS | FAIL | SKIP
+    //                 pDurationMs    (long)   - step execution duration in milliseconds
+    //                 pLogMessage    (String) - detailed log of what happened during the step
+    //                 pErrorMessage  (String) - failure reason (null or blank if PASS)
+    //                 pScreenshotPath(String) - path to screenshot captured during/after this step
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void recordStep(
+            String pStepKeyword,
+            String pStepText,
+            String pStatus,
+            long   pDurationMs,
+            String pLogMessage,
+            String pErrorMessage,
+            String pScreenshotPath)
+    {
+        TestCaseResult iCurrent = iCurrentTestCase.get();
+        if (iCurrent == null)
+        {
+            log.warning("[ReportManager] recordStep called but no test case is active on this thread.");
+            return;
+        }
+
+        StepResult iStep = new StepResult();
+        iStep.iStepKeyword    = pStepKeyword    == null ? ""      : pStepKeyword.trim();
+        iStep.iStepText       = pStepText       == null ? ""      : pStepText.trim();
+        iStep.iStatus         = pStatus         == null ? "SKIP"  : pStatus.trim().toUpperCase();
+        iStep.iDurationMs     = pDurationMs;
+        iStep.iLogMessage     = pLogMessage     == null ? ""      : pLogMessage.trim();
+        iStep.iErrorMessage   = pErrorMessage   == null ? ""      : pErrorMessage.trim();
+        iStep.iScreenshotPath = pScreenshotPath == null ? ""      : pScreenshotPath.trim();
+        iStep.iTimestamp       = LocalDateTime.now().format(iDisplayFormatter);
+
+        iCurrent.iSteps.add(iStep);
+        log.info("[ReportManager] Step recorded | " + iStep.iStepKeyword + " " + iStep.iStepText
+                + " | " + iStep.iStatus + " | " + iStep.getDurationFormatted());
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : addStepLog
+    // Description   : Appends an additional log line to the most recently recorded step in the
+    //                 current test case. Useful when a single step-definition performs multiple
+    //                 actions and each action's outcome needs to be captured.
+    // Parameters    : pLogLine (String) - log line to append
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void addStepLog(String pLogLine)
+    {
+        TestCaseResult iCurrent = iCurrentTestCase.get();
+        if (iCurrent == null || iCurrent.iSteps.isEmpty()) return;
+
+        StepResult iLastStep = iCurrent.iSteps.get(iCurrent.iSteps.size() - 1);
+        if (iLastStep.iLogMessage.isEmpty())
+        {
+            iLastStep.iLogMessage = pLogLine;
+        }
+        else
+        {
+            iLastStep.iLogMessage += "\n" + pLogLine;
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
     // Function Name : recordResult
     // Description   : Records the full result of a single test case execution after it completes.
     //                 Called from TestRunner after each Cucumber Main.run() invocation.
+    //                 If beginTestCase() was called, the accumulated steps are preserved;
+    //                 otherwise a standalone result is created.
     // Parameters    : pTestCaseID    (String)  - test case identifier
     //                 pDescription   (String)  - test case description from ExecutionControl
     //                 pStatus        (String)  - PASS | FAIL | ERROR
@@ -107,7 +205,13 @@ public class ReportManager
             String pEnvironment,
             String pBrowser)
     {
-        TestCaseResult iResult = new TestCaseResult();
+        // If beginTestCase() was used, pick up the accumulated steps
+        TestCaseResult iResult = iCurrentTestCase.get();
+        if (iResult == null)
+        {
+            iResult = new TestCaseResult();
+        }
+
         iResult.iTestCaseID     = pTestCaseID     == null ? ""      : pTestCaseID.trim();
         iResult.iDescription    = pDescription    == null ? ""      : pDescription.trim();
         iResult.iStatus         = pStatus         == null ? "ERROR" : pStatus.trim().toUpperCase();
@@ -119,9 +223,21 @@ public class ReportManager
         iResult.iBrowser        = pBrowser        == null ? ""      : pBrowser.trim();
         iResult.iTimestamp      = LocalDateTime.now().format(iDisplayFormatter);
 
+        // Derive overall status from steps if steps exist and no explicit FAIL/ERROR was passed in
+        if (!iResult.iSteps.isEmpty() && "PASS".equals(iResult.iStatus))
+        {
+            boolean iHasFail  = iResult.iSteps.stream().anyMatch(s -> "FAIL".equalsIgnoreCase(s.iStatus));
+            boolean iHasError = iResult.iSteps.stream().anyMatch(s -> "ERROR".equalsIgnoreCase(s.iStatus));
+            if (iHasFail)       iResult.iStatus = "FAIL";
+            else if (iHasError) iResult.iStatus = "ERROR";
+        }
+
         iResults.add(iResult);
+        iCurrentTestCase.remove();
+
         log.info("[ReportManager] Recorded | " + iResult.iTestCaseID + " | " + iResult.iStatus
-                + " | " + iResult.getDurationFormatted());
+                + " | " + iResult.getDurationFormatted()
+                + " | Steps=" + iResult.iSteps.size());
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -139,11 +255,41 @@ public class ReportManager
     // -------------------------------------------------------------------------------------------------------------------------------
     // Suite-level aggregation helpers
     // -------------------------------------------------------------------------------------------------------------------------------
-    public static int getTotalCount()   { return iResults.size(); }
-    public static int getPassCount()    { return (int) iResults.stream().filter(r -> "PASS".equals(r.iStatus)).count(); }
-    public static int getFailCount()    { return (int) iResults.stream().filter(r -> "FAIL".equals(r.iStatus)).count(); }
-    public static int getErrorCount()   { return (int) iResults.stream().filter(r -> "ERROR".equals(r.iStatus)).count(); }
+    public static int  getTotalCount()      { return iResults.size(); }
+    public static int  getPassCount()       { return (int) iResults.stream().filter(r -> "PASS".equals(r.iStatus)).count(); }
+    public static int  getFailCount()       { return (int) iResults.stream().filter(r -> "FAIL".equals(r.iStatus)).count(); }
+    public static int  getErrorCount()      { return (int) iResults.stream().filter(r -> "ERROR".equals(r.iStatus)).count(); }
+    public static int  getSkipCount()       { return (int) iResults.stream().filter(r -> "SKIP".equals(r.iStatus)).count(); }
     public static long getTotalDurationMs() { return iResults.stream().mapToLong(r -> r.iDurationMs).sum(); }
+
+    public static int getTotalStepCount()
+    {
+        return iResults.stream().mapToInt(r -> r.iSteps.size()).sum();
+    }
+
+    public static int getPassedStepCount()
+    {
+        return (int) iResults.stream()
+                .flatMap(r -> r.iSteps.stream())
+                .filter(s -> "PASS".equalsIgnoreCase(s.iStatus))
+                .count();
+    }
+
+    public static int getFailedStepCount()
+    {
+        return (int) iResults.stream()
+                .flatMap(r -> r.iSteps.stream())
+                .filter(s -> "FAIL".equalsIgnoreCase(s.iStatus))
+                .count();
+    }
+
+    public static int getSkippedStepCount()
+    {
+        return (int) iResults.stream()
+                .flatMap(r -> r.iSteps.stream())
+                .filter(s -> "SKIP".equalsIgnoreCase(s.iStatus))
+                .count();
+    }
 
     public static String getPassPercent()
     {
@@ -168,13 +314,52 @@ public class ReportManager
 
     public static String getSuiteDurationFormatted()
     {
-        long iMs = getTotalDurationMs();
+        long iMs   = getTotalDurationMs();
         long iSecs = (iMs / 1000) % 60;
         long iMins = (iMs / (1000 * 60)) % 60;
         long iHrs  = iMs / (1000 * 60 * 60);
         return String.format("%02dh %02dm %02ds", iHrs, iMins, iSecs);
     }
 
+    // ===============================================================================================================================
+    // INNER CLASS : StepResult — data model for a single Gherkin step execution result
+    // ===============================================================================================================================
+
+    public static class StepResult
+    {
+        public String iStepKeyword    = "";   // Given | When | Then | And | But
+        public String iStepText       = "";   // Step text from the feature file
+        public String iStatus         = "";   // PASS | FAIL | SKIP
+        public long   iDurationMs     = 0L;
+        public String iLogMessage     = "";   // Detailed log of what happened in this step
+        public String iErrorMessage   = "";   // Failure reason (blank if PASS)
+        public String iScreenshotPath = "";   // Path to screenshot (blank if none)
+        public String iTimestamp      = "";
+
+        public String getDurationFormatted()
+        {
+            if (iDurationMs < 1000) return iDurationMs + "ms";
+            long iSecs = (iDurationMs / 1000) % 60;
+            long iMins = (iDurationMs / (1000 * 60)) % 60;
+            if (iMins > 0) return String.format("%dm %02ds", iMins, iSecs);
+            return iSecs + "s";
+        }
+
+        public boolean isPassed()  { return "PASS".equalsIgnoreCase(iStatus); }
+        public boolean isFailed()  { return "FAIL".equalsIgnoreCase(iStatus); }
+        public boolean isSkipped() { return "SKIP".equalsIgnoreCase(iStatus); }
+
+        public String getStatusBadgeClass()
+        {
+            switch (iStatus.toUpperCase())
+            {
+                case "PASS": return "badge-pass";
+                case "FAIL": return "badge-fail";
+                case "SKIP": return "badge-skip";
+                default:     return "badge-error";
+            }
+        }
+    }
 
     // ===============================================================================================================================
     // INNER CLASS : TestCaseResult — data model for a single test case execution result
@@ -193,6 +378,9 @@ public class ReportManager
         public String iBrowser         = "";
         public String iTimestamp       = "";
 
+        // Step-level results — populated by recordStep() during test execution
+        public List<StepResult> iSteps = new ArrayList<>();
+
         public String getDurationFormatted()
         {
             long iSecs = (iDurationMs / 1000) % 60;
@@ -203,6 +391,21 @@ public class ReportManager
         public boolean isPassed()  { return "PASS".equalsIgnoreCase(iStatus); }
         public boolean isFailed()  { return "FAIL".equalsIgnoreCase(iStatus); }
         public boolean isError()   { return "ERROR".equalsIgnoreCase(iStatus); }
+
+        public int getStepPassCount()
+        {
+            return (int) iSteps.stream().filter(StepResult::isPassed).count();
+        }
+
+        public int getStepFailCount()
+        {
+            return (int) iSteps.stream().filter(StepResult::isFailed).count();
+        }
+
+        public int getStepSkipCount()
+        {
+            return (int) iSteps.stream().filter(StepResult::isSkipped).count();
+        }
 
         public String getStatusBadgeClass()
         {
