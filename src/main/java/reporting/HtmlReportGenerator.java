@@ -29,6 +29,23 @@ public class HtmlReportGenerator
 {
     private static final Logger log = Logger.getLogger(HtmlReportGenerator.class.getName());
 
+    // Default output path — matches the Bamboo artifact definition in BissAutomationPlan.java
+    private static final String iDefaultOutputPath = System.getProperty(
+            "html.report.path", "Test_Report/html/BISS_Execution_Report.html");
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : generate (no-arg overload)
+    // Description   : Builds and writes the full HTML report to the default output path.
+    //                 This is the overload called by TestRunner.java after the suite completes.
+    // Parameters    : None
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void generate()
+    {
+        generate(iDefaultOutputPath);
+    }
+
     // ***************************************************************************************************************************************************************************************
     // Function Name : generate
     // Description   : Builds and writes the full HTML report to the specified file path.
