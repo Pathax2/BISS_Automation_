@@ -7,6 +7,8 @@
 // Author        : Aniket Pathare | aniket.pathare@goverment.ie
 // Date Created  : 10-03-2026
 // Updated       : 26-03-2026 — Phase 1: step log table, cover page metadata, clearStepLog()
+// Updated       : 28-03-2026 — Self-healing LIST: isPanelVisible(), waitForOptionPresent(), overlay-dialog fallback
+// Updated       : 28-03-2026 — Phase 2 reporting: root-cause categorisation, enhanced colour-coded table, HTML report index
 // ===================================================================================================================================
 
 package commonFunctions;
@@ -16,7 +18,6 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
-import org.apache.poi.util.Units;
 import org.apache.poi.xwpf.usermodel.Document;
 import org.apache.poi.xwpf.usermodel.ParagraphAlignment;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
@@ -37,12 +38,16 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
@@ -659,6 +664,22 @@ public class CommonFunctions
         }
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performList
+    // Description   : Self-healing dropdown handler supporting mat-select, native <select>, and Angular Material
+    //                 options rendered inside cdk-overlay-container / mat-dialog portals.
+    //
+    //                 Strategy:
+    //                   1. Resolve the element via the supplied locator.
+    //                   2. If tag is mat-select  → delegate to performMatSelect (full panel open + option search).
+    //                   3. If tag is select      → delegate to performNativeSelect.
+    //                   4. Otherwise (e.g. locator already points at the option itself, or an overlay wrapper)
+    //                      → fall back to performOverlayOptionClick which uses a root-scoped FluentWait
+    //                        to find the visible option and click it directly — bypassing the panel wait
+    //                        that breaks when the dropdown is hosted inside a mat-dialog portal.
+    //
+    // Date Updated  : 28-03-2026
+    // ***************************************************************************************************************************************************************************************
     private static void performList(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
     {
         if (pValue == null || pValue.trim().isEmpty())
@@ -672,26 +693,193 @@ public class CommonFunctions
         scrollIntoView(pDriver, iElement);
         highlightElement(pDriver, iElement);
 
-        String iTagName    = iElement.getTagName().toLowerCase().trim();
-        String iListValue  = pValue.trim();
+        String iTagName   = iElement.getTagName().toLowerCase().trim();
+        String iListValue = pValue.trim();
 
         log.info("[" + getCurrentTimestamp() + "] LIST | tag=<" + iTagName + "> | value=" + iListValue);
 
         if ("mat-select".equals(iTagName))
         {
+            // ── Standard mat-select: open panel then search for option ────────────────
             performMatSelect(pDriver, pWait, iElement, iListValue);
         }
         else if ("select".equals(iTagName))
         {
+            // ── Native HTML <select> ──────────────────────────────────────────────────
             pWait.until(iWebDriver -> new Select(iElement).getOptions().size() > 0);
             performNativeSelect(iElement, iListValue);
         }
         else
         {
-            log.warning("[" + getCurrentTimestamp() + "] LIST | Unexpected tag <" + iTagName
-                    + "> — attempting mat-select click approach as fallback.");
-            performMatSelect(pDriver, pWait, iElement, iListValue);
+            // ── Overlay / dialog portal case ──────────────────────────────────────────
+            // The locator resolved to a non-select element (e.g. mat-option span, or a
+            // wrapper div). This happens when the dropdown panel is hosted inside a
+            // cdk-overlay-container that is a sibling of the mat-dialog — the mat-select
+            // tag is never found by the original locator.  Skip the panel guard and
+            // click the option directly from the document root.
+            log.warning("[" + getCurrentTimestamp() + "] LIST | tag=<" + iTagName
+                    + "> is not a recognised dropdown tag. "
+                    + "Attempting overlay direct-option click for value: '" + iListValue + "'");
+            performOverlayOptionClick(pDriver, pWait, pBy, iListValue);
         }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performOverlayOptionClick
+    // Description   : Fallback handler for mat-option elements rendered inside the CDK overlay portal
+    //                 (e.g. when a mat-select is hosted inside a mat-dialog side panel).
+    //
+    //                 The standard performMatSelect waits for div[role='listbox'] panel visibility
+    //                 before searching options.  When the dropdown panel CSS does not match —
+    //                 which happens inside mat-dialog overlays — that wait times out even though
+    //                 the options are already in the DOM.
+    //
+    //                 This method skips the panel guard entirely:
+    //                   1. Soft-checks whether any known panel selector is visible (info only).
+    //                   2. Uses FluentWait scoped to the document root to find a visible mat-option
+    //                      whose text matches pValue.
+    //                   3. Clicks it with JS fallback if direct click is intercepted.
+    //
+    // Date Created  : 28-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void performOverlayOptionClick(WebDriver pDriver, WebDriverWait pWait,
+                                                  By pBy, String pValue)
+    {
+        // ── Step 1 : Non-blocking panel visibility check (diagnostic only) ───────────
+        boolean iPanelFound = isPanelVisible(pDriver);
+
+        if (iPanelFound)
+        {
+            log.info("[" + getCurrentTimestamp() + "] OVERLAY-LIST | Panel detected via soft check.");
+        }
+        else
+        {
+            log.warning("[" + getCurrentTimestamp() + "] OVERLAY-LIST | Panel not detected via standard CSS — "
+                    + "options may still be in DOM. Proceeding with root-scoped option search.");
+        }
+
+        // ── Step 2 : FluentWait for visible option from document root ─────────────────
+        WebElement iOption = waitForOptionPresent(pDriver, pWait, pBy, pValue);
+
+        // ── Step 3 : Scroll, highlight and click ─────────────────────────────────────
+        scrollIntoView(pDriver, iOption);
+        highlightElement(pDriver, iOption);
+
+        try
+        {
+            pWait.until(ExpectedConditions.elementToBeClickable(iOption));
+            iOption.click();
+            log.info("[" + getCurrentTimestamp() + "] OVERLAY-LIST | Option clicked: '" + pValue + "'");
+        }
+        catch (ElementClickInterceptedException iException)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] OVERLAY-LIST | Click intercepted → JS click for: '"
+                    + pValue + "'");
+            ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", iOption);
+        }
+        catch (ElementNotInteractableException iException)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] OVERLAY-LIST | Element not interactable → JS click for: '"
+                    + pValue + "'");
+            ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", iOption);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isPanelVisible
+    // Description   : Non-blocking check across multiple known Angular Material panel CSS selectors.
+    //                 Returns true as soon as any selector resolves to a visible element.
+    //                 Used diagnostically before the overlay option click — does NOT throw on failure.
+    //
+    // Date Created  : 28-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private static boolean isPanelVisible(WebDriver pDriver)
+    {
+        String[] iPanelSelectors = {
+                "div[role='listbox'].mat-mdc-select-panel",
+                "div[role='listbox'].mdc-menu-surface--open",
+                "div[role='listbox']",
+                ".cdk-overlay-container mat-option"   // at least one option rendered in portal
+        };
+
+        for (String iSelector : iPanelSelectors)
+        {
+            try
+            {
+                java.util.List<WebElement> iElements = pDriver.findElements(By.cssSelector(iSelector));
+
+                if (!iElements.isEmpty() && iElements.get(0).isDisplayed())
+                {
+                    log.info("[" + getCurrentTimestamp() + "] isPanelVisible | Matched: " + iSelector);
+                    return true;
+                }
+            }
+            catch (Exception iException)
+            {
+                // selector produced no match — try next
+            }
+        }
+
+        return false;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : waitForOptionPresent
+    // Description   : FluentWait that searches the document root for a visible mat-option whose
+    //                 displayed text matches pValue (case-insensitive, normalised whitespace).
+    //                 Automatically retries on StaleElementReferenceException and NoSuchElementException.
+    //                 Throws TimeoutException with a descriptive message if the option is not found
+    //                 within 30 seconds.
+    //
+    // Date Created  : 28-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private static WebElement waitForOptionPresent(WebDriver pDriver, WebDriverWait pWait,
+                                                   By pBy, String pValue)
+    {
+        // CSS selectors covering both standard and optionListItem-classed mat-options
+        By iRootOptionBy = By.cssSelector(
+                "mat-option.optionListItem, " +
+                        "mat-option:not(.contains-mat-select-search)"
+        );
+
+        Wait<WebDriver> iFluentWait = new FluentWait<>(pDriver)
+                .withTimeout(Duration.ofSeconds(30))
+                .pollingEvery(Duration.ofMillis(500))
+                .ignoring(StaleElementReferenceException.class)
+                .ignoring(NoSuchElementException.class)
+                .withMessage("Option '" + pValue + "' not found in DOM via root-scoped search.");
+
+        WebElement iFound = iFluentWait.until(iDriver ->
+        {
+            java.util.List<WebElement> iOptions = iDriver.findElements(iRootOptionBy);
+
+            for (WebElement iOpt : iOptions)
+            {
+                try
+                {
+                    if (!iOpt.isDisplayed())
+                    {
+                        continue;
+                    }
+
+                    String iText = iOpt.getText().trim();
+
+                    if (iText.equalsIgnoreCase(pValue))
+                    {
+                        return iOpt;
+                    }
+                }
+                catch (StaleElementReferenceException iStale)
+                {
+                    return null;  // trigger FluentWait retry
+                }
+            }
+
+            return null;  // not found yet — FluentWait will retry
+        });
+
+        log.info("[" + getCurrentTimestamp() + "] waitForOptionPresent | Found option: '" + pValue + "'");
+        return iFound;
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -731,15 +919,35 @@ public class CommonFunctions
                         "div[role='listbox']"
         );
 
-        WebElement iPanel = pWait.until(
-                ExpectedConditions.visibilityOfElementLocated(iPanelBy)
-        );
+        WebElement iPanel = null;
 
-        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened.");
+        try
+        {
+            iPanel = pWait.until(ExpectedConditions.visibilityOfElementLocated(iPanelBy));
+            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened via standard CSS wait.");
+        }
+        catch (org.openqa.selenium.TimeoutException iPanelTimeout)
+        {
+            // Panel CSS did not match — this happens when mat-select is hosted inside a
+            // mat-dialog / cdk-overlay-container portal (different DOM nesting).
+            // Fall back to the overlay direct-option click strategy which bypasses the panel guard.
+            log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | Standard panel CSS wait timed out. "
+                    + "Delegating to overlay option click fallback for value: '" + pValue + "'");
+            performOverlayOptionClick(pDriver, pWait,
+                    By.cssSelector("mat-option.optionListItem, mat-option:not(.contains-mat-select-search)"),
+                    pValue);
+            return;
+        }
+
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel confirmed open.");
+
+        // Assign to effectively-final reference — iPanel was assigned inside try/catch
+        // so Java does not consider it effectively final. iFinalPanel is required for lambdas.
+        final WebElement iFinalPanel = iPanel;
 
         // ── STEP 3 : DETECT SEARCH MODE ──────────────────────────────────────────────────
         boolean iIsSearchable =
-                !iPanel.findElements(By.cssSelector("mat-option.contains-mat-select-search")).isEmpty();
+                !iFinalPanel.findElements(By.cssSelector("mat-option.contains-mat-select-search")).isEmpty();
 
         if (iIsSearchable)
         {
@@ -759,7 +967,7 @@ public class CommonFunctions
 
             java.util.List<WebElement> iOptions = pWait.until(driver ->
             {
-                java.util.List<WebElement> opts = iPanel.findElements(iOptionLocator);
+                java.util.List<WebElement> opts = iFinalPanel.findElements(iOptionLocator);
                 return (opts.size() > iIndex) ? opts : null;
             });
 
@@ -802,7 +1010,7 @@ public class CommonFunctions
                 log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Search typed: '" + iFinalText + "'");
 
                 pWait.until(driver ->
-                        !iPanel.findElements(By.cssSelector("mat-option.optionListItem")).isEmpty()
+                        !iFinalPanel.findElements(By.cssSelector("mat-option.optionListItem")).isEmpty()
                 );
             }
 
@@ -812,7 +1020,7 @@ public class CommonFunctions
 
             WebElement iTarget = pWait.until(driver ->
             {
-                java.util.List<WebElement> options = iPanel.findElements(iOptionsBy);
+                java.util.List<WebElement> options = iFinalPanel.findElements(iOptionsBy);
 
                 for (WebElement opt : options)
                 {
@@ -834,7 +1042,7 @@ public class CommonFunctions
                 StringBuilder buf = new StringBuilder();
                 try
                 {
-                    iPanel.findElements(By.cssSelector(
+                    iFinalPanel.findElements(By.cssSelector(
                             "mat-option.optionListItem, mat-option:not(.contains-mat-select-search)")
                     ).forEach(o -> buf.append("'").append(o.getText().trim()).append("' | "));
                 }
@@ -1365,13 +1573,14 @@ public class CommonFunctions
 
             long iDuration = System.currentTimeMillis() - iStartTime;
             logStepPass(iActionType, pIdentifyBy, pObjectName, iResolvedValue, iDuration);
-            appendToStepLog(iActionType, pObjectName, iResolvedValue, "PASS", iDuration, ""); // ← Phase 1: record PASS
+            appendToStepLog(iActionType, pObjectName, iResolvedValue, "PASS", iDuration, "", "");
         }
         catch (Exception iException)
         {
-            long iDuration = System.currentTimeMillis() - iStartTime;
+            long   iDuration  = System.currentTimeMillis() - iStartTime;
+            String iRootCause = classifyException(iException);
             logStepFail(pActionType, pIdentifyBy, pObjectName, pValueToEnter, iDuration, iException.getMessage());
-            appendToStepLog(pActionType, pObjectName, pValueToEnter, "FAIL", iDuration, iException.getMessage()); // ← Phase 1: record FAIL
+            appendToStepLog(pActionType, pObjectName, pValueToEnter, "FAIL", iDuration, iException.getMessage(), iRootCause);
             throw new RuntimeException("iAction failed | Action=[" + pActionType + "] | Object=[" + pObjectName + "] | Reason : " + iException.getMessage(), iException);
         }
 
@@ -1467,7 +1676,8 @@ public class CommonFunctions
     // Date Created  : 26-03-2026
     // ***************************************************************************************************************************************************************************************
     private static void appendToStepLog(String pAction, String pLocator, String pValue,
-                                        String pStatus, long pDurationMs, String pFailReason)
+                                        String pStatus, long pDurationMs, String pFailReason,
+                                        String pRootCause)
     {
         try
         {
@@ -1481,12 +1691,95 @@ public class CommonFunctions
             }
 
             iStepLog.add(new StepLogEntry(iStepCounter, pAction, pLocator,
-                    iDisplayValue, pStatus, pDurationMs, pFailReason));
+                    iDisplayValue, pStatus, pDurationMs, pFailReason, pRootCause));
         }
         catch (Exception iException)
         {
             log.warning("[" + getCurrentTimestamp() + "] Step log append failed: " + iException.getMessage());
         }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : classifyException
+    // Description   : Inspects a caught exception and returns a short root-cause label for the step log.
+    //                 Six buckets cover the vast majority of Selenium test failures:
+    //
+    //                   ELEMENT_NOT_FOUND  — NoSuchElementException or element-not-visible timeouts
+    //                   TIMEOUT            — TimeoutException from WebDriverWait / FluentWait
+    //                   ASSERTION_ERROR    — AssertionError thrown by VERIFYTEXT / VERIFYELEMENT
+    //                   CLICK_INTERCEPTED  — ElementClickInterceptedException / ElementNotInteractable
+    //                   STALE_ELEMENT      — StaleElementReferenceException
+    //                   UNEXPECTED_ERROR   — anything else (framework bugs, JS errors, IO, etc.)
+    //
+    // Parameters    : pException (Exception) - the exception caught in iAction's catch block
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 28-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static String classifyException(Exception pException)
+    {
+        if (pException == null)
+        {
+            return "UNEXPECTED_ERROR";
+        }
+
+        // Walk the full cause chain — the root cause may be wrapped in a RuntimeException
+        Throwable iCause = pException;
+        while (iCause.getCause() != null)
+        {
+            iCause = iCause.getCause();
+        }
+
+        String iClassName = iCause.getClass().getSimpleName();
+        String iMessage   = iCause.getMessage() == null ? "" : iCause.getMessage().toLowerCase();
+
+        // Assertion failures — VERIFYTEXT / VERIFYELEMENT
+        if (iCause instanceof AssertionError
+                || iClassName.contains("AssertionError")
+                || iMessage.contains("verifytext failed")
+                || iMessage.contains("verifyelement failed"))
+        {
+            return "ASSERTION_ERROR";
+        }
+
+        // Element not found — NoSuchElement or visibility timeout
+        if (iCause instanceof NoSuchElementException
+                || iClassName.contains("NoSuchElement")
+                || (iCause instanceof org.openqa.selenium.TimeoutException
+                && (iMessage.contains("visibility") || iMessage.contains("located"))))
+        {
+            return "ELEMENT_NOT_FOUND";
+        }
+
+        // Generic timeout — FluentWait / WebDriverWait exhausted
+        if (iCause instanceof org.openqa.selenium.TimeoutException
+                || iClassName.contains("TimeoutException")
+                || iMessage.contains("timed out")
+                || iMessage.contains("waited for"))
+        {
+            return "TIMEOUT";
+        }
+
+        // Click intercepted or element not interactable
+        if (iCause instanceof ElementClickInterceptedException
+                || iCause instanceof ElementNotInteractableException
+                || iClassName.contains("ElementClick")
+                || iClassName.contains("NotInteractable")
+                || iMessage.contains("intercepted")
+                || iMessage.contains("not interactable"))
+        {
+            return "CLICK_INTERCEPTED";
+        }
+
+        // Stale element — DOM was rebuilt between locate and interact
+        if (iCause instanceof StaleElementReferenceException
+                || iClassName.contains("StaleElement")
+                || iMessage.contains("stale element"))
+        {
+            return "STALE_ELEMENT";
+        }
+
+        // Anything else — framework error, JS exception, IO, NullPointer, etc.
+        return "UNEXPECTED_ERROR";
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -1665,6 +1958,32 @@ public class CommonFunctions
                 throw new RuntimeException("Word report path is blank. Cannot finalize report.");
             }
 
+            // ── PRE-COMPUTE SUMMARY STATS ──────────────────────────────────────────────────
+            int iPassCount = 0;
+            int iFailCount = 0;
+            Map<String, Integer> iRootCauseCounts = new java.util.LinkedHashMap<>();
+
+            for (StepLogEntry iEntry : iStepLog)
+            {
+                if ("PASS".equals(iEntry.iStatus))
+                {
+                    iPassCount++;
+                }
+                else
+                {
+                    iFailCount++;
+                    if (!iEntry.iRootCause.isEmpty())
+                    {
+                        iRootCauseCounts.merge(iEntry.iRootCause, 1, Integer::sum);
+                    }
+                }
+            }
+
+            int    iTotalSteps = iPassCount + iFailCount;
+            String iPassRate   = iTotalSteps == 0 ? "N/A"
+                    : String.format("%.1f%%", (iPassCount * 100.0) / iTotalSteps);
+            String iOverallStatus = iFailCount == 0 ? "PASS" : "FAIL";
+
             // ── STEP LOG TABLE ─────────────────────────────────────────────────────────────
             if (!iStepLog.isEmpty())
             {
@@ -1676,13 +1995,13 @@ public class CommonFunctions
                 iHeadRun.setText("Step Execution Log  (" + iStepLog.size() + " steps)");
                 iHeadRun.addBreak();
 
-                // Table: header row + one data row per step
+                // Table: header row + one data row per step + one summary row
                 org.apache.poi.xwpf.usermodel.XWPFTable iTable =
-                        pDocument.createTable(iStepLog.size() + 1, 6);
+                        pDocument.createTable(iStepLog.size() + 2, 7);
                 iTable.setWidth("100%");
 
-                // ── Header row — dark navy ─────────────────────────────────────────────────
-                String[] iHeaders = { "#", "Action", "Element (locator)", "Value", "Status", "Duration" };
+                // ── Header row — dark navy, 7 columns ─────────────────────────────────────
+                String[] iHeaders = { "#", "Action", "Element (locator)", "Value", "Status", "Duration", "Root Cause" };
                 org.apache.poi.xwpf.usermodel.XWPFTableRow iHeaderRow = iTable.getRow(0);
                 for (int c = 0; c < iHeaders.length; c++)
                 {
@@ -1696,39 +2015,204 @@ public class CommonFunctions
                     iRun.setText(iHeaders[c]);
                 }
 
-                // ── Data rows — light green for PASS, light red for FAIL ──────────────────
+                // ── Data rows ─────────────────────────────────────────────────────────────
+                //   PASS rows : light green background  (#E2EFDA), dark-green status text (#375623)
+                //   FAIL rows : light red background    (#FCE4D6), dark-red   status text (#9C0006)
+                //   Root cause: displayed in the 7th column in bold orange for FAIL rows
                 for (int r = 0; r < iStepLog.size(); r++)
                 {
                     StepLogEntry iEntry  = iStepLog.get(r);
                     boolean      iPassed = "PASS".equals(iEntry.iStatus);
-                    String       iColor  = iPassed ? "E2EFDA" : "FCE4D6";
+
+                    // Row fill: slightly darker shade than before for higher contrast
+                    String iRowColor   = iPassed ? "C6EFCE" : "FFC7CE";
 
                     org.apache.poi.xwpf.usermodel.XWPFTableRow iRow = iTable.getRow(r + 1);
 
-                    String[] iValues = {
+                    String[] iCellValues = {
                             String.valueOf(iEntry.iStepNumber),
                             iEntry.iAction,
                             iEntry.iLocator,
                             iEntry.iValue,
                             iEntry.iStatus,
-                            iEntry.iDurationMs + " ms"
-                                    + ((!iPassed && !iEntry.iFailReason.isEmpty()) ? "  —  " + iEntry.iFailReason : "")
+                            iEntry.iDurationMs + " ms",
+                            iEntry.iRootCause
                     };
 
-                    for (int c = 0; c < iValues.length; c++)
+                    for (int c = 0; c < iCellValues.length; c++)
                     {
                         org.apache.poi.xwpf.usermodel.XWPFTableCell iCell = iRow.getCell(c);
-                        iCell.setColor(iColor);
+                        iCell.setColor(iRowColor);
                         XWPFRun iRun = iCell.getParagraphArray(0).createRun();
                         iRun.setFontSize(8);
                         iRun.setFontFamily("Calibri");
-                        iRun.setBold(c == 4);
-                        if (c == 4) { iRun.setColor(iPassed ? "375623" : "9C0006"); }
-                        iRun.setText(iValues[c]);
+
+                        // Status column (col 4): bold + dark green or dark red text
+                        if (c == 4)
+                        {
+                            iRun.setBold(true);
+                            iRun.setColor(iPassed ? "375623" : "9C0006");
+                        }
+                        // Root cause column (col 6): bold orange on FAIL rows, grey on PASS
+                        else if (c == 6)
+                        {
+                            iRun.setBold(!iPassed);
+                            iRun.setColor(iPassed ? "808080" : "C55A11");
+                        }
+
+                        // Fail reason appended into Duration cell on FAIL rows
+                        if (c == 5 && !iPassed && !iEntry.iFailReason.isEmpty())
+                        {
+                            iRun.setText(iEntry.iDurationMs + " ms  —  " + iEntry.iFailReason);
+                        }
+                        else
+                        {
+                            iRun.setText(iCellValues[c]);
+                        }
                     }
                 }
 
+                // ── Summary stats row — spans full width, dark grey background ─────────────
+                org.apache.poi.xwpf.usermodel.XWPFTableRow iSummaryRow = iTable.getRow(iStepLog.size() + 1);
+                String iSummaryBg = iFailCount == 0 ? "375623" : "9C0006";
+
+                String[] iSumValues = {
+                        "TOTAL: " + iTotalSteps,
+                        "PASS: " + iPassCount,
+                        "FAIL: " + iFailCount,
+                        "PASS RATE: " + iPassRate,
+                        iOverallStatus,
+                        "",
+                        ""
+                };
+
+                for (int c = 0; c < iSumValues.length; c++)
+                {
+                    org.apache.poi.xwpf.usermodel.XWPFTableCell iCell = iSummaryRow.getCell(c);
+                    iCell.setColor(iSummaryBg);
+                    XWPFRun iRun = iCell.getParagraphArray(0).createRun();
+                    iRun.setBold(true);
+                    iRun.setFontSize(9);
+                    iRun.setFontFamily("Calibri");
+                    iRun.setColor("FFFFFF");
+                    iRun.setText(iSumValues[c]);
+                }
+
                 pDocument.createParagraph().createRun().addBreak();
+
+                // ── Failure Summary section — only rendered when there are failures ─────────
+                if (iFailCount > 0)
+                {
+                    // Heading
+                    XWPFRun iFailHeadRun = pDocument.createParagraph().createRun();
+                    iFailHeadRun.setBold(true);
+                    iFailHeadRun.setFontSize(11);
+                    iFailHeadRun.setFontFamily("Calibri");
+                    iFailHeadRun.setColor("9C0006");
+                    iFailHeadRun.setText("Failure Summary");
+                    iFailHeadRun.addBreak();
+
+                    // Root cause breakdown table
+                    if (!iRootCauseCounts.isEmpty())
+                    {
+                        org.apache.poi.xwpf.usermodel.XWPFTable iRcTable =
+                                pDocument.createTable(iRootCauseCounts.size() + 1, 2);
+                        iRcTable.setWidth("50%");
+
+                        // Header
+                        org.apache.poi.xwpf.usermodel.XWPFTableRow iRcHeader = iRcTable.getRow(0);
+                        for (int c = 0; c < 2; c++)
+                        {
+                            org.apache.poi.xwpf.usermodel.XWPFTableCell iCell = iRcHeader.getCell(c);
+                            iCell.setColor("C55A11");
+                            XWPFRun iRun = iCell.getParagraphArray(0).createRun();
+                            iRun.setBold(true);
+                            iRun.setFontSize(9);
+                            iRun.setFontFamily("Calibri");
+                            iRun.setColor("FFFFFF");
+                            iRun.setText(c == 0 ? "Root Cause Category" : "Count");
+                        }
+
+                        // One row per root cause bucket
+                        int iRcRowIdx = 1;
+                        for (Map.Entry<String, Integer> iEntry : iRootCauseCounts.entrySet())
+                        {
+                            org.apache.poi.xwpf.usermodel.XWPFTableRow iRcRow = iRcTable.getRow(iRcRowIdx++);
+                            iRcRow.getCell(0).setColor("FBE4D5");
+                            iRcRow.getCell(1).setColor("FBE4D5");
+
+                            XWPFRun iLabelRun = iRcRow.getCell(0).getParagraphArray(0).createRun();
+                            iLabelRun.setFontSize(9);
+                            iLabelRun.setFontFamily("Calibri");
+                            iLabelRun.setBold(true);
+                            iLabelRun.setColor("C55A11");
+                            iLabelRun.setText(iEntry.getKey());
+
+                            XWPFRun iCountRun = iRcRow.getCell(1).getParagraphArray(0).createRun();
+                            iCountRun.setFontSize(9);
+                            iCountRun.setFontFamily("Calibri");
+                            iCountRun.setText(String.valueOf(iEntry.getValue()));
+                        }
+
+                        pDocument.createParagraph().createRun().addBreak();
+                    }
+
+                    // Inline list of each failed step with its locator and root cause
+                    List<StepLogEntry> iFailedSteps = new java.util.ArrayList<>();
+                    for (StepLogEntry iEntry : iStepLog)
+                    {
+                        if ("FAIL".equals(iEntry.iStatus))
+                        {
+                            iFailedSteps.add(iEntry);
+                        }
+                    }
+
+                    org.apache.poi.xwpf.usermodel.XWPFTable iFailTable =
+                            pDocument.createTable(iFailedSteps.size() + 1, 4);
+                    iFailTable.setWidth("100%");
+
+                    // Failed steps table header
+                    String[] iFHeaders = { "#", "Action  /  Element", "Root Cause", "Reason" };
+                    org.apache.poi.xwpf.usermodel.XWPFTableRow iFHeader = iFailTable.getRow(0);
+                    for (int c = 0; c < iFHeaders.length; c++)
+                    {
+                        org.apache.poi.xwpf.usermodel.XWPFTableCell iCell = iFHeader.getCell(c);
+                        iCell.setColor("9C0006");
+                        XWPFRun iRun = iCell.getParagraphArray(0).createRun();
+                        iRun.setBold(true);
+                        iRun.setFontSize(9);
+                        iRun.setFontFamily("Calibri");
+                        iRun.setColor("FFFFFF");
+                        iRun.setText(iFHeaders[c]);
+                    }
+
+                    for (int r = 0; r < iFailedSteps.size(); r++)
+                    {
+                        StepLogEntry iFs = iFailedSteps.get(r);
+                        org.apache.poi.xwpf.usermodel.XWPFTableRow iFRow = iFailTable.getRow(r + 1);
+
+                        String[] iFValues = {
+                                String.valueOf(iFs.iStepNumber),
+                                iFs.iAction + "  /  " + iFs.iLocator,
+                                iFs.iRootCause,
+                                iFs.iFailReason
+                        };
+
+                        for (int c = 0; c < iFValues.length; c++)
+                        {
+                            org.apache.poi.xwpf.usermodel.XWPFTableCell iCell = iFRow.getCell(c);
+                            iCell.setColor("FFC7CE");
+                            XWPFRun iRun = iCell.getParagraphArray(0).createRun();
+                            iRun.setFontSize(8);
+                            iRun.setFontFamily("Calibri");
+                            iRun.setBold(c == 2);
+                            if (c == 2) { iRun.setColor("9C0006"); }
+                            iRun.setText(iFValues[c]);
+                        }
+                    }
+
+                    pDocument.createParagraph().createRun().addBreak();
+                }
             }
             else
             {
@@ -1756,12 +2240,171 @@ public class CommonFunctions
             pDocument.close();
 
             log.info("[" + getCurrentTimestamp() + "] Word report finalized : " + pDocPath);
+
+            // ── HTML REPORT INDEX — append this test case to the shared index page ─────────
+            String iTestCaseID = new File(pDocPath).getName()
+                    .replaceAll("_\\d{2}_\\d{2}_\\d{4}_\\d{2}_\\d{2}_\\d{2}\\.docx$", "")
+                    .replace("_", " ");
+            writeHtmlReportIndex(pDocPath, iTestCaseID, iOverallStatus);
         }
         catch (Exception iException)
         {
             log.severe("[" + getCurrentTimestamp() + "] Failed to finalize Word report : " + iException.getMessage());
             throw new RuntimeException("Failed to finalize Word report : " + iException.getMessage(), iException);
         }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : writeHtmlReportIndex
+    // Description   : Creates or appends one row into Test_Report/ReportIndex.html — a single-page
+    //                 dashboard that lists every test case executed in this run with its overall
+    //                 PASS/FAIL status and a direct clickable hyperlink to the Word report file.
+    //
+    //                 The HTML file is created fresh on the first call (bootstrap = full page scaffold)
+    //                 and subsequent calls append a single <tr> row inside the existing <tbody>.
+    //                 A companion JavaScript snippet at the bottom of the page dynamically updates
+    //                 the summary counters so the page stays accurate after every append.
+    //
+    //                 Called automatically at the end of finalizeWordReport() — no manual invocation needed.
+    //
+    // Parameters    : pDocPath     (String) - absolute path to the .docx file (used as href target)
+    //                 pTestCaseID  (String) - human-readable test case label
+    //                 pStatus      (String) - "PASS" or "FAIL"
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 28-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void writeHtmlReportIndex(String pDocPath, String pTestCaseID, String pStatus)
+    {
+        try
+        {
+            File iReportDir  = new File(iReportDocsDirectoryPath);
+            if (!iReportDir.exists()) { iReportDir.mkdirs(); }
+
+            File   iIndexFile  = new File(iReportDir.getAbsolutePath() + File.separator + "ReportIndex.html");
+            String iTimestamp  = getCurrentTimestamp();
+            String iDocFile    = new File(pDocPath).getName();
+            boolean iPassed    = "PASS".equalsIgnoreCase(pStatus);
+
+            // Colour tokens — green for PASS, red for FAIL
+            String iBadgeBg    = iPassed ? "#375623" : "#9C0006";
+            String iRowBg      = iPassed ? "#C6EFCE" : "#FFC7CE";
+
+            // ── Bootstrap the HTML file if it doesn't exist yet ────────────────────────────
+            if (!iIndexFile.exists())
+            {
+                try (PrintWriter iWriter = new PrintWriter(iIndexFile, StandardCharsets.UTF_8.name()))
+                {
+                    iWriter.println("<!DOCTYPE html>");
+                    iWriter.println("<html lang='en'><head><meta charset='UTF-8'>");
+                    iWriter.println("<title>BISS Automation — Report Index</title>");
+                    iWriter.println("<style>");
+                    iWriter.println("  body  { font-family: Calibri, Arial, sans-serif; margin: 24px; background: #f5f5f5; }");
+                    iWriter.println("  h1    { color: #1F4E79; font-size: 22px; margin-bottom: 4px; }");
+                    iWriter.println("  p.sub { color: #555; font-size: 13px; margin-top: 0; }");
+                    iWriter.println("  .stats { display: flex; gap: 16px; margin: 16px 0; }");
+                    iWriter.println("  .stat  { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 10px 20px; font-size: 14px; }");
+                    iWriter.println("  .stat span { font-size: 24px; font-weight: bold; display: block; }");
+                    iWriter.println("  .pass-c { color: #375623; } .fail-c { color: #9C0006; }");
+                    iWriter.println("  table { border-collapse: collapse; width: 100%; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.1); }");
+                    iWriter.println("  th    { background: #1F4E79; color: #fff; padding: 8px 12px; text-align: left; font-size: 13px; }");
+                    iWriter.println("  td    { padding: 7px 12px; font-size: 12px; border-bottom: 1px solid #eee; }");
+                    iWriter.println("  .badge { color: #fff; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }");
+                    iWriter.println("  a     { color: #1F4E79; text-decoration: none; }");
+                    iWriter.println("  a:hover { text-decoration: underline; }");
+                    iWriter.println("</style></head><body>");
+                    iWriter.println("<h1>&#128196; BISS Automation — Test Execution Report Index</h1>");
+                    iWriter.println("<p class='sub'>Generated: " + iTimestamp + " &nbsp;|&nbsp; Auto-updated after each test case</p>");
+                    iWriter.println("<div class='stats'>");
+                    iWriter.println("  <div class='stat'>Total<span id='sTot'>0</span></div>");
+                    iWriter.println("  <div class='stat pass-c'>Pass<span id='sPass'>0</span></div>");
+                    iWriter.println("  <div class='stat fail-c'>Fail<span id='sFail'>0</span></div>");
+                    iWriter.println("  <div class='stat'>Pass Rate<span id='sRate'>—</span></div>");
+                    iWriter.println("</div>");
+                    iWriter.println("<table><thead><tr>");
+                    iWriter.println("  <th>#</th><th>Test Case</th><th>Status</th><th>Finished At</th><th>Report</th>");
+                    iWriter.println("</tr></thead><tbody id='tBody'>");
+                    // tbody rows will be appended below — placeholder comment marks the insert point
+                    iWriter.println("<!-- ROWS -->");
+                    iWriter.println("</tbody></table>");
+                    iWriter.println("<script>");
+                    iWriter.println("(function(){ var rows=document.querySelectorAll('#tBody tr');");
+                    iWriter.println("  var tot=rows.length, pass=0, fail=0;");
+                    iWriter.println("  rows.forEach(function(r){ if(r.dataset.s==='PASS') pass++; else fail++; });");
+                    iWriter.println("  document.getElementById('sTot').textContent=tot;");
+                    iWriter.println("  document.getElementById('sPass').textContent=pass;");
+                    iWriter.println("  document.getElementById('sFail').textContent=fail;");
+                    iWriter.println("  document.getElementById('sRate').textContent=tot?Math.round(pass*100/tot)+'%':'—';");
+                    iWriter.println("})();");
+                    iWriter.println("</script></body></html>");
+                }
+                log.info("[" + getCurrentTimestamp() + "] HTML report index created: " + iIndexFile.getAbsolutePath());
+            }
+
+            // ── Count existing rows so we can give this one a sequence number ──────────────
+            String iCurrentContent = new String(
+                    Files.readAllBytes(iIndexFile.toPath()), StandardCharsets.UTF_8);
+            int iRowCount = (iCurrentContent.split("<tr data-s=").length - 1) + 1;
+
+            // ── Build the new <tr> to insert ───────────────────────────────────────────────
+            String iNewRow = String.format(
+                    "<tr data-s='%s' style='background:%s;'>"
+                            + "<td>%d</td>"
+                            + "<td>%s</td>"
+                            + "<td><span class='badge' style='background:%s;'>%s</span></td>"
+                            + "<td>%s</td>"
+                            + "<td><a href='%s'>&#128196; %s</a></td>"
+                            + "</tr>",
+                    pStatus.toUpperCase(),
+                    iRowBg,
+                    iRowCount,
+                    escapeHtml(pTestCaseID),
+                    iBadgeBg,
+                    pStatus.toUpperCase(),
+                    iTimestamp,
+                    escapeHtml(iDocFile),
+                    escapeHtml(iDocFile)
+            );
+
+            // ── Append the row by replacing the <!-- ROWS --> marker ───────────────────────
+            // We keep the marker in place so subsequent appends always find the insertion point
+            String iUpdated = iCurrentContent.replace(
+                    "<!-- ROWS -->",
+                    iNewRow + System.lineSeparator() + "<!-- ROWS -->"
+            );
+
+            Files.write(iIndexFile.toPath(),
+                    iUpdated.getBytes(StandardCharsets.UTF_8),
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE);
+
+            log.info("[" + getCurrentTimestamp() + "] HTML report index updated: " + iIndexFile.getName()
+                    + " | TC=" + pTestCaseID + " | Status=" + pStatus);
+        }
+        catch (Exception iException)
+        {
+            // Report index is supplementary — never let it break the main test flow
+            log.warning("[" + getCurrentTimestamp() + "] Failed to update HTML report index: " + iException.getMessage());
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : escapeHtml
+    // Description   : Escapes the five special HTML characters so test case IDs and file names
+    //                 render safely inside the ReportIndex.html page.
+    // Parameters    : pInput (String) - raw string
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 28-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private static String escapeHtml(String pInput)
+    {
+        if (pInput == null) { return ""; }
+        return pInput
+                .replace("&",  "&amp;")
+                .replace("<",  "&lt;")
+                .replace(">",  "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'",  "&#39;");
     }
 
 
@@ -2007,9 +2650,13 @@ public class CommonFunctions
         public final long   iDurationMs;
         public final String iTimestamp;
         public final String iFailReason;   // blank on PASS rows
+        public final String iRootCause;    // ELEMENT_NOT_FOUND | TIMEOUT | ASSERTION_ERROR |
+        // CLICK_INTERCEPTED | STALE_ELEMENT | UNEXPECTED_ERROR
+        // blank on PASS rows
 
         public StepLogEntry(int pStep, String pAction, String pLocator,
-                            String pValue, String pStatus, long pDurationMs, String pFailReason)
+                            String pValue, String pStatus, long pDurationMs,
+                            String pFailReason, String pRootCause)
         {
             this.iStepNumber = pStep;
             this.iAction     = pAction     == null ? "" : pAction.trim();
@@ -2020,6 +2667,7 @@ public class CommonFunctions
             this.iTimestamp  = java.time.LocalDateTime.now()
                     .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS"));
             this.iFailReason = pFailReason == null ? "" : cap(pFailReason.trim(), 120);
+            this.iRootCause  = pRootCause  == null ? "" : pRootCause.trim();
         }
 
         private static String cap(String s, int max)
