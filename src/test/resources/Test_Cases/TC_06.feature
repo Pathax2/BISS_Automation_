@@ -31,25 +31,26 @@ Feature: TC_06 - Regression Suite for all Bugs and Features in BISS - 1
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    When the agent searches for herd number "N1090944"
-      # N1090812 #N1010991 #N1091932 #N1170280 #N1080655 #N7010276
-    And the agent clicks on the row for client "N1090944"
-    Then the agent clicks on the View Dashboard button
-    And the agent navigates to the "Correspondence" tab on the Side Navigation bar
+    # -----------------------------------------
+    # Farmer selection and dashboard validation
+    # -----------------------------------------
+    When the agent opens a farmer dashboard using herd data
+    Then the farmer dashboard should be displayed
+
+    # -----------------------------------------
+    # Side navigation validation
+    # -----------------------------------------
+    When the agent navigates through the farmer side navigation tabs
+      | My Correspondence                 |
+
+    Then each requested side navigation tab should open successfully
+
     Then the agent clicks on the " Upload a document" stepper button
       #When Agent expand Upload Documents Accordion
     And the agent selects "Commonage Evidence" from the "doc-type" dropdown
     And the agent uploads a document in Correspondence
     Then the agent clicks on the "Upload" stepper button
 #     Then Check Doc Upload Success
-
-  #@tmslink=BISSAGL-6987
-  @regression
-  Scenario: AT-TC-18 - BISSAGL-6987 iNet 2023 View Correspondence hyperlink
-    Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Clients page
     When the agent searches for a transfer herd number "B1410500"
