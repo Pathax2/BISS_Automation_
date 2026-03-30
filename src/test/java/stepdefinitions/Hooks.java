@@ -7,6 +7,7 @@ import io.cucumber.java.Before;
 import io.cucumber.java.BeforeAll;
 import io.cucumber.java.Scenario;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import reporting.ReportManager;
 import utilities.ExcelUtilities;
 import utilities.RetryAnalyser;
 import utilities.SoftAssertManager;
@@ -190,6 +191,19 @@ public class Hooks
         RetryAnalyser.clearRetryState();
         iScenarioStartTime = System.currentTimeMillis();   // FIX H3: record start so @After can compute duration
         CommonFunctions.log.info("---------- Scenario START : " + pScenario.getName() + " ----------");
+
+        // ── Initialise step-level tracking for the HTML execution report ─────────────────
+        // ReportManager.beginTestCase() creates a thread-local TestCaseResult so that
+        // CucumberStepListener.onTestStepFinished() has somewhere to attach each Gherkin
+        // step's status, duration, and log data.
+        //
+        // TestRunner also calls beginTestCase() before Cucumber runs — calling it here
+        // as well is a deliberate safety net: if beginTestCase() was already called,
+        // this overwrites with identical data (same TC ID, same tags). If it wasn't
+        // called (e.g. running a .feature directly from IntelliJ instead of via
+        // TestRunner), this ensures the listener still works.
+        String iScenarioTags = String.join(" ", pScenario.getSourceTagNames());
+        ReportManager.beginTestCase(iTestCaseID, pScenario.getName(), iScenarioTags);
     }
 
     @After

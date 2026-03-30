@@ -52,8 +52,23 @@
 //  Step definitions call iAction(..., "TD:Username") → resolves to "aga6029"
 //  Step definitions call iAction(..., "TD:Password") → resolves to "@c3ntst678!!"
 //
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STEP-LEVEL REPORTING (HTML Dashboard)
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CucumberStepListener is registered as a Cucumber plugin in the CLI args.
+//  It auto-captures every Gherkin step (Given/When/Then/And/But) via Cucumber's
+//  event bus and feeds them into ReportManager.recordStep().
+//  This populates the step-level drill-down in the HTML execution report.
+//
+//  Flow:
+//    TestRunner calls ReportManager.beginTestCase() before Cucumber runs
+//    → CucumberStepListener.onTestStepFinished() calls ReportManager.recordStep()
+//    → TestRunner calls ReportManager.recordResult() after Cucumber exits
+//    → HtmlReportGenerator.generate() reads all steps from ReportManager
+//
 // Author        : Aniket Pathare | aniket.pathare@goverment.ie
 // Date Created  : 10-03-2026
+// Updated       : 29-03-2026 — Integrated CucumberStepListener + ReportManager.beginTestCase()
 // ===================================================================================================================================
 
 package runner;
@@ -90,6 +105,12 @@ public class TestRunner
     private static final String iHtmlReportPath = "target/cucumber-reports/";
     private static final String iJsonReportPath = "target/cucumber-json/";
 
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Cucumber Step Listener — fully qualified class name registered as a Cucumber plugin
+    // Captures every Gherkin step and feeds it into ReportManager for the HTML report
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final String iStepListenerPlugin = "reporting.CucumberStepListener";
+
     // ***************************************************************************************************************************************************************************************
     // Function Name : executeSelectedTestCases
     // Description   : JUnit 5 entry point — triggered by Maven Surefire or right-clicking in IntelliJ
@@ -124,13 +145,16 @@ public class TestRunner
     //                   2. Reads Browser and Tags safely — defaults if columns not present in Excel
     //                   3. Confirms matching .feature file exists on disk
     //                   4. Sets system properties so Hooks.beforeAllExecution() can read them
-    //                   5. Hooks fires → finds matching row in TestData.xlsx by TestCase_ID
+    //                   5. Calls ReportManager.beginTestCase() to initialise step-level tracking
+    //                   6. Hooks fires → finds matching row in TestData.xlsx by TestCase_ID
     //                                 → loads all test data columns into memory (Username, Password etc.)
     //                                 → reads URL from Config sheet for the given Environment
     //                                 → launches browser and navigates to URL
-    //                   6. Cucumber runs all scenarios in the feature file
-    //                   7. PASS or FAIL written back to Status column in ExecutionControl.xlsx
-    //                   8. Moves to next Y row — does NOT abort the suite on a single test failure
+    //                   7. Cucumber runs all scenarios in the feature file
+    //                      CucumberStepListener auto-captures each Gherkin step into ReportManager
+    //                   8. PASS or FAIL written back to Status column in ExecutionControl.xlsx
+    //                   9. ReportManager.recordResult() finalises the test case with accumulated steps
+    //                  10. Moves to next Y row — does NOT abort the suite on a single test failure
     //
     //                 After the loop:
     //                   - HTML management report generated → Test_Report/html/
@@ -139,6 +163,7 @@ public class TestRunner
     // Parameters    : None
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
     // Date Created  : 10-03-2026
+    // Updated       : 29-03-2026 — Added beginTestCase() + CucumberStepListener plugin
     // ***************************************************************************************************************************************************************************************
     private static void runFrameworkExecution()
     {
@@ -231,6 +256,13 @@ public class TestRunner
                 new File(iHtmlReportPath).mkdirs();
                 new File(iJsonReportPath).mkdirs();
 
+                // ── Initialise step-level tracking in ReportManager ──────────────────────────────
+                //    Must be called BEFORE Cucumber runs so that CucumberStepListener's
+                //    onTestStepFinished() events have an active test case to attach steps to.
+                //    If Hooks.@Before also calls beginTestCase(), the listener's call will
+                //    simply overwrite with the same data — no harm, no duplication.
+                ReportManager.beginTestCase(iTestCaseID, iDescription, iTags);
+
                 // ── Run Cucumber for this feature file ───────────────────────────────────────────
                 iStartTime = System.currentTimeMillis();
 
@@ -240,6 +272,7 @@ public class TestRunner
                                 "--glue",   iStepDefinitionsGlue,
                                 "--plugin", "pretty",
                                 "--plugin", "summary",
+                                "--plugin", iStepListenerPlugin,
                                 "--plugin", "html:" + iHtmlReportPath + iTestCaseID + ".html",
                                 "--plugin", "json:" + iJsonReportPath + iTestCaseID + ".json"
                         },
