@@ -1,78 +1,48 @@
-Feature: TC-04 Verify Transfer end-to-end Flow
+Feature: TC_17_ENTS - Transfer End-to-End with Staff ENTSCore Verification
+
+  # Migrated from: TC_17_ENTS.feature (1 scenario)
+  # Same-agent transfer (206) then staff verifies in ENTSCore
+  # Reused: TC_01_ENTS (transfer steps), TC_15_ENTS (staff verification)
+  # Author: Aniket Pathare | Created: 31-03-2026
 
   Background:
-    Given user on login page
-    When clicks on new agent login button
-#    When Agent Enters NRCISYF Agent 1 Username
-    When enters "aga6352" as new username
-    And clicks on Continue button
-#    And Agent Enters the Pin Number
-    And enter password
-#    Then Agent Enters 1 as the OTP
-#    And clicks on Login button
-    And clicks on Continue button
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "My Clients" Tab
-    And Agent switch to "Transfers" Tab in My Clients Page
+    Given the agent user is on the login page
+    When the agent logs into the application with valid credentials and OTP
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Clients page
 
+  @sanity @transfers @staff-verification
+  Scenario: AT-ENTS-TRANSFER-STAFF - Complete transfer and verify in ENTSCore
 
-  @sanity
-  @tmslink=ENTSAGL-9994
-  Scenario: Transfer Flow
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process
-    When Agent Search for Herd Number Field and Enter Herd as "A1020300"
-    # J1350023
-    Then Agent Click On View Link for Searched Herd
-    And Agent Navigate to "Entitlements / Usage" tab on the SideNavBar
-    And Agent Gets OwnerID of herd
-    And Agent Navigate to "Transfers" tab on the SideNavBar
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    And Agent Fill "txeeHerd" field value as "A1010126"
-    And Agent Fill "txeeName" field value as "Maureen Wynne"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "206" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    Then Click on the Agent BISS "My Clients" Tab
-    And Agent switch to "Transfers" Tab in My Clients Page
-    When Agent Search for Herd Number Field and Enter Herd as "A1010126"
-    Then Agent Click On View Link for Searched Herd
-    Then Click on View button in Transferee Dashboard with Herd Number "A1020300"
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
-    Given user on staff login page
-    When Login with the Username "AGR2214"
-    And enter password
-    Then Staff Select Data Protection CheckBox
-    And clicks on Login button
-    And Click on ENTS link
-    When Staff Search for Herd Number Field and Enter Herd "A1020300"
-    And Staff clicks on Search Button
-    And Staff clicks on OwnerID link
-    And Staff click on year "2026" from left navigation bar
-    And Staff click on "Transfers" tab
-    #And Staff Verfies "Begin Data Capture" button is present
+    # --- Capture OwnerID first ---
+    When the agent searches for herd "A1020300" and opens it
+    And the agent navigates to the "Entitlements / Usage" side nav tab
+    And the agent captures the OwnerID of the herd
+    And the agent navigates to the "Transfers" side nav tab
 
+    # --- Same-agent transfer (206) ---
+    When the agent creates a transfer application with the following details
+      | transferorHerd | A1020300      |
+      | transfereeHerd | A1010126      |
+      | transfereeName | Maureen Wynne |
+      | transferType   | 206           |
+      | entitlements   | 0.01          |
+      | notes          | Test Notes    |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (same agent) ---
+    When the agent navigates to the transferee acceptance flow
+      | transfereeHerd | A1010126 |
+    And the agent enters the transfer key and views the application
+    And the agent submits the transfer to DAFM with notes "Approved Test"
+    Then the transfer should be submitted successfully
+
+    # --- Staff ENTSCore verification ---
+    When the staff user logs into ENTSCore as "AGR2214"
+    And the staff searches for the herd by OwnerID
+    And the staff navigates to year "2026" and "Transfers" tab
+    Then the transfer submission should be visible in ENTSCore

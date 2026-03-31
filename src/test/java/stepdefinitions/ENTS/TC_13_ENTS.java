@@ -1,9 +1,9 @@
 // ===================================================================================================================================
 // File          : TC_13_ENTS.java
 // Package       : stepdefinitions
-// Description   : Step definitions for TC_13_ENTS — NR/CISYF End-to-End Regression Pack.
+// Description   : Step definitions for TC_13_ENTS — NRCISYF End-to-End Regression Pack.
 //
-//                 Covers the full NR/CISYF business flow:
+//                 Covers the full NRCISYF business flow:
 //                   - Herd search and landing page validation
 //                   - Category selection (A, B, C, A+C, B+C, invalid A+B)
 //                   - Individual / Joint Herdowner / Company entity setup
@@ -59,18 +59,18 @@ public class TC_13_ENTS
     // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent searches for the NR/CISYF herd and opens the application
-    // Description   : Enters the runtime herd number into the NR/CISYF search field and clicks View.
+    // Step          : the agent searches for the NRCISYF herd and opens the application
+    // Description   : Enters the runtime herd number into the NRCISYF search field and clicks View.
     //                 Herd is resolved from Hooks.RUNTIME_HERD (DB-driven at boot time).
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent searches for the NR/CISYF herd and opens the application")
+    @When("the agent searches for the NRCISYF herd and opens the application")
     public void theAgentSearchesForTheNRCISYFHerdAndOpensTheApplication()
     {
-        log.info("[STEP] When the agent searches for the NR/CISYF herd and opens the application");
+        log.info("[STEP] When the agent searches for the NRCISYF herd and opens the application");
 
-        // Type the runtime herd number into the NR/CISYF search field
+        // Type the runtime herd number into the NRCISYF search field
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), Hooks.RUNTIME_HERD);
 
         // Click search to filter the results
@@ -79,38 +79,38 @@ public class TC_13_ENTS
         // Click the View link on the first matching row
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
 
-        log.info("NR/CISYF herd opened: " + Hooks.RUNTIME_HERD);
+        log.info("NRCISYF herd opened: " + Hooks.RUNTIME_HERD);
     }
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the NR/CISYF landing page should be displayed
-    // Description   : Verifies the NR/CISYF landing page content is visible after opening the herd
+    // Step          : the NRCISYF landing page should be displayed
+    // Description   : Verifies the NRCISYF landing page content is visible after opening the herd
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @Then("the NR/CISYF landing page should be displayed")
+    @Then("the NRCISYF landing page should be displayed")
     public void theNRCISYFLandingPageShouldBeDisplayed()
     {
-        log.info("[STEP] Then the NR/CISYF landing page should be displayed");
+        log.info("[STEP] Then the NRCISYF landing page should be displayed");
         iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iNRCISYFLandingHeader"), null);
-        log.info("NR/CISYF landing page confirmed.");
+        log.info("NRCISYF landing page confirmed.");
     }
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the NR/CISYF closing date should display {string}
-    // Description   : Verifies the closing date shown on the NR/CISYF landing page matches expected
+    // Step          : the NRCISYF closing date should display {string}
+    // Description   : Verifies the closing date shown on the NRCISYF landing page matches expected
     // Parameters    : pExpectedDate (String) - expected date text e.g. "15 May 2026"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the NR/CISYF closing date should display {string}")
+    @And("the NRCISYF closing date should display {string}")
     public void theNRCISYFClosingDateShouldDisplay(String pExpectedDate)
     {
-        log.info("[STEP] And the NR/CISYF closing date should display: " + pExpectedDate);
+        log.info("[STEP] And the NRCISYF closing date should display: " + pExpectedDate);
         iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iNRCISYFCloseDate"), pExpectedDate);
-        log.info("NR/CISYF close date verified: " + pExpectedDate);
+        log.info("NRCISYF close date verified: " + pExpectedDate);
     }
 
 
@@ -119,15 +119,15 @@ public class TC_13_ENTS
     // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent opens the NR/CISYF Apply or Edit dialog
+    // Step          : the agent opens the NRCISYF Apply or Edit dialog
     // Description   : Clicks the Apply or Edit button to open the category selection dialog
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent opens the NR/CISYF Apply or Edit dialog")
+    @When("the agent opens the NRCISYF Apply or Edit dialog")
     public void theAgentOpensTheNRCISYFApplyOrEditDialog()
     {
-        log.info("[STEP] When the agent opens the NR/CISYF Apply or Edit dialog");
+        log.info("[STEP] When the agent opens the NRCISYF Apply or Edit dialog");
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFApplyEditBtn"), null);
     }
 
@@ -171,15 +171,15 @@ public class TC_13_ENTS
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent closes the NR/CISYF category dialog
-    // Description   : Clicks the Close button on the NR/CISYF category selection dialog
+    // Step          : the agent closes the NRCISYF category dialog
+    // Description   : Clicks the Close button on the NRCISYF category selection dialog
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent closes the NR/CISYF category dialog")
+    @When("the agent closes the NRCISYF category dialog")
     public void theAgentClosesTheNRCISYFCategoryDialog()
     {
-        log.info("[STEP] When the agent closes the NR/CISYF category dialog");
+        log.info("[STEP] When the agent closes the NRCISYF category dialog");
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFCloseBtn"), null);
     }
 
@@ -242,16 +242,16 @@ public class TC_13_ENTS
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent selects NR/CISYF categories (DataTable)
+    // Step          : the agent selects NRCISYF categories (DataTable)
     // Description   : Iterates through the DataTable list of category labels and clicks each one.
     //                 Checks the current state before clicking to avoid toggling off an already-selected category.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent selects NR/CISYF categories")
+    @And("the agent selects NRCISYF categories")
     public void theAgentSelectsNRCISYFCategories(DataTable pDataTable)
     {
-        log.info("[STEP] And the agent selects NR/CISYF categories");
+        log.info("[STEP] And the agent selects NRCISYF categories");
 
         List<String> iCategories = pDataTable.asList();
 
@@ -299,10 +299,10 @@ public class TC_13_ENTS
     {
         log.info("[STEP] Then the selected categories should be highlighted");
         // Verify at least one checkbox in the dialog has aria-checked="true"
-       // List<WebElement> iSelected = getDriver().findElements(
-               // By.xpath("//mat-checkbox[@aria-checked='true'] | //input[@type='checkbox']:checked"));
+        // List<WebElement> iSelected = getDriver().findElements(
+        // By.xpath("//mat-checkbox[@aria-checked='true'] | //input[@type='checkbox']:checked"));
         //Assertions.assertFalse(iSelected.isEmpty(), "At least one category should be selected/highlighted.");
-       // log.info("Category selections confirmed: " + iSelected.size() + " selected.");
+        // log.info("Category selections confirmed: " + iSelected.size() + " selected.");
     }
 
 
@@ -843,17 +843,17 @@ public class TC_13_ENTS
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent uploads NR/CISYF documents (DataTable)
+    // Step          : the agent uploads NRCISYF documents (DataTable)
     // Description   : Iterates through each document type in the DataTable, clicks the corresponding
     //                 upload button, attaches the sample PDF, and confirms the upload. Uses the same
     //                 sample document for all entries.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent uploads NR/CISYF documents")
+    @When("the agent uploads NRCISYF documents")
     public void theAgentUploadsNRCISYFDocuments(DataTable pDataTable)
     {
-        log.info("[STEP] When the agent uploads NR/CISYF documents");
+        log.info("[STEP] When the agent uploads NRCISYF documents");
 
         String iFilePath = System.getProperty("nrcisyf.upload.path",
                 System.getProperty("user.dir")
@@ -976,15 +976,15 @@ public class TC_13_ENTS
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent submits the NR/CISYF application with declaration
+    // Step          : the agent submits the NRCISYF application with declaration
     // Description   : Clicks Submit Application, ticks both declaration checkboxes, then confirms
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent submits the NR/CISYF application with declaration")
+    @And("the agent submits the NRCISYF application with declaration")
     public void theAgentSubmitsTheNRCISYFApplicationWithDeclaration()
     {
-        log.info("[STEP] And the agent submits the NR/CISYF application with declaration");
+        log.info("[STEP] And the agent submits the NRCISYF application with declaration");
 
         // Click Submit Application button
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSubmitApplicationBtn"), null);
@@ -999,33 +999,33 @@ public class TC_13_ENTS
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the NR/CISYF application should be submitted successfully
+    // Step          : the NRCISYF application should be submitted successfully
     // Description   : Verifies submission success by checking for a confirmation element or message
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @Then("the NR/CISYF application should be submitted successfully")
+    @Then("the NRCISYF application should be submitted successfully")
     public void theNRCISYFApplicationShouldBeSubmittedSuccessfully()
     {
-        log.info("[STEP] Then the NR/CISYF application should be submitted successfully");
+        log.info("[STEP] Then the NRCISYF application should be submitted successfully");
         String iConfirmation = iAction("GETTEXT", "XPATH",
                 "//div[contains(@class,'success') or contains(@class,'confirmation') or contains(text(),'submitted')]",
                 null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "NR/CISYF submission success should be visible.");
-        log.info("NR/CISYF application submitted successfully: " + iConfirmation);
+        Assertions.assertFalse(iConfirmation.isEmpty(), "NRCISYF submission success should be visible.");
+        log.info("NRCISYF application submitted successfully: " + iConfirmation);
     }
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent saves and exits the NR/CISYF application
+    // Step          : the agent saves and exits the NRCISYF application
     // Description   : Clicks "Save and Exit" on the stepper and confirms
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent saves and exits the NR/CISYF application")
+    @And("the agent saves and exits the NRCISYF application")
     public void theAgentSavesAndExitsTheNRCISYFApplication()
     {
-        log.info("[STEP] And the agent saves and exits the NR/CISYF application");
+        log.info("[STEP] And the agent saves and exits the NRCISYF application");
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFStepperSaveAndExitBtn"), null);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSaveAndExitBtn"), null);
     }
@@ -1041,7 +1041,7 @@ public class TC_13_ENTS
     public void theApplicationShouldBeSavedSuccessfully()
     {
         log.info("[STEP] Then the application should be saved successfully");
-        // After Save and Exit, the agent should be back on the NR/CISYF landing page
+        // After Save and Exit, the agent should be back on the NRCISYF landing page
         // Verify the Apply/Edit button is visible again — confirms we exited the form
         iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iNRCISYFApplyEditBtn"), null);
         log.info("Application saved successfully — back on landing page.");
@@ -1053,15 +1053,15 @@ public class TC_13_ENTS
     // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent navigates back to the NR/CISYF client list
-    // Description   : Clicks the My Clients tab and switches to NR/CISYF to reset for the next flow
+    // Step          : the agent navigates back to the NRCISYF client list
+    // Description   : Clicks the My Clients tab and switches to NRCISYF to reset for the next flow
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent navigates back to the NR/CISYF client list")
+    @When("the agent navigates back to the NRCISYF client list")
     public void theAgentNavigatesBackToTheNRCISYFClientList()
     {
-        log.info("[STEP] When the agent navigates back to the NR/CISYF client list");
+        log.info("[STEP] When the agent navigates back to the NRCISYF client list");
         iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
         iAction("CLICK", "XPATH",
                 "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='NR/CISYF']"
@@ -1115,15 +1115,15 @@ public class TC_13_ENTS
     // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent views the submitted NR/CISYF application
-    // Description   : Clicks the "View Application" button on the NR/CISYF landing page for a submitted herd
+    // Step          : the agent views the submitted NRCISYF application
+    // Description   : Clicks the "View Application" button on the NRCISYF landing page for a submitted herd
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent views the submitted NR/CISYF application")
+    @And("the agent views the submitted NRCISYF application")
     public void theAgentViewsTheSubmittedNRCISYFApplication()
     {
-        log.info("[STEP] And the agent views the submitted NR/CISYF application");
+        log.info("[STEP] And the agent views the submitted NRCISYF application");
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewApplicationBtn"), null);
     }
 

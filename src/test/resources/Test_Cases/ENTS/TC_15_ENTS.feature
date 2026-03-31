@@ -1,65 +1,53 @@
-Feature: TC-02 NR/CISYF end-to-end flow
+Feature: TC_15_ENTS - NRCISYF End-to-End with Staff ENTSCore Verification
 
-  @sanity
-  @tmslink=ENTSAGL-9920
-  Scenario: TC01 - Applying NRCISYF Individual and check in ENTSCore
-    Given user on login page
-    When clicks on new agent login button
-    When Agent Enters new NRCISYF Agent 1 Username
-    And clicks on Continue button
-#    And Agent Enters the Pin Number
-    And enter password
-#    Then Agent Enters 1 as the OTP
-#    And clicks on Login button
-    And clicks on Continue button
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "My Clients" Tab
-    And Agent switch to "NR/CISYF" Tab in My Clients Page
-    And Collect All Herds of that agent which are not submitted save it to excel file
-    And Agent Search for Herd Number Field and Enter Herd from row 3
-    Then Agent Click On View Link for Searched Herd
-    And Agent Navigate to "Entitlements / Usage" tab on the SideNavBar
-    And Agent Gets OwnerID of herd
-    And Agent Navigate to "NR-CISYF" tab on the SideNavBar
-    Then Agent Click on the NRCISYF Apply or Edit button
-    And Uncheck all options in the Dialog box
-    And Agent Check Status of "A. National Reserve (as Young Farmer)" CheckBox Option in the Dialog and Select
-    Then Agent Click on the NRCISYF " Next " button
-    Then Agent Click on the NRCISYF "Do not select CISYF category and continue" button
-    And Agent Select the Farming Entity dropdown value as "Individual"
-    Then Agent Click on the NRCISYF Stepper "Next" button
-    And Agent Select "Yes" option for the "selectedValueQualification" Question
-    Then Agent Enter Date of completion as "1"
-    And Agent Select "Yes" option for the "certificateHasBeenAwarded" Question
-    And Agent Select Value as "Athlone Institute of Technology" for the "colId" dropdown
-    And Agent Select Value as "FETAC Certificate in Farming" for the "qualId" dropdown
-    Then Agent Click on the NRCISYF Stepper "Next to Summary" button
-    Then Agent Click on the "Qualifications certificate or Confirmation of Education Form" Upload Button
-    And Upload Document for NRCISYF
-    Then Agent Click on the NRCISYF "Upload Document" button
-    Then Agent Click on the "Personal and Sensitive Documentation" Upload Button
-    And Upload Document for NRCISYF
-    Then Agent Click on the NRCISYF "Upload Document" button
-    Then Agent Click on the NRCISYF Stepper "Save and Next" button
-    Then Agent Click on the NRCISYF "Save and Next" button
-    Then Agent Click on the NRCISYF "Submit Application" button
-    And Agent Click on checkbox 1 in the Submission Declaration dialog
-    And Agent Click on checkbox 2 in the Submission Declaration dialog
-    Then Agent Click On NRCISYF "Submit Application" Button in Dialog Box
-    Given user on staff login page
-    When Login with the Username "AGR2214"
-    And enter password
-    Then Staff Select Data Protection CheckBox
-    And clicks on Login button
-    And Click on ENTS link
-    And Staff Search for Herd Number Field and Enter Herd from row 3
-    And Staff clicks on Search Button
-    And Staff clicks on OwnerID link
-    And Staff click on year "2026" from left navigation bar
-    And Staff click on "NR / CISYF" tab
-   # And Staff Verfies "Begin Data Capture" button is present
+  # Migrated from: TC_15_ENTS.feature (1 scenario)
+  # Agent submits NRCISYF Cat A Individual, then staff verifies in ENTSCore
+  # Reused: TC_13_ENTS (NRCISYF steps) — most steps from NRCISYF flow
+  # New: Staff login + ENTSCore verification steps
+  # Author: Aniket Pathare | Created: 31-03-2026
 
+  Background:
+    Given the agent user is on the login page
+    When the agent logs into the application with valid credentials and OTP
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
 
+  @sanity @nrcisyf @staff-verification
+  Scenario: AT-ENTS-NRCISYF-STAFF - Submit NRCISYF and verify in ENTSCore
+
+    # --- Collect herds and capture owner ID ---
+    When the agent searches for the NRCISYF herd and opens the application
+    And the agent navigates to the "Entitlements / Usage" side nav tab
+    And the agent captures the OwnerID of the herd
+    And the agent navigates to the "NR-CISYF" side nav tab
+
+    # --- NRCISYF Cat A Individual submission ---
+    And the agent opens the NRCISYF Apply or Edit dialog
+    And the agent resets all category selections
+    And the agent selects NRCISYF categories
+      | A. National Reserve (as Young Farmer) |
+    And the agent proceeds past the category selection
+    And the agent skips CISYF category if prompted
+    And the agent selects farming entity "Individual"
+    And the agent proceeds to the qualification step
+    When the agent completes the qualification details
+      | hasQualification   | Yes                             |
+      | dateOfCompletion   | 1                               |
+      | certificateAwarded | Yes                             |
+      | college            | Athlone Institute of Technology |
+      | qualification      | FETAC Certificate in Farming    |
+    And the agent proceeds to the summary step
+    When the agent uploads NRCISYF documents
+      | Qualifications certificate or Confirmation of Education Form |
+      | Personal and Sensitive Documentation                         |
+    And the agent saves and proceeds to the declaration step
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
+
+    # --- Staff ENTSCore verification ---
+    When the staff user logs into ENTSCore as "AGR2214"
+    And the staff searches for the herd by OwnerID
+    And the staff navigates to year "2026" and "NR / CISYF" tab
+    Then the NRCISYF submission should be visible in ENTSCore

@@ -1,11 +1,11 @@
-Feature: TC_13 - NR/CISYF End-to-End Regression Pack
+Feature: TC_13 - NRCISYF End-to-End Regression Pack
 
   # --------------------------------------------------------------------------------------------------------------------
   # Purpose:
-  #   Single end-to-end regression journey covering the entire NR/CISYF (National Reserve /
+  #   Single end-to-end regression journey covering the entire NRCISYF (National Reserve /
   #   Complementary Income Support for Young Farmers) business flow in the BISS Application Portal.
   #
-  #   - Login and NR/CISYF tab navigation
+  #   - Login and NRCISYF tab navigation
   #   - Landing page validation (close date, info icons, dialog behaviour)
   #   - Category selection validations (A, B, C, A+B invalid, A+C, B+C)
   #   - Additional CISYF category prompt
@@ -62,21 +62,21 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
     And the agent switches to the "NR/CISYF" tab on the My Clients page
 
   @regression @nrcisyf @e2e
-  Scenario: AT-ENTS-E2E - Agent completes the end-to-end NR/CISYF regression flow
+  Scenario: AT-ENTS-E2E - Agent completes the end-to-end NRCISYF regression flow
 
     # ===========================================
     # SECTION 1 : Herd search and landing page
     # Covers: TC01, TC02
     # ===========================================
-    When the agent searches for the NR/CISYF herd and opens the application
-    Then the NR/CISYF landing page should be displayed
-    And the NR/CISYF closing date should display "15 May 2026"
+    When the agent searches for the NRCISYF herd and opens the application
+    Then the NRCISYF landing page should be displayed
+    And the NRCISYF closing date should display "15 May 2026"
 
     # ===========================================
     # SECTION 2 : Category dialog — info icons
     # Covers: TC19, TC20, TC21
     # ===========================================
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     Then the info icon for category "A" should display the correct description
     And the info icon for category "B" should display the correct description
     And the info icon for category "C" should display the correct description
@@ -85,7 +85,7 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
     # SECTION 3 : Dialog close behaviour
     # Covers: TC22
     # ===========================================
-    When the agent closes the NR/CISYF category dialog
+    When the agent closes the NRCISYF category dialog
     Then the dialog should be dismissed
 
     # ===========================================
@@ -94,46 +94,46 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
     # ===========================================
 
     # --- Category A only ---
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     Then the selected categories should be highlighted
-    And the agent closes the NR/CISYF category dialog
+    And the agent closes the NRCISYF category dialog
 
     # --- Category B only ---
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | B. National Reserve (as New Farmer) |
     Then the selected categories should be highlighted
-    And the agent closes the NR/CISYF category dialog
+    And the agent closes the NRCISYF category dialog
 
     # --- Category C only ---
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | C. Complementary income Support for Young Farmers |
     Then the selected categories should be highlighted
-    And the agent closes the NR/CISYF category dialog
+    And the agent closes the NRCISYF category dialog
 
     # --- Category A + C combined ---
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer)             |
       | C. Complementary income Support for Young Farmers |
     Then the selected categories should be highlighted
-    And the agent closes the NR/CISYF category dialog
+    And the agent closes the NRCISYF category dialog
 
     # --- Category B + C combined ---
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | B. National Reserve (as New Farmer)               |
       | C. Complementary income Support for Young Farmers |
     Then the selected categories should be highlighted
-    And the agent closes the NR/CISYF category dialog
+    And the agent closes the NRCISYF category dialog
 
     # ===========================================
     # SECTION 5 : Invalid category combination
@@ -141,41 +141,41 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
     # ===========================================
 
     # --- A then B — mutual exclusion error ---
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
       | B. National Reserve (as New Farmer)   |
     Then the invalid category combination error should be displayed for "B"
 
     # --- B then A — mutual exclusion error ---
     When the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | B. National Reserve (as New Farmer)   |
       | A. National Reserve (as Young Farmer) |
     Then the invalid category combination error should be displayed for "A"
-    And the agent closes the NR/CISYF category dialog
+    And the agent closes the NRCISYF category dialog
 
     # ===========================================
     # SECTION 6 : Additional CISYF category prompt
     # Covers: TC25
     # ===========================================
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     And the agent proceeds past the category selection
     Then the agent should see the CISYF category prompt
     And the agent selects additional CISYF category if prompted
-    And the agent closes the NR/CISYF category dialog
+    And the agent closes the NRCISYF category dialog
 
     # ===========================================
     # SECTION 7 : Joint Herdowner — member count
     # Covers: TC08, TC09, TC10, TC11, TC12, TC13
     # ===========================================
-    When the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     And the agent proceeds past the category selection
     And the agent skips CISYF category if prompted
@@ -189,16 +189,16 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | 6 |
 
     # --- Navigate back for the next flow ---
-    When the agent navigates back to the NR/CISYF client list
+    When the agent navigates back to the NRCISYF client list
 
     # ===========================================
     # SECTION 8 : Individual Cat A only — full submit
     # Covers: TC14
     # ===========================================
-    When the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     And the agent proceeds past the category selection
     And the agent skips CISYF category if prompted
@@ -213,23 +213,23 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | FETAC Certificate in Farming    |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Qualifications certificate or Confirmation of Education Form |
       | Personal and Sensitive Documentation                         |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 9 : Individual Cat A & C — full submit
     # Covers: TC06, TC15
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer)             |
       | C. Complementary income Support for Young Farmers |
     And the agent proceeds past the category selection
@@ -244,25 +244,25 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | FETAC Certificate in Farming    |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Upload Invoice/Receipt                                             |
       | Upload Bank Statement Extract with Invoice/Receipt Passing through |
       | Qualifications certificate or Confirmation of Education Form       |
       | Personal and Sensitive Documentation                               |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 10 : Individual Cat B only — full submit
     # Covers: TC04, TC16
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | B. National Reserve (as New Farmer) |
     And the agent proceeds past the category selection
 
@@ -276,23 +276,23 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | Teagasc Diploma in Pig Production  |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Qualifications certificate or Confirmation of Education Form |
       | Personal and Sensitive Documentation                         |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 11 : Individual Cat B & C — full submit
     # Covers: TC07, TC17
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | B. National Reserve (as New Farmer)               |
       | C. Complementary income Support for Young Farmers |
     And the agent proceeds past the category selection
@@ -307,25 +307,25 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | FETAC Certificate in Farming    |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Upload Invoice/Receipt                                             |
       | Upload Bank Statement Extract with Invoice/Receipt Passing through |
       | Qualifications certificate or Confirmation of Education Form       |
       | Personal and Sensitive Documentation                               |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 12 : Individual Cat C only — full submit
     # Covers: TC05, TC18
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | C. Complementary income Support for Young Farmers |
     And the agent proceeds past the category selection
 
@@ -339,25 +339,25 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | FETAC Certificate in Farming    |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Upload Invoice/Receipt                                             |
       | Upload Bank Statement Extract with Invoice/Receipt Passing through |
       | Qualifications certificate or Confirmation of Education Form       |
       | Personal and Sensitive Documentation                               |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 13 : Company Cat A — 1 member full submit
     # Covers: TC35
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     And the agent proceeds past the category selection
     And the agent skips CISYF category if prompted
@@ -382,25 +382,25 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | FETAC Certificate in Farming    |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Eligible Farmer(s) Birth or Marriage Certificate documentation       |
       | Declaration of Effective Control and Decision Making Power (download |
       | Qualifications certificate or Confirmation of Education Form         |
       | Personal and Sensitive Documentation                                 |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 14 : Company Cat A — 2 members full submit
     # Covers: TC36
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     And the agent proceeds past the category selection
     And the agent skips CISYF category if prompted
@@ -426,25 +426,25 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | FETAC Certificate in Farming    |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Eligible Farmer(s) Birth or Marriage Certificate documentation       |
       | Declaration of Effective Control and Decision Making Power (download |
       | Qualifications certificate or Confirmation of Education Form         |
       | Personal and Sensitive Documentation                                 |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 15 : Company Cat A — 3 members full submit
     # Covers: TC37
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     And the agent proceeds past the category selection
     And the agent skips CISYF category if prompted
@@ -471,25 +471,25 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | FETAC Certificate in Farming    |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Eligible Farmer(s) Birth or Marriage Certificate documentation       |
       | Declaration of Effective Control and Decision Making Power (download |
       | Qualifications certificate or Confirmation of Education Form         |
       | Personal and Sensitive Documentation                                 |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 16 : Company Cat A & C — 2 members full submit
     # Covers: TC80
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer)             |
       | C. Complementary income Support for Young Farmers |
     And the agent proceeds past the category selection
@@ -516,7 +516,7 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | qualification      | FETAC Certificate in Farming    |
 
     And the agent proceeds to the summary step
-    When the agent uploads NR/CISYF documents
+    When the agent uploads NRCISYF documents
       | Eligible Farmer(s) Birth or Marriage Certificate documentation                                                                                                          |
       | Declaration of Effective Control and Decision Making Power (download                                                                                                    |
       | Upload Invoice/Receipt                                                                                                                                                  |
@@ -526,18 +526,18 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | Personal and Sensitive Documentation                                                                                                                                    |
 
     And the agent saves and proceeds to the declaration step
-    And the agent submits the NR/CISYF application with declaration
-    Then the NR/CISYF application should be submitted successfully
+    And the agent submits the NRCISYF application with declaration
+    Then the NRCISYF application should be submitted successfully
 
     # ===========================================
     # SECTION 17 : No qualification path
     # Covers: TC30
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer)             |
       | C. Complementary income Support for Young Farmers |
     And the agent proceeds past the category selection
@@ -549,16 +549,16 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
     Then the no-qualification information message should be displayed if applicable
 
     # --- Navigate back to reset for next flow ---
-    When the agent navigates back to the NR/CISYF client list
+    When the agent navigates back to the NRCISYF client list
 
     # ===========================================
     # SECTION 18 : Save and Exit mid-application
     # Covers: TC26
     # ===========================================
-    When the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     And the agent proceeds past the category selection
     And the agent skips CISYF category if prompted
@@ -570,18 +570,18 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
-    And the agent saves and exits the NR/CISYF application
+    And the agent saves and exits the NRCISYF application
     Then the application should be saved successfully
 
     # ===========================================
     # SECTION 19 : Custom education institution not in list
     # Covers: TC32
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | C. Complementary income Support for Young Farmers |
     And the agent proceeds past the category selection
     And the agent selects farming entity "Individual"
@@ -600,11 +600,11 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
     # SECTION 20 : Custom qualification not in list
     # Covers: TC33
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | C. Complementary income Support for Young Farmers |
     And the agent proceeds past the category selection
     And the agent selects farming entity "Individual"
@@ -623,19 +623,19 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
     # SECTION 21 : Invalid file format upload error
     # Covers: TC28
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
     Then the agent verifies the upload control only accepts PDF format
 
     # ===========================================
     # SECTION 22 : Close upload popup mid-flow
     # Covers: TC29
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent opens the NR/CISYF Apply or Edit dialog
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
-    And the agent selects NR/CISYF categories
+    And the agent selects NRCISYF categories
       | A. National Reserve (as Young Farmer) |
     And the agent proceeds past the category selection
     And the agent skips CISYF category if prompted
@@ -656,9 +656,9 @@ Feature: TC_13 - NR/CISYF End-to-End Regression Pack
     # SECTION 23 : Post-submission verification
     # Covers: TC27, TC31
     # ===========================================
-    When the agent navigates back to the NR/CISYF client list
-    And the agent searches for the NR/CISYF herd and opens the application
-    And the agent views the submitted NR/CISYF application
+    When the agent navigates back to the NRCISYF client list
+    And the agent searches for the NRCISYF herd and opens the application
+    And the agent views the submitted NRCISYF application
     Then the uploaded documents should be accessible in correspondence
     And the agent clicks on the "Education Documentation" document link
     Then the document should open or download successfully

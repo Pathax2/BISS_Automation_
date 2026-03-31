@@ -1,230 +1,153 @@
-@Transfers
-Feature: Verify the Transfer Application from Agent To Individual Functionality - aga6532
+Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individual)
+
+  # --------------------------------------------------------------------------------------------------------------------
+  # Purpose:
+  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the
+  #   Transferor is an Agent and the Transferee is an Individual user (farmer login).
+  #
+  #   Key difference from TC_03_ENTS / TC_04_ENTS (Agent-to-Agent cross-agent):
+  #     - Transferee logs in via the INDIVIDUAL login page (different URL)
+  #     - Individual username format differs (e.g. "PAUDYFROG", "TERENCE1")
+  #     - A "Close personal details" dialog must be dismissed after Individual login
+  #     - Individual navigates directly to "Transfers" tab (no My Clients → tab switch)
+  #     - Individual sees the transfer directly on their dashboard (no herd search needed)
+  #
+  #   Transfer types covered:
+  #     Section 1 : Change of Registration  (205) — C1120016 → Y104069X (Daniel Mulvany / PAUDYFROG)
+  #     Section 2 : Inheritance             (201) — C1120016 → Y104069X (Daniel Mulvany / PAUDYFROG)
+  #     Section 3 : Gift                    (202) — C1120016 → Y1041344 (Felim Sullivan / TERENCE1)
+  #     Section 4 : Lease                   (211) — C1120016 → Y1041344 (Felim Sullivan / TERENCE1) + lease year
+  #
+  # Migrated from: TC_05_ENTS.feature (legacy 4 separate scenarios)
+  #   TC_17 → Section 1     TC_18 → Section 2     TC_19 → Section 3     TC_20 → Section 4
+  #
+  # Step reuse:
+  #   Transferor flow (create/upload/send/capture)  → TC_01_ENTS.java
+  #   Background login / nav                        → TC_03.java
+  #   Tab switching                                 → TC_06.java
+  #   Transferor re-login                           → TC_03_ENTS.java
+  #   Submission verification                       → TC_01_ENTS.java
+  #
+  #   NEW steps in TC_05_ENTS.java (2):
+  #     - "the agent logs out and re-logs in as the individual transferee {string}"
+  #     - "the individual completes the transferee acceptance flow" (DataTable)
+  #
+  # Author : Aniket Pathare | aniket.pathare@government.ie
+  # Created: 31-03-2026
+  # --------------------------------------------------------------------------------------------------------------------
 
   Background:
-    Given user on login page
-    When clicks on new agent login button
-    When Agent Enters new NRCISYF Agent 1 Username
-    #When Agent Enters New Agent 5 Username for Transfers
-    And clicks on Continue button
-#    And Agent Enters the Pin Number
-    And enter password
-#    Then Agent Enters 1 as the OTP
-#    And clicks on Login button
-    And clicks on Continue button
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "My Clients" Tab
-    And Agent switch to "Transfers" Tab in My Clients Page
+    Given the agent user is on the login page
+    When the agent logs into the application with valid credentials and OTP
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Clients page
 
-  @tmslink=ENTSAGL-7095
-  Scenario: TC_17_Regression_Pack_ Agent to Individual_Change of Registration details
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process G1570420 G1311319
-    When Agent Search for Herd Number Field and Enter Herd as "C1120016"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    And Agent Fill "txeeHerd" field value as "Y104069X"
-    # Patrick Bonner Padraig Gleeson
-    And Agent Fill "txeeName" field value as "Daniel Mulvany"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "205" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on individual login page
-    When clicks on new agent login button
-    When Agent Enter "PAUDYFROG" as Individual's Username
-    And clicks on Continue button
-    And enter password
-    And clicks on Continue button
-#    Then External User Enters sms OTP
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    Then Agent Click on the "Close" personal details dialog issue
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "Transfers" Tab
-    Then Click on View button in Transferee Dashboard with Herd Number "Y104069X"
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+  @regression @transfers @agent-to-individual @e2e
+  Scenario: AT-ENTS-TRANSFERS-E2E-05 - Agent completes all Agent-to-Individual transfer types
 
-  @tmslink=ENTSAGL-7096
-  Scenario: TC_18_Regression_Pack_Agent to Individual_Inheritance of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process
-    When Agent Search for Herd Number Field and Enter Herd as "C1120016"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    And Agent Fill "txeeHerd" field value as "Y104069X"
-    #Norman Lehane
-    And Agent Fill "txeeName" field value as "Daniel Mulvany"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "201" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on individual login page
-    When clicks on new agent login button
-    When Agent Enter "PAUDYFROG" as Individual's Username
-    And clicks on Continue button
-    And enter password
-    And clicks on Continue button
-#    Then External User Enters sms OTP
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    Then Agent Click on the "Close" personal details dialog issue
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "Transfers" Tab
-    Then Click on View button in Transferee Dashboard with Herd Number "Y104069X"
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # ===========================================
+    # SECTION 1 : Change of Registration (205)
+    # Covers: TC_17
+    # Transferee: PAUDYFROG (Individual)
+    # ===========================================
 
-  @tmslink=ENTSAGL-7097
-  Scenario: TC_19_Regression_Pack_Agent to Individual_Gift of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process
-    When Agent Search for Herd Number Field and Enter Herd as "C1120016"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    And Agent Fill "txeeHerd" field value as "Y1041344"
-    # John Duggan Bridie McCormack
-    And Agent Fill "txeeName" field value as "Felim Sullivan"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "202" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on individual login page
-    When clicks on new agent login button
-    When Agent Enter "TERENCE1" as Individual's Username
-    And clicks on Continue button
-    And enter password
-    And clicks on Continue button
-#    Then External User Enters sms OTP
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    Then Agent Click on the "Close" personal details dialog issue
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "Transfers" Tab
-    Then Click on View button in Transferee Dashboard with Herd Number "Y1041344"
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # --- Transferor (Agent) ---
+    When the agent creates a transfer application with the following details
+      | transferorHerd | C1120016        |
+      | transfereeHerd | Y104069X        |
+      | transfereeName | Daniel Mulvany  |
+      | transferType   | 205             |
+      | entitlements   | 0.01            |
+      | notes          | Test Notes      |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-  @tmslink=ENTSAGL-7098
-  Scenario: TC_20_Regression_Pack_Agent to Individual _ Lease of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process
-    When Agent Search for Herd Number Field and Enter Herd as "C1120016"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    And Agent Fill "txeeHerd" field value as "Y1041344"
-    # Bgt Mahony Mel O/'Brien
-    And Agent Fill "txeeName" field value as "Felim Sullivan"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "211" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    When Agent Select the Lease Year
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on individual login page
-    When clicks on new agent login button
-    When Agent Enter "TERENCE1" as Individual's Username
-    And clicks on Continue button
-    And enter password
-    And clicks on Continue button
-#    Then External User Enters sms OTP
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    Then Agent Click on the "Close" personal details dialog issue
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "Transfers" Tab
-    Then Click on View button in Transferee Dashboard with Herd Number "Y1041344"
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # --- Transferee (Individual — different login flow) ---
+    When the agent logs out and re-logs in as the individual transferee "PAUDYFROG"
+    And the individual completes the transferee acceptance flow
+      | transfereeHerd | Y104069X      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
+    # ===========================================
+    # SECTION 2 : Inheritance (201)
+    # Covers: TC_18
+    # Transferee: PAUDYFROG (Individual)
+    # ===========================================
+
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | C1120016        |
+      | transfereeHerd | Y104069X        |
+      | transfereeName | Daniel Mulvany  |
+      | transferType   | 201             |
+      | entitlements   | 0.01            |
+      | notes          | Test Notes      |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (Individual) ---
+    When the agent logs out and re-logs in as the individual transferee "PAUDYFROG"
+    And the individual completes the transferee acceptance flow
+      | transfereeHerd | Y104069X      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 3 : Gift of Entitlements (202)
+    # Covers: TC_19
+    # Transferee: TERENCE1 (Individual — different user)
+    # ===========================================
+
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | C1120016        |
+      | transfereeHerd | Y1041344        |
+      | transfereeName | Felim Sullivan  |
+      | transferType   | 202             |
+      | entitlements   | 0.01            |
+      | notes          | Test Notes      |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (Individual — TERENCE1) ---
+    When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the individual completes the transferee acceptance flow
+      | transfereeHerd | Y1041344      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 4 : Lease of Entitlements (211)
+    # Covers: TC_20
+    # Transferee: TERENCE1 (Individual)
+    # NOTE: Lease includes lease year selection
+    # ===========================================
+
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | C1120016        |
+      | transfereeHerd | Y1041344        |
+      | transfereeName | Felim Sullivan  |
+      | transferType   | 211             |
+      | entitlements   | 0.01            |
+      | leaseYear      | Yes             |
+      | notes          | Test Notes      |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (Individual — TERENCE1) ---
+    When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the individual completes the transferee acceptance flow
+      | transfereeHerd | Y1041344      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully

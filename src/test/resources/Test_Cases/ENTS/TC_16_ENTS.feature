@@ -1,24 +1,21 @@
-Feature: TC-03 Entitlements/Usage Button
+Feature: TC_16_ENTS - Entitlements/Usage Button Verification
 
-  @sanity
-  @tmslink=ENTSAGL-9414
-  Scenario: Entitlements/Usage Button
-    Given user on login page
-    When clicks on new agent login button
-    #When Agent Enters new NRCISYF Agent 1 Username
-    When enters "aga6504" as new username
-    And clicks on Continue button
-    And enter password
-    And clicks on Continue button
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "My Clients" Tab
-    And Agent switch to "Transfers" Tab in My Clients Page
-    When Agent Search for Herd Number Field and Enter Herd as "A1060280"
-    #And Agent Search for Herd Number Field and Enter Herd from row 2
-    Then Agent Click On View Link for Searched Herd
-    And Agent Navigate to "Entitlements / Usage" tab on the SideNavBar
-    And Agent Gets OwnerID of herd
-    And Agent verifies Entitlement position
+  # Migrated from: TC_16_ENTS.feature (1 scenario)
+  # Agent navigates to Entitlements/Usage tab and verifies position
+  # Author: Aniket Pathare | Created: 31-03-2026
+
+  Background:
+    Given the agent user is on the login page
+    When the agent logs into the application with valid credentials and OTP
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Clients page
+
+  @sanity @entitlements
+  Scenario: AT-ENTS-ENTITLEMENTS - Verify Entitlements/Usage button and position
+
+    When the agent searches for herd "A1060280" and opens it
+    And the agent navigates to the "Entitlements / Usage" side nav tab
+    And the agent captures the OwnerID of the herd
+    Then the agent verifies the entitlement position is displayed

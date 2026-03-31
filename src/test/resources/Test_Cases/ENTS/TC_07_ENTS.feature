@@ -1,483 +1,262 @@
-@Transfers
-Feature: Verify the Transfer Application from Agent To ETF Functionality - aga6322
+Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Partner)
+
+  # --------------------------------------------------------------------------------------------------------------------
+  # Purpose:
+  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the
+  #   Transferor is an Agent and the Transferee is an ETF Partner user.
+  #
+  #   Key differences from Agent-to-Agent (TC_03/TC_04) and Agent-to-Individual (TC_05/TC_06):
+  #     - Transferee logs in via the PARTNER login page (different URL from agent and individual)
+  #     - Partner uses MS Authenticator OTP (not SMS OTP)
+  #     - Partner login flow: username → Login → password → Login → MS Auth OTP → Login
+  #     - Partner clicks the "ETF" button on the transferee dashboard (not standard View)
+  #     - Partner searches for the transferee herd first, then clicks ETF
+  #
+  #   Transfer types covered:
+  #     Section 1 : Change of Registration  (205) — J1390696 → J1314060 (Teresa Noone / agr15594)
+  #     Section 2 : Inheritance             (201) — J1400039 → J1350023 (Frehill Suppliers / agr15594)
+  #     Section 3 : Gift                    (202) — J1410417 → J1360045 (Nestor Exports Ltd / agr15678)
+  #     Section 4 : Lease                   (211) — J1400195 → J1350309 (Cadden Suppliers / agr15678) + lease year
+  #     Section 5 : Merger                  (203) — J1400217 → J1350147 (Sean Lally / agr15512)
+  #     Section 6 : Division               (204) — J140033X → V2631112 (Nora White / agr15512)
+  #     Section 7 : Sale                    (212) — J1400519 → J1350147 (Sean Lally / agr15512)
+  #     Section 8 : Change of Legal Entity  (206) — J1350350 → J1350457 (Michael Gerard Gargan / agr15512)
+  #
+  # Migrated from: TC_07_ENTS.feature (legacy 8 separate scenarios)
+  #   TC_25 → Section 1     TC_26 → Section 2     TC_28 → Section 3     TC_29 → Section 4
+  #   TC_30 → Section 5     TC_31 → Section 6     TC_32 → Section 7     TC_33 → Section 8
+  #
+  # Step reuse:
+  #   Transferor flow (create/upload/send/capture)  → TC_01_ENTS.java
+  #   Background login / nav                        → TC_03.java
+  #   Tab switching                                 → TC_06.java
+  #   Transferor re-login                           → TC_03_ENTS.java
+  #   Submission verification                       → TC_01_ENTS.java
+  #
+  #   NEW steps in TC_07_ENTS.java (2):
+  #     - "the agent logs out and re-logs in as the ETF partner {string}"
+  #     - "the ETF partner completes the transferee acceptance flow" (DataTable)
+  #
+  # Author : Aniket Pathare | aniket.pathare@government.ie
+  # Created: 31-03-2026
+  # --------------------------------------------------------------------------------------------------------------------
 
   Background:
-    Given user on login page
-    When clicks on new agent login button
-    When Agent Enters New Agent 1 Username for Transfers
-    And clicks on Continue button
-#    And Agent Enters the Pin Number
-    And enter password
-#    Then Agent Enters 1 as the OTP
-#    And clicks on Login button
-    And clicks on Continue button
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "My Clients" Tab
-    And Agent switch to "Transfers" Tab in My Clients Page
+    Given the agent user is on the login page
+    When the agent logs into the application with valid credentials and OTP
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Clients page
 
+  @regression @transfers @agent-to-etf @e2e
+  Scenario: AT-ENTS-TRANSFERS-E2E-07 - Agent completes all Agent-to-ETF Partner transfer types
 
-  @tmslink=ENTSAGL-7104
-  Scenario: TC_25_Regression_Pack_ Agent to ETF_Change of Registration details
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process O1321027
-    When Agent Search for Herd Number Field and Enter Herd as "J1390696"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #B1220255 G1861980
-    And Agent Fill "txeeHerd" field value as "J1314060"
-    #Kathleen Deely
-    And Agent Fill "txeeName" field value as "Teresa Noone"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "205" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-#    When Agent Enter "agr15512" as Trasferee Username
-#    And Agent Enters the Pin Number
-#    And enter password
-#    And clicks on Login button
-    Given user on partner login page
-    When clicks on new agent login button
-    When Login with the Partner Username "agr15594"
-    And clicks on partner Login button
-    And enter password
-    And clicks on partner Login button
-    Then Partner Enters MS authenticator OTP
-    And clicks on partner Login button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    When Agent Search for Herd Number Field and Enter Herd as "J1314060"
-    Then Agent Click On View Link for Searched Herd
-    #Then Click on View button in Transferee Dashboard with Herd Number "J1390696"
-    Then AgentClick On ETF Button
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # ===========================================
+    # SECTION 1 : Change of Registration (205)
+    # Covers: TC_25
+    # ETF Partner: agr15594
+    # ===========================================
 
-  @tmslink=ENTSAGL-7105
-  Scenario: TC_26_Regression_Pack_Agent to ETF_Inheritance of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process O1321035
-    When Agent Search for Herd Number Field and Enter Herd as "J1400039"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #B1220255 G1861980
-    And Agent Fill "txeeHerd" field value as "J1350023"
-    #Kathleen Deely
-    And Agent Fill "txeeName" field value as "Frehill Suppliers"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "201" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on partner login page
-    When clicks on new agent login button
-#    When Agent Enter "agr15512" as Trasferee Username
-#    And Agent Enters the Pin Number
-#    And enter password
-#    And clicks on Login button
-    When Login with the Partner Username "agr15594"
-    And clicks on partner Login button
-    And enter password
-    And clicks on partner Login button
-    Then Partner Enters MS authenticator OTP
-    And clicks on partner Login button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    When Agent Search for Herd Number Field and Enter Herd as "J1350023"
-    Then Agent Click On View Link for Searched Herd
-    #Then Click on View button in Transferee Dashboard with Herd Number "J1390696"
-    Then AgentClick On ETF Button
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # --- Transferor (Agent) ---
+    When the agent creates a transfer application with the following details
+      | transferorHerd | J1390696      |
+      | transfereeHerd | J1314060      |
+      | transfereeName | Teresa Noone  |
+      | transferType   | 205           |
+      | entitlements   | 0.01          |
+      | notes          | Test Notes    |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-  @tmslink=ENTSAGL-7106
-  Scenario: TC_28_Regression_Pack_Agent to ETF_Gift of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process O132405X J1400101
-    When Agent Search for Herd Number Field and Enter Herd as "J1410417"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #B1220255 G1861980
-    And Agent Fill "txeeHerd" field value as "J1360045"
-    #Kathleen Deely
-    And Agent Fill "txeeName" field value as "Nestor Exports Ltd"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "202" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-#    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on partner login page
-    When clicks on new agent login button
-#    When Agent Enter "agr15512" as Trasferee Username
-#    And Agent Enters the Pin Number
-#    And enter password
-#    And clicks on Login button
-    When Login with the Partner Username "agr15678"
-    And clicks on partner Login button
-    And enter password
-    And clicks on partner Login button
-    Then Partner Enters MS authenticator OTP
-    And clicks on partner Login button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    When Agent Search for Herd Number Field and Enter Herd as "J1360045"
-    Then Agent Click On View Link for Searched Herd
-    #Then Click on View button in Transferee Dashboard with Herd Number "J1390696"
-    Then AgentClick On ETF Button
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # --- Transferee (ETF Partner) ---
+    When the agent logs out and re-logs in as the ETF partner "agr15594"
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | J1314060      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-  @tmslink=ENTSAGL-7107
-  Scenario: TC_29_Regression_Pack_Agent to ETF _ Lease of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process O1324115
-    When Agent Search for Herd Number Field and Enter Herd as "J1400195"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #B1220255 G1861980
-    And Agent Fill "txeeHerd" field value as "J1350309"
-    #Kathleen Deely
-    And Agent Fill "txeeName" field value as "Cadden Suppliers"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "211" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    When Agent Select the Lease Year
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on partner login page
-    When clicks on new agent login button
-#    When Agent Enter "agr15512" as Trasferee Username
-#    And Agent Enters the Pin Number
-#    And enter password
-#    And clicks on Login button
-    When Login with the Partner Username "agr15678"
-    And clicks on partner Login button
-    And enter password
-    And clicks on partner Login button
-    Then Partner Enters MS authenticator OTP
-    And clicks on partner Login button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    When Agent Search for Herd Number Field and Enter Herd as "J1350309"
-    Then Agent Click On View Link for Searched Herd
-    #Then Click on View button in Transferee Dashboard with Herd Number "J1390696"
-    Then AgentClick On ETF Button
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # ===========================================
+    # SECTION 2 : Inheritance (201)
+    # Covers: TC_26
+    # ETF Partner: agr15594
+    # ===========================================
 
-  @tmslink=ENTSAGL-7108
-  Scenario: TC_30_Regression_Pack_Agent to ETF _ Merger of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process O1324131
-    When Agent Search for Herd Number Field and Enter Herd as "J1400217"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #B1220255 G1861980
-    And Agent Fill "txeeHerd" field value as "J1350147"
-    #Kathleen Deely
-    And Agent Fill "txeeName" field value as "Sean Lally"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "203" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on partner login page
-    When clicks on new agent login button
-    # What is the username ?
-#    When Agent Enter "agr15512" as Trasferee Username
-#    And Agent Enters the Pin Number
-#    And enter password
-#    And clicks on Login button
-    When Login with the Partner Username "agr15512"
-    And clicks on partner Login button
-    And enter password
-    And clicks on partner Login button
-    Then Partner Enters MS authenticator OTP
-    And clicks on partner Login button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    When Agent Search for Herd Number Field and Enter Herd as "J1350147"
-    Then Agent Click On View Link for Searched Herd
-    #Then Click on View button in Transferee Dashboard with Herd Number "J1390696"
-    Then AgentClick On ETF Button
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | J1400039          |
+      | transfereeHerd | J1350023          |
+      | transfereeName | Frehill Suppliers |
+      | transferType   | 201               |
+      | entitlements   | 0.01              |
+      | notes          | Test Notes        |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-  @tmslink=ENTSAGL-7109
-  Scenario: TC_31_Regression_Pack_Agent to ETF _ Division of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process O1324158
-    When Agent Search for Herd Number Field and Enter Herd as "J140033X"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #B1220255 G1861980
-    And Agent Fill "txeeHerd" field value as "V2631112"
-    #Kathleen Deely
-    And Agent Fill "txeeName" field value as "Nora White"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "204" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on partner login page
-    When clicks on new agent login button
-    # What is the username ?
-#    When Agent Enter "agr15512" as Trasferee Username
-#    And Agent Enters the Pin Number
-#    And enter password
-#    And clicks on Login button
-    When Login with the Partner Username "agr15512"
-    And clicks on partner Login button
-    And enter password
-    And clicks on partner Login button
-    Then Partner Enters MS authenticator OTP
-    And clicks on partner Login button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    When Agent Search for Herd Number Field and Enter Herd as "V2631112"
-    Then Agent Click On View Link for Searched Herd
-    #Then Click on View button in Transferee Dashboard with Herd Number "J1390696"
-    Then AgentClick On ETF Button
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # --- Transferee (ETF Partner) ---
+    When the agent logs out and re-logs in as the ETF partner "agr15594"
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | J1350023      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-  @tmslink=ENTSAGL-7110
-  Scenario: TC_32_Regression_Pack_Agent to ETF _ Sale of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process O1330247
-    When Agent Search for Herd Number Field and Enter Herd as "J1400519"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #B1220255 G1861980
-    And Agent Fill "txeeHerd" field value as "J1350147"
-    #Kathleen Deely
-    And Agent Fill "txeeName" field value as "Sean Lally"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "212" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on partner login page
-    When clicks on new agent login button
-    # What is the username ?
-#    When Agent Enter "agr15512" as Trasferee Username
-#    And Agent Enters the Pin Number
-#    And enter password
-#    And clicks on Login button
-    When Login with the Partner Username "agr15512"
-    And clicks on partner Login button
-    And enter password
-    And clicks on partner Login button
-    Then Partner Enters MS authenticator OTP
-    And clicks on partner Login button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    When Agent Search for Herd Number Field and Enter Herd as "J1350147"
-    Then Agent Click On View Link for Searched Herd
-    #Then Click on View button in Transferee Dashboard with Herd Number "J1390696"
-    Then AgentClick On ETF Button
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # ===========================================
+    # SECTION 3 : Gift of Entitlements (202)
+    # Covers: TC_28
+    # ETF Partner: agr15678
+    # ===========================================
 
-  @tmslink=ENTSAGL-7919
-  Scenario: TC_33_Regression_Pack_Agent to ETF_Change of Legal Entity
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process O132078X
-    When Agent Search for Herd Number Field and Enter Herd as "J1350350"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #B1220255 G1861980
-    And Agent Fill "txeeHerd" field value as "J1350457"
-    #Kathleen Deely
-    And Agent Fill "txeeName" field value as "Michael Gerard Gargan"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "206" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-    # Transferee Process
-    And Click on Exit BISS Link
-    And Click on Logout Button
-    Given user on partner login page
-    When clicks on new agent login button
-    # What is the username ?
-#    When Agent Enter "agr15512" as Trasferee Username
-#    And Agent Enters the Pin Number
-#    And enter password
-#    And clicks on Login button
-    When Login with the Partner Username "agr15512"
-    And clicks on partner Login button
-    And enter password
-    And clicks on partner Login button
-    Then Partner Enters MS authenticator OTP
-    And clicks on partner Login button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    When Agent Search for Herd Number Field and Enter Herd as "J1350457"
-    Then Agent Click On View Link for Searched Herd
-    #Then Click on View button in Transferee Dashboard with Herd Number "J1390696"
-    Then AgentClick On ETF Button
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | J1410417           |
+      | transfereeHerd | J1360045           |
+      | transfereeName | Nestor Exports Ltd |
+      | transferType   | 202                |
+      | entitlements   | 0.01               |
+      | notes          | Test Notes         |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
+    # --- Transferee (ETF Partner — different partner account) ---
+    When the agent logs out and re-logs in as the ETF partner "agr15678"
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | J1360045      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
+    # ===========================================
+    # SECTION 4 : Lease of Entitlements (211)
+    # Covers: TC_29
+    # ETF Partner: agr15678
+    # NOTE: Lease includes lease year selection
+    # ===========================================
+
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | J1400195          |
+      | transfereeHerd | J1350309          |
+      | transfereeName | Cadden Suppliers  |
+      | transferType   | 211               |
+      | entitlements   | 0.01              |
+      | leaseYear      | Yes               |
+      | notes          | Test Notes        |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (ETF Partner) ---
+    When the agent logs out and re-logs in as the ETF partner "agr15678"
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | J1350309      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 5 : Merger of Entitlements (203)
+    # Covers: TC_30
+    # ETF Partner: agr15512
+    # ===========================================
+
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | J1400217    |
+      | transfereeHerd | J1350147    |
+      | transfereeName | Sean Lally  |
+      | transferType   | 203         |
+      | entitlements   | 0.01        |
+      | notes          | Test Notes  |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (ETF Partner) ---
+    When the agent logs out and re-logs in as the ETF partner "agr15512"
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | J1350147      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 6 : Division of Entitlements (204)
+    # Covers: TC_31
+    # ETF Partner: agr15512
+    # ===========================================
+
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | J140033X    |
+      | transfereeHerd | V2631112    |
+      | transfereeName | Nora White  |
+      | transferType   | 204         |
+      | entitlements   | 0.01        |
+      | notes          | Test Notes  |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (ETF Partner) ---
+    When the agent logs out and re-logs in as the ETF partner "agr15512"
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | V2631112      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 7 : Sale of Entitlements (212)
+    # Covers: TC_32
+    # ETF Partner: agr15512
+    # ===========================================
+
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | J1400519    |
+      | transfereeHerd | J1350147    |
+      | transfereeName | Sean Lally  |
+      | transferType   | 212         |
+      | entitlements   | 0.01        |
+      | notes          | Test Notes  |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (ETF Partner) ---
+    When the agent logs out and re-logs in as the ETF partner "agr15512"
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | J1350147      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 8 : Change of Legal Entity (206)
+    # Covers: TC_33
+    # ETF Partner: agr15512
+    # ===========================================
+
+    # --- Transferor ---
+    When the agent logs out and re-logs in as the transferor agent
+    And the agent creates a transfer application with the following details
+      | transferorHerd | J1350350              |
+      | transfereeHerd | J1350457              |
+      | transfereeName | Michael Gerard Gargan |
+      | transferType   | 206                   |
+      | entitlements   | 0.01                  |
+      | notes          | Test Notes            |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (ETF Partner) ---
+    When the agent logs out and re-logs in as the ETF partner "agr15512"
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | J1350457      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
