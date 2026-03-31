@@ -1,79 +1,77 @@
-@Transfers
-Feature: Verify the Transfer Application within same Agent Functionality - aga6327
+Feature: TC_02_ENTS - Transfer Application E2E Regression Pack (Different Agent)
+
+  # --------------------------------------------------------------------------------------------------------------------
+  # Purpose:
+  #   End-to-end regression journey for Transfer of Entitlements flows using a different
+  #   agent (Agent 3 / aga6327) than TC_01_ENTS (Agent 1 / aga6077).
+  #
+  #   Covers:
+  #     Section 1 : Merger of Entitlements (code 203) — full Transferor → Transferee cycle
+  #     Section 2 : Negative case — herd without entitlements (Add Entitlement button absent)
+  #
+  # Migrated from: TC_02_ENTS.feature (legacy)
+  #   TC_06 → Section 1  (Merger)
+  #   Commented negative case → Section 2  (No entitlements)
+  #
+  # Step reuse:
+  #   All Transferor/Transferee steps are defined in TC_01_ENTS.java.
+  #   Background login steps are from TC_03.java.
+  #   Tab switching is from TC_06.java.
+  #   The only NEW step in this file is the negative entitlement validation (Section 2).
+  #
+  # Notes:
+  #   1. This agent uses different credentials from TC_01_ENTS — set via TestData.xlsx
+  #      or -DusernameOverride for Agent 3.
+  #   2. Herd numbers are hardcoded test fixtures — update in TestData.xlsx if they expire.
+  #
+  # Author : Aniket Pathare | aniket.pathare@government.ie
+  # Created: 31-03-2026
+  # --------------------------------------------------------------------------------------------------------------------
 
   Background:
-    Given user on login page
-    When clicks on new agent login button
-#    When Agent Enters NRCISYF Agent 1 Username
-    When Agent Enters New Agent 3 Username for Transfers
-    And clicks on Continue button
-#    And Agent Enters the Pin Number
-    And enter password
-#    Then Agent Enters 1 as the OTP
-#    And clicks on Login button
-    And clicks on Continue button
-    Then External User Enters sms OTP
-    And clicks on Continue button
-    And Click on the Basic Income Support for Sustainability application
-    Given Agent is on BISS Agent Home Screen
-    Then Click on the Agent BISS "My Clients" Tab
-    And Agent switch to "Transfers" Tab in My Clients Page
+    Given the agent user is on the login page
+    When the agent logs into the application with valid credentials and OTP
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Clients page
 
-  @tmslink=ENTSAGL-7084
-  Scenario: TC_06_Regression_Pack_Same Agent_Merger of Entitlements
-    Given  Agent is on ENTS Farmer Dashboard Screen
-    # Transferor Process J1350350 V225069X  V1870644
-    When Agent Search for Herd Number Field and Enter Herd as "H114113X"
-    Then Agent Click On View Link for Searched Herd
-    When Agent Click on the "Create Transfer Application" button
-    Then Agent Click on Transfer Type "Search" Button
-    #V1911022 V2010592 V1920064
-    And Agent Fill "txeeHerd" field value as "H1360568"
-    #Gearoid Flynn Maria Fleming Martin Egan
-    And Agent Fill "txeeName" field value as "Walsh Farm"
-    Then Agent Click on the Dialog Box "Search" button
-    Then Agent select "203" as Transfer Type
-    And Agent Click on the " Next " button
-    Then Agent Click on First Add Entitlement Button for Transferor
-    And Agent Fill "itsNumEntsTx" field value as "0.01"
-    Then Agent Click on the Dialog Box "Add" button
-    And Agent Click on the " Next " button
-    And Agent Enter Transfer Notes as "Test Notes"
-    Then Agent Click On "Transferor Confirmation Signature Form " Link in Transfer Summary Page
-    And Agent Click on the " Upload Document " button
-    Then Agent Select from "selectedDocumentType" dropdown the doctype "Transferor Signature Confirmation" to Upload for Transfers
-    And Upload Document for Transfers
-    Then Agent Click on the Dialog Box " Upload Document " button
-    When Agent Click on the " Send to Transferee for Acceptance " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Send for Acceptance " button
-    Then Agent Capture Transfer Key in Summary Screen
-  # Transferee Process J1400195 John Edward Alcorn
-    Then Click on the Agent BISS "My Clients" Tab
-    And Agent switch to "Transfers" Tab in My Clients Page
-    When Agent Search for Herd Number Field and Enter Herd as "H1360568"
-    Then Agent Click On View Link for Searched Herd
-    Then Click on View button in Transferee Dashboard with Herd Number "H136XXXX"
-    And Agent Fill "inputtedTransferKey" field value with Transfer Key
-    Then Agent Click on the Dialog Box "View Transfer Application" button
-    And Agent Enter Transfer Notes as "Approved Test"
-    When Agent Click on the " Submit Application to DAFM " button
-    And Agent Click On Terms and Conditions CheckBox
-    Then Agent Click on the Dialog Box " Submit Application " button
+  @regression @transfers @e2e
+  Scenario: AT-ENTS-TRANSFERS-E2E-02 - Agent completes merger transfer and validates no-entitlement herd
 
+    # ===========================================
+    # SECTION 1 : Merger of Entitlements (203)
+    # Covers: TC_06
+    # ===========================================
 
-#  Scenario: Negative case for Herd without Entitlements
-#    Given  Agent is on ENTS Farmer Dashboard Screen
-#    # Transferor Process
-#    When Agent Search for Herd Number Field and Enter Herd as "V1861254"
-#    Then Agent Click On View Link for Searched Herd
-#    When Agent Click on the "Create Transfer Application" button
-#    Then Agent Click on Transfer Type "Search" Button
-#    #K1410720
-#    And Agent Fill "txeeHerd" field value as "V1880640"
-#    #Patrick Mcsweeney
-#    And Agent Fill "txeeName" field value as "Michael Mullin"
-#    Then Agent Click on the Dialog Box "Search" button
-#    Then Agent select "203" as Transfer Type
-#    And Agent Click on the " Next " button
-#    Then Agent Check Add Entitlement Button not present
+    # --- Transferor ---
+    When the agent creates a transfer application with the following details
+      | transferorHerd | H114113X   |
+      | transfereeHerd | H1360568   |
+      | transfereeName | Walsh Farm |
+      | transferType   | 203        |
+      | entitlements   | 0.01       |
+      | notes          | Test Notes |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee ---
+    When the agent navigates to the transferee acceptance flow
+      | transfereeHerd | H1360568 |
+    And the agent enters the transfer key and views the application
+    And the agent submits the transfer to DAFM with notes "Approved Test"
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 2 : Negative — herd without entitlements
+    # Covers: Commented legacy negative scenario
+    # The Add Entitlement button should NOT be present
+    # ===========================================
+    When the agent navigates back to the Transfers client list
+    And the agent initiates a transfer search for herd without entitlements
+      | transferorHerd | V1861254       |
+      | transfereeHerd | V1880640       |
+      | transfereeName | Michael Mullin |
+      | transferType   | 203            |
+    Then the Add Entitlement button should not be present
