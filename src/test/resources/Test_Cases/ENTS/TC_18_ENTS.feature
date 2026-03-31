@@ -1,1 +1,517 @@
+Feature: Verify the Application Portal Functionalities
 
+  #Background updated
+  Background:
+    Given user on login page
+    When clicks on new agent login button
+    When enters username
+    And clicks on Login button
+   # And Agent Enters the Pin Number
+    And enter password
+    And clicks on Login button
+    Then External User Enters sms OTP
+    And clicks on Login button
+    And Click on the Basic Income Support for Sustainability application
+    Then Click on the Agent BISS "Home" Tab
+    Then Click on the Agent BISS "My Clients" Tab
+
+
+
+
+
+  @regression
+  Scenario: AT-TC-00 - Queries required for BISSAGL-301
+    Given Agent is on BISS Farmer Dashboard Screen
+    And Agent Select " Not Started " Quick Filter
+    And Agent picks herd in list
+
+#    Then Agent Search for Herd Number "N1080655"
+#    # N1090812 #N1010991 #N1091932 #N1170280 #N1080655 #N7010276 #N108031X
+#    And Agent Click on the Row with the Client "N1080655"
+#    # N1100559
+#    Then Agent Click on the View Dashboard Button
+
+#    @regression
+#  Scenario: Convert Data Table to User Defined Type
+#    Given Agent Numbers are taken from Excel File and used as UserName
+#      | Excel            | Location                                       | Sheet  |
+#      | AgentsBatch.xlsx | src/main/resources/TestData/AgentsBatch.xlsx   | Sheet1 |
+
+  @regression
+  Scenario: AT-TC-01 - To switch between all tabs for a farmer
+    Given  Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 1
+    Then Agent Click on the View Dashboard Button
+    And Agent Navigate to "Applications" tab on the SideNavBar
+    And Agent Navigate to "Farm Details" tab on the SideNavBar
+    And Agent Navigate to "Entitlements / Usage" tab on the SideNavBar
+    And Agent Navigate to "Transfer" tab on the SideNavBar
+    And Agent Navigate to "NR-CISYF" tab on the SideNavBar
+    And Agent Navigate to "Correspondence" tab on the SideNavBar
+    And Agent Navigate to "Farmer Dashboard" tab on the SideNavBar
+
+  @regression
+  Scenario: AT-TC-02 - To check Active Farmer Status
+    Given  Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Delete Draft if exists
+    And Agent Click On " Start Application " Farmer Dashboard Button
+    #And Agent Check the Active Farmer Status and opts under "Grassland" farming practice "Making Hay/Silage/Haylage" activity
+    #And Agent Click On Start or Continue Application Farmer Dashboard Button
+#    And Agent Click on the "I declare as not active" CheckBox
+#    And Agent Click on the "I declare as not active" CheckBox
+    And Agent Click on the "Making Hay/Silage/Haylage" CheckBox
+    Then Agent Click on Application Stepper "Next " Button
+
+  @regression
+  Scenario: AT-TC-03 - To check functionality of the Scheme Selection Page
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Delete Draft if exists
+    And Agent Click On " Start Application " Farmer Dashboard Button
+    And Agent Click on the "Making Hay/Silage/Haylage" CheckBox
+    Then Agent Click on Application Stepper "Next " Button
+    #***Removed as code is no longer hardcoded
+    #And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on the "Organics" scheme card
+    Then Agent Click on Application Stepper "Next " Button
+    Then Agent Click on the "I understand" dialog box button
+
+  @regression
+  Scenario: AT-TC-04 - To check Land Details Page Add Invalid Parcel functionality
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Delete Draft if exists
+    And Agent Click On " Start Application " Farmer Dashboard Button
+    And Agent Click on the "Making Hay/Silage/Haylage" CheckBox
+    Then Agent Click on Application Stepper "Next " Button
+    #***Removed as code is no longer hardcoded
+    #And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on the "Organics" scheme card
+    Then Agent Click on Application Stepper "Next " Button
+    Then Agent Click on the "I understand" dialog box button
+    Then Agent Click on "Land Details" Stepper
+    And Agent Click on the "Add parcel" Button in land details page
+    And Agent Enter Value "Invalid789" in the "parcelInput" Add Parcel Or Plot Dialog TextBox
+    Then Agent Click on the "Claim" dialog box button
+    And Check for Invalid Parcel Warning Message
+
+  @regression
+  Scenario: AT-TC-05 - To check Land Details Page Add Archived Parcel functionality - Need Archived Parcel
+#  H19112055
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Delete Draft if exists
+    And Agent Click On " Start Application " Farmer Dashboard Button
+    And Agent Click on the "Making Hay/Silage/Haylage" CheckBox
+    Then Agent Click on Application Stepper "Next " Button
+    #***Removed as code is no longer hardcoded
+    #And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on the "Organics" scheme card
+    Then Agent Click on Application Stepper "Next " Button
+    Then Agent Click on the "I understand" dialog box button
+    Then Agent Click on "Land Details" Stepper
+    And Agent Click on the "Add parcel" Button in land details page
+    And Agent Enter Value "H19112055" in the "parcelInput" Add Parcel Or Plot Dialog TextBox
+    Then Agent Click on the "Claim" dialog box button
+    #Then Agent Check for Archived Parcel Warning
+
+  @regression
+  Scenario: AT-TC-06 - To check Land Details Page Add Parcel functionality
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Delete Draft if exists
+    And Agent Click On " Start Application " Farmer Dashboard Button
+    And Agent Click on the "Making Hay/Silage/Haylage" CheckBox
+    Then Agent Click on Application Stepper "Next " Button
+    #***Removed as code is no longer hardcoded
+    #And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on the "Organics" scheme card
+    Then Agent Click on Application Stepper "Next " Button
+    Then Agent Click on the "I understand" dialog box button
+    Then Agent Click on "Land Details" Stepper
+    And Agent Click on the "Add parcel" Button in land details page
+    # A1250600051
+    And Agent Enter Value "A1190600017" in the "parcelInput" Add Parcel Or Plot Dialog TextBox
+    Then Agent Click on the "Claim" dialog box button
+    And Agent Enter Value "7" in the "claimedArea" Add Parcel Or Plot Dialog TextBox
+    And Agent Select Value "Owned" in the "ownershipStatus" Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Apples" in the "parcelUse" field in Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Conventional" in the "organicStatus" Add Parcel Or Plot Dialog Dropdown
+    Then Agent Click on the "Add" dialog box button
+
+  @regression
+  Scenario: AT-TC-07 - To check Land Details Page Add Claimed Parcel functionality
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Delete Draft if exists
+    And Agent Click On " Start Application " Farmer Dashboard Button
+    And Agent Click on the "Making Hay/Silage/Haylage" CheckBox
+    Then Agent Click on Application Stepper "Next " Button
+    #***Removed as code is no longer hardcoded
+    #And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on the "Organics" scheme card
+    Then Agent Click on Application Stepper "Next " Button
+    Then Agent Click on the "I understand" dialog box button
+    Then Agent Click on "Land Details" Stepper
+    And Agent Click on the "Add parcel" Button in land details page
+    And Agent Enter Value "A1190600017" in the "parcelInput" Add Parcel Or Plot Dialog TextBox
+    Then Agent Click on the "Claim" dialog box button
+   # And  Check for Claimed Parcel Warning Message
+
+  @regression
+  Scenario: AT-TC-08 - To check Land Details Page Add Plot functionality
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Delete Draft if exists
+    And Agent Click On " Start Application " Farmer Dashboard Button
+    And Agent Click on the "Making Hay/Silage/Haylage" CheckBox
+    Then Agent Click on Application Stepper "Next " Button
+    #***Removed as code is no longer hardcoded
+    #And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on the "Organics" scheme card
+    Then Agent Click on Application Stepper "Next " Button
+    Then Agent Click on the "I understand" dialog box button
+    Then Agent Click on "Land Details" Stepper
+    And Agent Click on the "Add plot" Button in land details page
+    And Agent Select Value "Donegal" in the "county" field in Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Aghadachor - E22301" in the "townland" field in Add Parcel Or Plot Dialog Dropdown
+    # U87654321
+    And Agent Enter Value "T12345678" in the "plotReference" Add Parcel Or Plot Dialog TextBox
+    And Agent Select Value "Owned" in the "ownershipStatus" Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Conventional" in the "organicStatus" Add Parcel Or Plot Dialog Dropdown
+    And Agent Enter Value "15" in the "claimedArea" Add Parcel Or Plot Dialog TextBox
+    And Agent Select Value "Blackcurrants" in the "plotUse" field in Add Parcel Or Plot Dialog Dropdown
+    And Agent Click on the "Submit Paper Map By Post" option to submit changes to Map
+    Then Agent Click on the "Next" dialog box button
+
+#    @regression
+#      Scenario: Restricted Forestry Crops
+
+
+  @regression
+  Scenario: AT-TC-09 - To check Land Details Page Add Parcel functionality by selecting parcel on Map
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    And Agent Click on the "Add parcel" Button in land details page
+    And Agent Select Value "Clare" in the "county" field in Add Parcel Or Plot Dialog Dropdown
+    # Affick - C23901
+    And Agent Select Value "Addergoole - C11501" in the "townland" field in Add Parcel Or Plot Dialog Dropdown
+    Then Agent Click on the "Open Map" dialog box button
+    And Agent Click On "Select Feature" Tool Option inb GIS Application
+    And Agent Click on Parcel from the Map
+    Then Agent Click On First parcel from List in Map
+    And Agent Click on the Map Page Claim Button in GIS
+    And Agent Enter Value "4" in the "claimedArea" Add Parcel Or Plot Dialog TextBox
+    And Agent Select Value "Owned" in the "ownershipStatus" Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Beet" in the "parcelUse" field in Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Conventional" in the "organicStatus" Add Parcel Or Plot Dialog Dropdown
+    Then Agent Click on the "Add" dialog box button
+
+  @regression
+  Scenario: AT-TC-10 - Adding a parcel to be deleted
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Land Details" Stepper
+    And Agent Click on the "Add parcel" Button in land details page
+    And Agent Enter Value "J1650300004" in the "parcelInput" Add Parcel Or Plot Dialog TextBox
+    Then Agent Click on the "Claim" dialog box button
+    And Agent Enter Value "3" in the "claimedArea" Add Parcel Or Plot Dialog TextBox
+    And Agent Select Value "Owned" in the "ownershipStatus" Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Clover" in the "parcelUse" field in Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Conventional" in the "organicStatus" Add Parcel Or Plot Dialog Dropdown
+    Then Agent Click on the "Add" dialog box button
+
+  @regression
+  Scenario: AT-TC-11 - Editing the Added Parcel before Deleting
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Land Details" Stepper
+    And Agent Chenge Number of rows to "100" in My Clients Page
+    And Agent Click on Plot Reference "J1650300004" to open Side Drawer
+    And Agent Click on CheckBox to request Eh Change
+    Then Agent do Request for EhChange in Side Drawer with reason as "Test Reason"
+    And Agent Select Value "Coriander" in the "parcelUse" field in Add Parcel Or Plot Dialog Dropdown
+    #Then Agent select the value as "Coriander" in the Side Drawer "parcelUse" dropdown
+    And Agent Click on Application Stepper " Save changes " Button
+#    Then Agent Click on Application Stepper "Cancel" Button
+
+  @regression
+  Scenario: AT-TC-12 - Deleting the added parcel
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Land Details" Stepper
+    Then Agent picks the "J1650300004 *" parcel and performs "Delete" action
+
+  @regression
+  Scenario: AT-TC-13 - Undo Delete action on the added parcel
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Land Details" Stepper
+    Then Agent performs Undo action for Deletion of the Parcel
+#    Then Agent picks the "J1650300004 *" parcel and performs "Undo deletion" action
+
+  @regression
+  Scenario: AT-TC-14 - Adding a plot to be deleted
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    And Agent Click on the "Add plot" Button in land details page
+    And Agent Select Value "Donegal" in the "county" field in Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Aghadowey - E18601" in the "townland" field in Add Parcel Or Plot Dialog Dropdown
+    And Agent Enter Value "T87654321" in the "plotReference" Add Parcel Or Plot Dialog TextBox
+    And Agent Select Value "Owned" in the "ownershipStatus" Add Parcel Or Plot Dialog Dropdown
+    And Agent Select Value "Conventional" in the "organicStatus" Add Parcel Or Plot Dialog Dropdown
+    And Agent Enter Value "10" in the "claimedArea" Add Parcel Or Plot Dialog TextBox
+    And Agent Select Value "Alfalfa" in the "plotUse" field in Add Parcel Or Plot Dialog Dropdown
+    And Agent Click on the "Submit Paper Map By Post" option to submit changes to Map
+#    aga6128
+    And Agent Select Value "Apples" in the "plotUse" field in Add Parcel Or Plot Dialog Dropdown
+    Then Agent Click on the "Next" dialog box button
+
+  @regression
+  Scenario: AT-TC-15 - Deleting the added plot
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Land Details" Stepper
+    Then Agent picks the "T87654321" parcel and performs "Delete" action
+    And Agent Click on the "Yes, delete" dialog box button
+    Then Agent Click on Application Stepper "Next " Button
+
+  @regression
+  Scenario: AT-TC-16 - Sort Organic Column and complete mandatory information
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Land Details" Stepper
+#    And Agent Click On Organic Column Header to Sort Rows
+    Then Agent Fill in Mandatory Information
+    Then Agent Click on Application Stepper "Next " Button
+
+#  @regression
+#  Scenario: To check Land Details Page Edit  Plot/Parcel functionality
+#    Given Agent is on BISS Farmer Dashboard Screen
+#    And Agent Click On "Continue application" Farmer Dashboard Button
+#    Then Agent Click on "Land Details" Stepper
+#    Then Agent Click on Application Stepper "Next" Button
+
+  @regression
+  Scenario: AT-TC-17 - To skip GAEC7 Page
+    #Showing re-direct error message
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 4
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "GAEC 7" Stepper
+    #And Agent Click on GAEC7 Continue Button 0 if present
+    Then Agent Click on Application Stepper "Next " Button
+    And Agent Click on GAEC7 Continue Button 0 if present
+    # Below line needs to have a condition
+#    Then Agent Click on the "Continue" dialog box button
+
+
+  #Commented out as GAEC-8 is OOS - 06/10
+#  @regression
+#  Scenario: To check view Map for a Parcel in GAEC8 Page
+#    #Showing re-direct error message
+#    Given Agent is on BISS Farmer Dashboard Screen
+#    Then Agent Search Herd Number from row 2
+#    Then Agent Click on the View Dashboard Button
+#    And Agent Click On "Continue application" Farmer Dashboard Button
+#    Then Agent Click on "GAEC 8" Stepper
+#    And Agent check Map for the parcel "N1031700083" in GAEC8 Page
+#    Then Agent Click on "Return to Land Details" button in the GIS Map Application NavLink
+
+   #Commented out as GAEC-8 is OOS - 06/10
+#  @regression
+#  Scenario: To check if Contribution Change for a Parcel in GAEC8 Page changes eligibility
+#    Given Agent is on BISS Farmer Dashboard Screen
+#    Then Agent Search Herd Number from row 2
+#    Then Agent Click on the View Dashboard Button
+#    And Agent Click On "Continue application" Farmer Dashboard Button
+#    Then Agent Click on "GAEC 8" Stepper
+#    And Agent change GAEC8 contribution type to "Not Claimed" for the parcel "N1031700083"
+#    Then Agent check SFN Value and Eligibilty
+#    And Agent change GAEC8 contribution type to "Feature" for the parcel "N1031700083"
+#    Then Agent check SFN Value and Eligibilty
+#    Then Agent Click on Application Stepper "Next" Button
+
+#  @regression
+#  Scenario: To check Eco Page AP1 functionality
+#    Given Agent is on BISS Farmer Dashboard Screen
+#    And Agent Click On "Continue application" Farmer Dashboard Button
+#    Then Agent Click on "Eco-Scheme" Stepper
+##    And Agent Select the "AP1" Scheme Option in Eco Page
+#    And Agent Click on Save & Select for "ap1" Scheme in Eco Page
+#    Then Agent Click on Application Stepper "Next" Button
+
+#  @regression
+#  Scenario: To check Eco Page AP2 functionality
+#    Given Agent is on BISS Farmer Dashboard Screen
+#    And Agent Click On "Continue application" Farmer Dashboard Button
+#    Then Agent Click on "Eco-Scheme" Stepper
+##    And Agent Select the "AP1" Scheme Option in Eco Page
+#    And Agent Select the "AP2" Scheme Option in Eco Page
+#    Then Agent Click on CheckBox for "ap2" Scheme in Eco Page
+##    Then Agent Click on CheckBox for "ap2" Scheme in Eco Page
+#    And Agent Click on Save & Select for "ap2" Scheme in Eco Page
+#    Then Agent Click on Application Stepper "Next" Button
+
+    @regression
+  Scenario: AT-TC-18 - To Accept Warnings and skip ACRES Page
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 3
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "ACRES" Stepper
+    And Agent Select "Yes, rescore" as option on panel 1
+    Then Agent Click "Continue" Button on panel 1
+   # And Agent Open the Area Actions Accordion
+    And Agent Select "Accept warnings" as option on panel 1
+    Then Agent Click "Continue" Button on panel 2
+    And Agent Select "Accept warnings " as option on panel 2
+    Then Agent Click "Continue" Button on panel 3
+
+
+  @regression
+  Scenario: AT-TC-19 - To check Eco Page AP4 functionality (Enhanced means 1 AP)
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 3
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Eco" Stepper
+    And Agent Select the "AP2" Scheme Option in Eco Page
+    And Agent Select "Standard" as option on panel 2
+    Then Agent Click "Save & Select" Button on panel 1
+    And Agent Select the "AP4" Scheme Option in Eco Page
+#    Then Agent Click on AP4 Scheme "standardTrees" Radio Button
+#    And Agent Click on CheckBox for "ap4" Scheme in Eco Page
+#    And Agent Click on Save & Select for "ap4" Scheme in Eco Page
+#    Then Agent Click on Application Stepper "Next " Button
+
+  @regression
+  Scenario: AT-TC-20 - To check Eco Page AP5 functionality GPS Spreader
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 3
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Eco" Stepper
+    And Agent Select the "AP2" Scheme Option in Eco Page
+    And Agent Select "Standard" as option on panel 2
+#    And Agent Select the "AP4" Scheme Option in Eco Page
+    And Agent Select the "AP5" Scheme Option in Eco Page
+    And Agent Selects the "Lemken" Approved Spreader Type from the "selectedSpreaderManufacturer" dropdown
+    And Agent Selects the "Polaris 14" Approved Spreader Type from the "spreaderModel" dropdown
+    And Agent enters data "A735B78346" in the "spreaderSerialNo" textbox
+    And Agent Click on Save & Select for "ap5" Scheme in Eco Page
+    Then Agent Click on Application Stepper "Next " Button
+
+#  @regression
+#  Scenario: To check Eco Page AP5 functionality GPS Sprayer - Invalid case function disabled
+#    Given Agent is on BISS Farmer Dashboard Screen
+#    And Agent Click On "Continue application" Farmer Dashboard Button
+#    Then Agent Click on "Eco-Scheme" Stepper
+##    And Agent Select the "AP5" Scheme Option in Eco Page
+#    And Agent Select the "AP5" Scheme Option in Eco Page
+#    And Agent Click on "sprayer" as Choice of Fertiliser Application Equipment
+#    And Agent enters data "Test Manufacturer" in the "sprayerManufacturer" textbox
+#    And Agent enters data "A735B78346" in the "sprayerSerialNo" textbox
+#    And Agent Click on Save & Select for "ap5" Scheme in Eco Page
+#    Then Agent Click on Application Stepper "Next" Button
+#
+#  @regression
+#  Scenario: To check Eco Page AP5 functionality Contractor
+#    Given Agent is on BISS Farmer Dashboard Screen
+#    And Agent Click On "Continue application" Farmer Dashboard Button
+#    Then Agent Click on "Eco-Scheme" Stepper
+##    And Agent Select the "AP5" Scheme Option in Eco Page
+##    And Agent Select the "AP5" Scheme Option in Eco Page
+#    And Agent Click on "contractor" as Choice of Fertiliser Application Equipment
+#    And Agent enters data "Test Contractor" in the "contractorName" textbox
+#    And Agent Click on Save & Select for "ap5" Scheme in Eco Page
+#    Then Agent Click on Application Stepper "Next" Button
+#
+#  @regression
+#  Scenario: To check Eco Page AP6 functionality
+#    Given Agent is on BISS Farmer Dashboard Screen
+#    And Agent Click On "Continue application" Farmer Dashboard Button
+#    Then Agent Click on "Eco-Scheme" Stepper
+#    # And Agent Select the "AP5" Scheme Option in Eco Page
+#    And Agent Select the "AP6" Scheme Option in Eco Page
+#    And Agent Click on CheckBox for "ap6" Scheme in Eco Page
+#    And Agent Click on Save & Select for "ap6" Scheme in Eco Page
+#    Then Agent Click on Application Stepper "Next" Button
+
+  @regression
+  Scenario: AT-TC-21 - To check Eco-Scheme Page Opt Out functionality - Invalid case functionality changed
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 3
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    Then Agent Click on "Eco" Stepper
+    And Agent Select the "AP5" Scheme Option in Eco Page
+    And Agent Select the "AP6" Scheme Option in Eco Page
+    Then Agent Click on "Scheme Selection" Stepper
+    Then Agent Click on the "Eco" scheme card
+    #And Agent Click on Application without Eco Checkbox
+    Then Agent Click on Application Stepper "Next " Button
+    Then Agent Click on the "I understand" dialog box button
+    Then Agent Click on Application Stepper "Next " Button
+    #Then Agent Click on Application Stepper "Next " Button
+    And Agent Click on GAEC7 Continue Button 1 if present
+   # Then Agent Click on Application Stepper "Next " Button
+    Then Agent Click on "ACRES" Stepper
+    And Agent Select "Yes, rescore" as option on panel 1
+    Then Agent Click "Continue" Button on panel 1
+   # And Agent Open the Area Actions Accordion
+    And Agent Select "Accept warnings" as option on panel 1
+    Then Agent Click "Continue" Button on panel 2
+
+
+
+
+  @regression
+  Scenario: AT-TC-22 - To check Review & Submit Page functionality
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 3
+    Then Agent Click on the View Dashboard Button
+    And Agent Click On "Continue application" Farmer Dashboard Button
+    #Then Agent Click on Application Stepper "Back " Button
+    Then Agent Click on "Review & Submit" Stepper
+    And Agent Click on Next Button in Review and Submit Page
+    Then Agent Click on Terms & Conditions CheckBox
+    Then Agent Click on Application Stepper "Submit" Button
+    And Agent Click on the "Yes, I confirm" dialog box button
+
+  @regression
+  Scenario: AT-TC-23 - To Upload Documents for Farmer
+    Given Agent is on BISS Farmer Dashboard Screen
+    Then Agent Search Herd Number from row 3
+    Then Agent Click on the View Dashboard Button
+    And Agent Navigate to "Correspondence" tab on the SideNavBar
+   # When Agent expand Upload Documents Accordion
+    Then Agent Click on Application Stepper " Upload a document" Button
+    Then Agent Select from "doc-type" dropdown the doctype "Commonage Evidence" to Upload
+    And Upload Document in Correspondence
+    Then Agent Click on Application Stepper "Upload" Button
