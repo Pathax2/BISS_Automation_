@@ -1,3 +1,32 @@
-R1230577
-R1050781
-M1952021
+// ── Blacklisted herds — re-fetch if we land on one of these ──────────────
+private static final Set<String> BLACKLISTED_HERDS = Set.of(
+        "R1230577", "R1050781", "M1952021"
+);
+
+// Call this immediately after setting runtimeHerd from DB
+private static void rerunIfBlacklisted()
+{
+    int iRetries = 0;
+    while (BLACKLISTED_HERDS.contains(runtimeHerd) && iRetries < 5)
+    {
+        iRetries++;
+        log.warning("[HOOKS] Blacklisted herd detected: " + runtimeHerd
+                + " — re-fetching (attempt " + iRetries + ")");
+
+        DatabaseQueries.runDB("DATA", "LIST OF HERDS WITH NO ERRORS AT ALL",
+                String.valueOf(java.time.Year.now().getValue()),
+                String.valueOf(iRetries + 5));  // bump the limit to get a different herd
+
+        runtimeHerd = DatabaseQueries.getFirstColumnValue().trim();
+        log.info("[HOOKS] New herd fetched: " + runtimeHerd);
+    }
+
+    if (BLACKLISTED_HERDS.contains(runtimeHerd))
+    {
+        throw new RuntimeException("[HOOKS] Could not resolve a non-blacklisted herd after 5 retries. "
+                + "Last herd: " + runtimeHerd);
+    }
+}
+
+runtimeHerd = DatabaseQueries.getFirstColumnValue().trim();
+rerunIfBlacklisted();  // ← add this line
