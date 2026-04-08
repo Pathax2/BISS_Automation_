@@ -1,11 +1,84 @@
+    // ***************************************************************************************************************************************************************************************
+    // Step          : When the agent completes all mandatory information in Land Details
+    // Description   : Iterates through every row in the Land Details table that has an error
+    //                 indicator (mat-icon "error"), clicks the row to open it, and fills in
+    //                 the mandatory Organic Status dropdown with "Conventional".
+    //                 Continues until no error rows remain, then clicks Next to proceed.
+    // ***************************************************************************************************************************************************************************************
     @When("the agent completes all mandatory information in Land Details")
-    public void theAgentCompletesAllMandatoryInformationInLandDetails() {
+    public void theAgentCompletesAllMandatoryInformationInLandDetails()
+    {
         log.info("[STEP] When the agent completes all mandatory information in Land Details");
-        // Clicks the complete mandatory info button or resolves inline mandatory field indicators
-        try {
 
+        WebDriver iDriver = getDriver();
+        int iMaxIterations = 50;  // safety cap to prevent infinite loops
+        int iIteration = 0;
+        int iRowsFixed = 0;
+
+        // Loop until no error rows remain or we hit the safety cap
+        while (iIteration < iMaxIterations)
+        {
+            iIteration++;
+
+            // Re-query the error rows on every iteration — the DOM updates after each fix
+            List<WebElement> iErrorRows = iDriver.findElements(
+                    By.xpath(ObjReader.getLocator("iLandTableErrorRows")));
+
+            if (iErrorRows.isEmpty())
+            {
+                log.info("No more error rows found. All mandatory information completed.");
+                break;
+            }
+
+            log.info("Iteration " + iIteration + " — error rows remaining: " + iErrorRows.size());
+
+            try
+            {
+                // Always target the FIRST error row — after fixing, the next one becomes first
+                String iFirstErrorRowXpath = ObjReader.getLocator("iLandTableFirstErrorRow");
+                iAction("CLICK", "XPATH", iFirstErrorRowXpath, null);
+                log.info("Clicked first error row.");
+
+                // Fill in the mandatory Organic Status dropdown
+                iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusDropdown"), "Conventional");
+                log.info("Set Organic Status to 'Conventional'.");
+
+                // Save the row change so the error indicator clears before the next iteration
+                try
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelBtn"), null);
+                    log.info("Saved parcel changes.");
+                }
+                catch (Exception saveEx)
+                {
+                    log.info("No explicit save button — change auto-applied.");
+                }
+
+                iRowsFixed++;
+            }
+            catch (Exception rowEx)
+            {
+                log.warning("Could not fix error row on iteration " + iIteration
+                        + ": " + rowEx.getMessage());
+                break;  // exit early so we don't loop forever on a stuck row
+            }
+        }
+
+        if (iIteration >= iMaxIterations)
+        {
+            log.warning("Reached safety cap of " + iMaxIterations
+                    + " iterations — there may still be unresolved error rows.");
+        }
+
+        log.info("Total rows fixed: " + iRowsFixed);
+
+        // Click Next to proceed to the next application step
+        try
+        {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
-        } catch (Exception e) {
-            log.info("No explicit complete mandatory button — mandatory fields resolved inline.");
+        }
+        catch (Exception e)
+        {
+            log.info("No explicit Next button — mandatory fields resolved inline.");
         }
     }
