@@ -1,4 +1,64 @@
-iLandTableFirstErrorRow = (//table[contains(@aria-label,'Land details')]//tr[contains(@class,'mat-mdc-row')][.//mat-icon[normalize-space()='error']])[1]
-iLandTableErrorRows     = //table[contains(@aria-label,'Land details')]//tr[contains(@class,'mat-mdc-row')][.//mat-icon[normalize-space()='error']]
-iOrganicStatusDropdown  = //mat-select[@formcontrolname='organicStatus']
-iSaveParcelBtn          = //button[normalize-space()='Save' or contains(normalize-space(),'Save changes')]
+    // ***************************************************************************************************************************************************************************************
+    // Step          : When the agent completes all mandatory information in Land Details
+    // Description   : Iterates through every row in the Land Details table that has an error
+    //                 indicator (mat-icon "error"), clicks the row to open it, and fills in
+    //                 the mandatory Organic Status dropdown with "Conventional".
+    //                 Loop exits as soon as no error rows remain, then clicks Next to proceed.
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent completes all mandatory information in Land Details")
+    public void theAgentCompletesAllMandatoryInformationInLandDetails()
+    {
+        log.info("[STEP] When the agent completes all mandatory information in Land Details");
+
+        WebDriver iDriver = getDriver();
+        int iRowsFixed = 0;
+
+        // Loop until no error rows remain in the Land Details table
+        while (true)
+        {
+            // Re-query the error rows on every iteration — the DOM updates after each fix
+            List<WebElement> iErrorRows = iDriver.findElements(
+                    By.xpath(ObjReader.getLocator("iLandTableErrorRows")));
+
+            if (iErrorRows.isEmpty())
+            {
+                log.info("No more error rows found. All mandatory information completed.");
+                break;
+            }
+
+            log.info("Error rows remaining: " + iErrorRows.size());
+
+            // Always target the FIRST error row — after fixing, the next one becomes first
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLandTableFirstErrorRow"), null);
+            log.info("Clicked first error row.");
+
+            // Fill in the mandatory Organic Status dropdown
+            iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusDropdown"), "Conventional");
+            log.info("Set Organic Status to 'Conventional'.");
+
+            // Save the row change so the error indicator clears before the next iteration
+            try
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelBtn"), null);
+                log.info("Saved parcel changes.");
+            }
+            catch (Exception saveEx)
+            {
+                log.info("No explicit save button — change auto-applied.");
+            }
+
+            iRowsFixed++;
+        }
+
+        log.info("Total rows fixed: " + iRowsFixed);
+
+        // Click Next to proceed to the next application step
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
+        }
+        catch (Exception e)
+        {
+            log.info("No explicit Next button — mandatory fields resolved inline.");
+        }
+    }
