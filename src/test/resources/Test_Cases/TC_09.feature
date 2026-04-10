@@ -27,17 +27,26 @@ Feature: TC_09 - BISSAGL-20849 2025 iNet - Agent unable to view payments or land
 
   Background:
     Given the agent user is on the login page
-    When the agent logs into the application with the username "agr14385" and valid credentials
+    When the agent logs into the application with valid credentials and OTP
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
 
   #@tmslink=BISSAGL-1647
   @regression
   Scenario: Agent is able to view payments or land details for client
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    When the agent searches for herd number "D3350968"
-    And the agent clicks on the View Dashboard button
-    Then the agent clicks on the "Applications / Payments" link in the side navigation bar
+    # -----------------------------------------
+    # Farmer selection and dashboard validation
+    # -----------------------------------------
+    When the agent opens a farmer dashboard using herd data
+    Then the farmer dashboard should be displayed
+
+    # -----------------------------------------
+    # Side navigation validation
+    # -----------------------------------------
+    When the agent navigates through the farmer side navigation tabs
+      | Applications / Payments           |
+    Then each requested side navigation tab should open successfully
     And the agent selects "2023" from the "schemeYear" dropdown
     And the agent clicks on the "Payments" tab
-    Then no technical error is displayed on the page for herd "D3350968"
+    Then Agent Verifes No "Techinal error getting information extra information for herd number" Error shown on page.
