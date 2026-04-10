@@ -1,54 +1,61 @@
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent handles GAEC 7 Select Option actions
-    // Description   : Opens Select Option, ticks checkbox, enters area, and saves
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent handles any GAEC 7 continue action if present")
-    public void theAgentHandlesAnyGAEC7ContinueActionIfPresent() {
+@And("the agent handles any GAEC 7 continue action if present")
+public void theAgentHandlesAnyGAEC7ContinueActionIfPresent()
+{
+    log.info("[STEP] And the agent handles GAEC 7 select option actions");
 
+    int iIndex = 1;
 
+    while (true)
+    {
+        try
+        {
+            // ── Build indexed Select Option locator ──────────────────────────────
+            String iSelectOptionXpath = ObjReader.getLocator("iGAEC7_SelectOption_ByIndex")
+                .replace("${INDEX}", String.valueOf(iIndex));
 
-        log.info("[STEP] And the agent handles GAEC 7 select option actions");
-
-        int index = 1;
-
-        while (true) {
-
-            try {
-                // ----- Build indexed Select Option locator -----
-                String selectOption = ObjReader.getLocator("iGAEC7_SelectOption_ByIndex").replace("${INDEX}", String.valueOf(index));
-
-                // ----- Click Select Option -----
-                iAction("CLICK", "XPATH", selectOption, null);
-                log.info("Clicked GAEC 7 Select Option at index: " + index);
-
-                // ----- Tick checkbox -----
-
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ActionCheckbox"), null);
-
-
-                // ----- Enter Catch Crop Area -----
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iGAEC7_CatchCropArea"), "1.00");
-
-                // ----- Save changes -----
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_SaveBtn"), null);
-
-                // Restart index because Angular re-renders rows after save
-                iAction("WAITINVISIBLE", "XPATH", "iScreenBuffer2", "MDC Progress Spinner");
-                index = 1;
-
-            }
-            catch (Exception noMoreRows) {
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ContinueBtn"), null);
-                log.info("[STEP] Then the application should move beyond the GAEC 7 step");
-                log.info("✅ No more GAEC 7 Select Option rows to process.");
-
+            // ── If the Select Option row is not visible, no more rows remain ──────
+            if (!isVisible(By.xpath(iSelectOptionXpath), 3))
+            {
+                log.info("No more GAEC 7 Select Option rows at index " + iIndex + " — exiting loop.");
                 break;
             }
+
+            // ── Click Select Option ──────────────────────────────────────────────
+            iAction("CLICK", "XPATH", iSelectOptionXpath, null);
+            log.info("Clicked GAEC 7 Select Option at index: " + iIndex);
+
+            // ── Tick checkbox ────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ActionCheckbox"), null);
+
+            // ── Enter Catch Crop Area ────────────────────────────────────────────
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iGAEC7_CatchCropArea"), "1.00");
+
+            // ── Save changes ─────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_SaveBtn"), null);
+
+            // ── Wait for spinner to appear then disappear ────────────────────────
+            // Angular shows the MDC indeterminate spinner while it processes the save.
+            // First wait for it to become visible (confirms save was triggered),
+            // then wait for it to vanish (confirms Angular has finished re-rendering).
+            // Both waits use the resolved XPath — not a raw key string.
+            String iSpinnerXpath = ObjReader.getLocator("iScreenBuffer2");
+
+            isVisible(By.xpath(iSpinnerXpath), 2); // soft-wait for spinner to appear
+            iAction("WAITINVISIBLE", "XPATH", iSpinnerXpath, null);
+            log.info("Spinner gone — Angular re-render complete after save at index: " + iIndex);
+
+            // ── Reset index — Angular re-renders the full row list after save ────
+            iIndex = 1;
+        }
+        catch (Exception iNoMoreRows)
+        {
+            log.warning("Unexpected exception in GAEC 7 loop: " + iNoMoreRows.getMessage());
+            break;
         }
     }
-# Angular Material circular progress spinner   used with WAITINVISIBLE to wait for page loads
-# Targets the SVG circle inside the MDC gap patch component
-iScreenBuffer= //div[@class='mdc-circular-progress__gap-patch']//*[name()='svg']//*[name()='circle' and contains(@cx,'50%')]
-iScreenBuffer2=//div[contains(@class,'mdc-circular-progress--indeterminate')]
 
+    // ── Advance past GAEC 7 step ─────────────────────────────────────────────────
+    iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
+    iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ContinueBtn"), null);
+    log.info("✅ GAEC 7 step completed. Moving to next screen.");
+}
