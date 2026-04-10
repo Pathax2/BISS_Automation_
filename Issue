@@ -1,91 +1,54 @@
-@When("the agent completes all mandatory information in Land Details")
-public void theAgentCompletesAllMandatoryInformationInLandDetails()
-{
-    log.info("[STEP] When the agent completes all mandatory information in Land Details");
+    // ***************************************************************************************************************************************************************************************
+    // Step          : And the agent handles GAEC 7 Select Option actions
+    // Description   : Opens Select Option, ticks checkbox, enters area, and saves
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent handles any GAEC 7 continue action if present")
+    public void theAgentHandlesAnyGAEC7ContinueActionIfPresent() {
 
-    WebDriver iDriver = getDriver();
-    int iMaxIterations = 60;
-    int iIteration     = 0;
-    int iRowsFixed     = 0;
 
-    while (iIteration < iMaxIterations)
-    {
-        iIteration++;
 
-        // Re-query every iteration — Angular updates the icon in place after save
-        List<WebElement> iErrorRows = iDriver.findElements(
-            By.xpath(ObjReader.getLocator("iLandTableErrorRows")));
+        log.info("[STEP] And the agent handles GAEC 7 select option actions");
 
-        // ── Exit condition — no error rows remain ────────────────────────────────
-        if (iErrorRows.isEmpty())
-        {
-            log.info("✅ All error rows resolved. Total fixed: " + iRowsFixed);
-            break;
+        int index = 1;
+
+        while (true) {
+
+            try {
+                // ----- Build indexed Select Option locator -----
+                String selectOption = ObjReader.getLocator("iGAEC7_SelectOption_ByIndex").replace("${INDEX}", String.valueOf(index));
+
+                // ----- Click Select Option -----
+                iAction("CLICK", "XPATH", selectOption, null);
+                log.info("Clicked GAEC 7 Select Option at index: " + index);
+
+                // ----- Tick checkbox -----
+
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ActionCheckbox"), null);
+
+
+                // ----- Enter Catch Crop Area -----
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iGAEC7_CatchCropArea"), "1.00");
+
+                // ----- Save changes -----
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_SaveBtn"), null);
+
+                // Restart index because Angular re-renders rows after save
+                iAction("WAITINVISIBLE", "XPATH", "iScreenBuffer2", "MDC Progress Spinner");
+                index = 1;
+
+            }
+            catch (Exception noMoreRows) {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ContinueBtn"), null);
+                log.info("[STEP] Then the application should move beyond the GAEC 7 step");
+                log.info("✅ No more GAEC 7 Select Option rows to process.");
+
+                break;
+            }
         }
-
-        log.info("Iteration " + iIteration + " — error rows remaining: " + iErrorRows.size());
-
-        // ── Open the first error row in the Edit Parcel drawer ───────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iLandTableFirstErrorRow"), null);
-        log.info("Opened Edit Parcel drawer for first error row.");
-
-        // Track whether this iteration actually changed anything
-        boolean iAnyFieldFixed = false;
-
-        // ── 1. Rental / Lease Expiry Date ────────────────────────────────────────
-        if (isVisible(By.xpath(ObjReader.getLocator("iRentalExpiryDateInput")), 2))
-        {
-            String iExpiryDate = LocalDate.now()
-                .plusMonths(1)
-                .with(TemporalAdjusters.lastDayOfMonth())
-                .format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iRentalExpiryDateInput"), iExpiryDate);
-            log.info("Set Rental/Lease Expiry Date to: " + iExpiryDate);
-            iAnyFieldFixed = true;
-        }
-
-        // ── 2. Agricultural Activity ─────────────────────────────────────────────
-        if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivityRequired")), 2))
-        {
-            iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect"), "Milking Platform");
-            log.info("Set Agricultural Activity to 'Milking Platform'.");
-            iAnyFieldFixed = true;
-        }
-
-        // ── 3. Organic Status ────────────────────────────────────────────────────
-        if (isVisible(By.xpath(ObjReader.getLocator("iOrganicStatusEmpty")), 2))
-        {
-            iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), "Conventional");
-            log.info("Set Organic Status to 'Conventional'.");
-            iAnyFieldFixed = true;
-        }
-
-        // ── If nothing was fixable — unknown error, fail immediately ─────────────
-        if (!iAnyFieldFixed)
-        {
-            throw new AssertionError(
-                "Iteration " + iIteration + ": Edit Parcel drawer opened but no known "
-                + "mandatory field was missing. Unknown error type detected — "
-                + "check this herd manually.");
-        }
-
-        // ── Save ─────────────────────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelChangesBtn"), null);
-        log.info("Saved parcel changes.");
-
-        // ── Wait for Angular to update the icon before re-querying ───────────────
-        // Do NOT assert check_circle here — let the empty-check at the top of the
-        // next iteration be the single source of truth for whether the row is fixed
-        try { Thread.sleep(1500); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-
-        iRowsFixed++;
     }
+# Angular Material circular progress spinner   used with WAITINVISIBLE to wait for page loads
+# Targets the SVG circle inside the MDC gap patch component
+iScreenBuffer= //div[@class='mdc-circular-progress__gap-patch']//*[name()='svg']//*[name()='circle' and contains(@cx,'50%')]
+iScreenBuffer2=//div[contains(@class,'mdc-circular-progress--indeterminate')]
 
-    // ── Safety cap breach ────────────────────────────────────────────────────────
-    if (iIteration >= iMaxIterations)
-    {
-        throw new AssertionError(
-            "Safety cap of " + iMaxIterations + " iterations reached. "
-            + "Unresolved error rows still exist in Land Details.");
-    }
-}
