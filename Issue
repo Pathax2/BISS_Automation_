@@ -1,40 +1,99 @@
-private static void performVerifyElement(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
+// ***************************************************************************************************************************************************************************************
+// Step          : When the agent completes all mandatory information in Land Details
+// Description   : Iterates over all error rows in the Land Details table and fills in any missing
+//                 mandatory fields: Rental/Lease Expiry Date, Agricultural Activity, Organic Status.
+//                 After each save the table icon updates — re-query confirms fix before moving on.
+//                 Throws AssertionError if a row cannot be resolved after filling all known fields.
+// Author        : Aniket Pathare
+// Date          : 10/04/2026
+// ***************************************************************************************************************************************************************************************
+@When("the agent completes all mandatory information in Land Details")
+public void theAgentCompletesAllMandatoryInformationInLandDetails()
 {
-    boolean iVerified = false;
+    log.info("[STEP] When the agent completes all mandatory information in Land Details");
 
-    for (int iAttempt = 0; iAttempt < 5; iAttempt++)
+    WebDriver iDriver = getDriver();
+    int iMaxIterations = 60; // one per parcel — 53 rows visible in screenshot
+    int iIteration     = 0;
+    int iRowsFixed     = 0;
+
+    while (iIteration < iMaxIterations)
     {
-        try
+        iIteration++;
+
+        // Re-query every iteration — Angular updates the icon in place after save
+        // so a fresh findElements gives us the true remaining error count
+        List<WebElement> iErrorRows = iDriver.findElements(
+            By.xpath(ObjReader.getLocator("iLandTableErrorRows")));
+
+        if (iErrorRows.isEmpty())
         {
-            WebElement iElement = new WebDriverWait(pDriver, Duration.ofSeconds(2))
-                .until(ExpectedConditions.presenceOfElementLocated(pBy));
-
-            ((JavascriptExecutor) pDriver).executeScript(
-                "arguments[0].scrollIntoView({block:'center', inline:'center'});", iElement);
-
-            // Re-fetch after scroll — Angular CDK table re-renders on scroll events
-            iElement = new WebDriverWait(pDriver, Duration.ofSeconds(2))
-                .until(ExpectedConditions.visibilityOfElementLocated(pBy));
-
-            highlightElement(pDriver, iElement);
-
-            if (iElement.isDisplayed())
-            {
-                iVerified = true;
-                break;
-            }
+            log.info("✅ All error rows resolved. Total fixed: " + iRowsFixed);
+            break;
         }
-        catch (StaleElementReferenceException | TimeoutException e)
+
+        log.info("Iteration " + iIteration + " — error rows remaining: " + iErrorRows.size());
+
+        // ── Open the first error row in the Edit Parcel drawer ──────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iLandTableFirstErrorRow"), null);
+        log.info("Opened Edit Parcel drawer for first error row.");
+
+        // ── 1. Rental / Lease Expiry Date ────────────────────────────────────────
+        // Only appears when Ownership Status is Rented In or Leased In.
+        // Identified by the red-bordered date input with placeholder DD/MM/YYYY.
+        if (isVisible(By.xpath(ObjReader.getLocator("iRentalExpiryDateInput")), 2))
         {
-            log.warn("VERIFYELEMENT attempt " + (iAttempt + 1) + " – stale/timeout for: "
-                + pObjectName + ", retrying...");
-            try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            String iToday = java.time.LocalDate.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iRentalExpiryDateInput"), iToday);
+            log.info("Set Rental/Lease Expiry Date to today: " + iToday);
         }
+
+        // ── 2. Agricultural Activity ─────────────────────────────────────────────
+        // Identified by the "Required" validation message below the dropdown.
+        if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivityRequired")), 2))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect"),
+                "Grazing");
+            log.info("Set Agricultural Activity to 'Grazing'.");
+        }
+
+        // ── 3. Organic Status ────────────────────────────────────────────────────
+        // Identified by an empty or unset Organic Status dropdown.
+        if (isVisible(By.xpath(ObjReader.getLocator("iOrganicStatusEmpty")), 2))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"),
+                "Conventional");
+            log.info("Set Organic Status to 'Conventional'.");
+        }
+
+        // ── Save ─────────────────────────────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelChangesBtn"), null);
+        log.info("Saved parcel changes.");
+
+        // ── Verify the row's error icon is gone before next iteration ────────────
+        // Give Angular up to 3s to update the icon after save
+        boolean iRowCleared = isVisible(
+            By.xpath(ObjReader.getLocator("iLandTableNoErrorRows")), 3);
+
+        if (!iRowCleared)
+        {
+            // Row still shows error after filling all known fields — unknown error type
+            throw new AssertionError(
+                "Could not resolve all errors for parcel on iteration " + iIteration
+                + ". Unknown mandatory field still flagged. "
+                + "Check the herd manually — multiple unrecognised errors may exist.");
+        }
+
+        iRowsFixed++;
     }
 
-    if (!iVerified)
+    if (iIteration >= iMaxIterations)
     {
-        throw new AssertionError("VERIFYELEMENT failed. Element not visible after retries: " + pObjectName);
+        throw new AssertionError(
+            "Safety cap of " + iMaxIterations + " iterations reached. "
+            + "Unresolved error rows still exist in Land Details.");
     }
 }
 
+iRentalExpiryDateInput//mat-dialog-container//input[@placeholder='DD/MM/YYYY']Date field with red borderiAgriculturalActivityRequired//mat-dialog-container//*[contains(normalize-space(),'Required') and ancestor::*[contains(@class,'agricultural')]]The red "Required" label under Agricultural ActivityiAgriculturalActivitySelect//mat-dialog-container//*[@formcontrolname='agriculturalActivity']Agricultural Activity dropdowniOrganicStatusEmpty//mat-dialog-container//*[@formcontrolname='organicStatus' and not(.//*[normalize-space()!=''])]Organic Status only when unsetiLandTableNoErrorRows//mat-mdc-row[.//mat-icon[normalize-space()='check_circle']]
