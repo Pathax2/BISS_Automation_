@@ -56,26 +56,10 @@ public class TC_04
     @Then("the agent navigates to the {string} tab")
     public void theAgentNavigatesToTab(String pTab)
     {
-        iAction("CLICK", "XPATH",
-                "//a[normalize-space()='" + pTab.trim() + "']"
-                        + " | //button[normalize-space()='" + pTab.trim() + "']",
-                null);
+        // Click 'Home' first to reset the navigation to a known starting state
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
     }
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent navigates to the "Home" and "My Clients" Left Menu Link
-    // Description   : Clicks the Home tab first then the My Clients tab in sequence.
-    //                 Used as the final Background step in TC_05 through TC_12 where
-    //                 scenarios begin from the My Clients page.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 26-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent navigates to the \"Home\" and \"My Clients\" Left Menu Link")
-    public void theAgentNavigatesToHomeAndMyClientsLeftMenuLink()
-    {
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iBISSHomeTab"),      null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iBISSMyClientsTab"), null);
-    }
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent clicks on the {string} hyperlink in the Quick Links section
@@ -87,10 +71,10 @@ public class TC_04
     @When("the agent clicks on the {string} hyperlink in the Quick Links section")
     public void theAgentClicksOnQuickLinksHyperlink(String pLink)
     {
-        iAction("CLICK", "XPATH",
-                "//section[contains(@class,'quick-links')]//a[normalize-space()='" + pLink.trim() + "']"
-                        + " | //*[contains(@class,'quick-link') and normalize-space()='" + pLink.trim() + "']",
-                null);
+        // The spinner needs to disappear before we try to read the page title —
+        // otherwise we might check the heading while the page is still loading
+        iAction("WAITINVISIBLE", "XPATH", "iMDCGenericSpinner", "MDC Progress Spinner");
+        iAction("CLICK", "XPATH", "//div[normalize-space()='"+ pLink +"']/following-sibling::div//a", null);
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -102,7 +86,7 @@ public class TC_04
     @And("the agent clicks on the View Clients button in the BISS Applications section")
     public void theAgentClicksOnViewClientsButton()
     {
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iViewClientsBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iViewTotalClientsBtn"), null);
     }
 
     // ***************************************************************************************************************************************************************************************
