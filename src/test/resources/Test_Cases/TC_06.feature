@@ -5,7 +5,7 @@ Feature: TC_06 - Regression Suite for all Bugs and Features in BISS - 1
   #   Regression coverage for iNet correspondence bugs and fixes in BISS.
   #
   #   Active Scenarios:
-  #     AT-TC-01 : Verify 2023 Uploaded / Response Correspondence is visible in iNet / Internal
+  #     AT-TC-01 : Verify 2026 Uploaded / Response Correspondence is visible in iNet / Internal
   #                Covers: login → My Clients → herd search → Correspondence tab →
   #                         document type selection → upload → submit
   #
@@ -25,7 +25,7 @@ Feature: TC_06 - Regression Suite for all Bugs and Features in BISS - 1
   # --------------------------------------------------------------------------------------------------------------------
 
   @regression
-  Scenario: AT-TC-01 - iNet 2023 - Uploaded/Response Correspondence not showing in iNet/Internal
+  Scenario: AT-TC-01 - iNet 2026 - Uploaded/Response Correspondence not showing in iNet/Internal
     Given the agent user is on the login page
     When the agent logs into the application with valid credentials and OTP
     And the agent opens the "Basic Income Support for Sustainability" application
@@ -44,18 +44,17 @@ Feature: TC_06 - Regression Suite for all Bugs and Features in BISS - 1
       | My Correspondence                 |
 
     Then each requested side navigation tab should open successfully
-
     Then the agent clicks on the " Upload a document" stepper button
       #When Agent expand Upload Documents Accordion
-    And the agent selects "Commonage Evidence" from the "doc-type" dropdown
+    And the agent selects "Commonage Evidence" from the Document type dropdown
     And the agent uploads a document in Correspondence
-    Then the agent clicks on the "Upload" stepper button
 #     Then Check Doc Upload Success
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Clients page
-    When the agent searches for a transfer herd number "B1410500"
+    When the agent searches for a transfer herd number
     Then the agent clicks on the View link for the searched herd
-    And the agent clicks on the View Correspondence link in the dashboard
+    #Removing the below Line cause it makes no sense
+    #And the agent clicks on the View Correspondence link in the dashboard
 
 
   # ------------------------------------------------------------------------------------------------------------------

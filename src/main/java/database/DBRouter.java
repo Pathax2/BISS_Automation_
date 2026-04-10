@@ -184,6 +184,97 @@ public class DBRouter {
                 break;
             }
 
+            // ------------------------------------------------------------
+            // DATA DB: herds with Preliminary Checks (year)
+            // ------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIMINARY CHECKS": {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
+                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+            // ------------------------------------------------------------
+            // DATA DB: herds with Dual Claims check (year)
+            // ------------------------------------------------------------
+            case "LIST OF HERDS WITH DUAL CLAIMS CHECK": {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT * " +
+                                "FROM vwbs_preliminary_check_dc_ol " +
+                                "WHERE scheme_year = ? " +
+                                "AND ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ------------------------------------------------------------
+            // DATA DB: herds with Overclaims check (year)
+            // ------------------------------------------------------------
+            case "LIST OF HERDS WITH OVERCLAIMS CHECK": {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT * " +
+                                "FROM vwbs_preliminary_check_oc " +
+                                "WHERE scheme_year = ? " +
+                                "AND ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+            // ------------------------------------------------------------
+            // DATA DB: herds with Prelim Checks AND commonage parcels (year)
+            // ------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE": {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
+                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND lvl_commonage_id IS NOT NULL " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ------------------------------------------------------------
+            // DATA DB: herds with Prelim Checks filtered by response status (year, status)
+            // e.g. status = "Pending", "Accepted", "Rejected"
+            // ------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS": {
+                requireParamCountBetween(key, params, 2, 3);
+                int year    = parseInt(params[0], "year");
+                String status = params[1].trim();
+                int maxRows = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
+                sql =
+                        "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND lvs_desc = ? " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, status, maxRows };
+                break;
+            }
+
+
             default:
                 throw new RuntimeException("Unknown DB label: " + label);
         }

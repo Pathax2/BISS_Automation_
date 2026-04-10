@@ -28,14 +28,28 @@ Feature: TC_05 - Verify the My Clients Page Functionalities
   #@tmslink=BISSAGL-7010
   @regression
   Scenario: To switch between all tabs for agent
-    Given the agent is on the BISS Agent Home Screen
-    When the agent switches to the "Transfers" tab on the My Clients page
-    And the agent switches to the "NR/CISYF" tab on the My Clients page
-    And the agent switches to the "BISS Applications" tab on the My Clients page
+    # -----------------------------------------
+    # Farmer selection and dashboard validation
+    # -----------------------------------------
+    When the agent opens a farmer dashboard using herd data
+    Then the farmer dashboard should be displayed
 
-  @regression
-  Scenario: To Check all working functionalities in the My Clients Page
-    Given the agent is on the BISS Agent Home Screen
-    When the agent searches for herd number "N7010276"
-    And the agent clicks on the row for client "N7010276"
-    Then the agent clicks on the View Dashboard button
+    # -----------------------------------------
+    # Side navigation validation
+    # -----------------------------------------
+    When the agent navigates through the farmer side navigation tabs
+      | Applications / Payments           |
+      | Farm Details                      |
+      |Entitlements / Usage               |
+      | Transfers                         |
+      | NR-CISYF                          |
+      | My Correspondence                 |
+      | Farmer Dashboard                  |
+    Then each requested side navigation tab should open successfully
+
+    # -----------------------------------------
+    # Application start
+    # -----------------------------------------
+    When the agent deletes any existing draft if present
+    And the agent starts a new BISS application
+    Then the Active Farmer step should be displayed

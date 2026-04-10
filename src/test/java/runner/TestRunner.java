@@ -370,8 +370,7 @@ public class TestRunner
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
     // Date Created  : 11-03-2026
     // ***************************************************************************************************************************************************************************************
-    private static String safeGetCell(ExcelUtilities pExcel, String pSheet,
-                                      int pRow, String pColumnName, String pDefault)
+    private static String safeGetCell(ExcelUtilities pExcel, String pSheet, int pRow, String pColumnName, String pDefault)
     {
         try
         {

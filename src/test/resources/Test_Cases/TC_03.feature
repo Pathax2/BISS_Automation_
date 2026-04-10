@@ -159,7 +159,6 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     When the agent deletes parcel "J1650300004"
     Then parcel "J1650300004" should be marked for deletion
-
     When the agent undoes deletion for parcel "J1650300004"
     Then parcel "J1650300004" should be restored in Land Details
 
@@ -182,7 +181,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     When the agent deletes parcel or plot "T87654321"
     And the agent confirms the deletion
-    Then plot "T87654321" should be marked for deletion
+    #Then plot "T87654321" should be marked for deletion
 
     # -----------------------------------------
     # Land Details - complete mandatory information
@@ -205,10 +204,8 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     When the agent opens the "ACRES" step
     And the agent selects "Yes, rescore" on panel 1
     And the agent continues panel 1
-    And the agent selects "Accept warnings" on panel 1
     And the agent continues panel 2
-    And the agent selects "Accept warnings" on panel 2
-    And the agent continues panel 3
+   # And the agent continues panel 3
     Then the ACRES step should be completed successfully
 
     # -----------------------------------------

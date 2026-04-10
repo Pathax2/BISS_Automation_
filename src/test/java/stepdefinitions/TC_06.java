@@ -62,17 +62,9 @@ public class TC_06
     {
         log.info("[STEP] Then the agent clicks on the stepper button: " + pButtonText);
 
-        // Normalise the button text — the feature file sometimes has leading/trailing spaces
-        // (e.g. " Upload a document") due to formatting in the Gherkin table
-        String iCleanText = pButtonText.trim();
+        // " Upload a document" Button clicked on Correspondence Page
 
-        // Build a robust XPath that catches both <button> and <a> elements used as steppers,
-        // using normalize-space() to handle any DOM whitespace inconsistencies
-        String iXpath = "//button[normalize-space()='" + iCleanText + "']"
-                + " | //a[normalize-space()='" + iCleanText + "']"
-                + " | //span[normalize-space()='" + iCleanText + "']/ancestor::button[1]";
-
-        iAction("CLICK", "XPATH", iXpath, null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iUploadDocumentBtn"), null);
     }
 
 
@@ -89,17 +81,14 @@ public class TC_06
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 26-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent selects {string} from the {string} dropdown")
-    public void theAgentSelectsFromDropdown(String pValue, String pDropdownId)
+    @And("the agent selects {string} from the Document type dropdown")
+    public void theAgentSelectsFromDropdown(String pValue)
     {
-        log.info("[STEP] And the agent selects '" + pValue + "' from the '" + pDropdownId + "' dropdown");
+        log.info("[STEP] And the agent selects '" + pValue + "' dropdown");
 
         // Build a combined XPath that matches by either id or formcontrolname —
         // the BISS portal uses both depending on which Angular component renders the dropdown
-        iAction("LIST", "XPATH",
-                "//*[@id='" + pDropdownId.trim() + "']"
-                        + " | //*[@formcontrolname='" + pDropdownId.trim() + "']",
-                pValue.trim());
+        iAction("LIST", "XPATH", ObjReader.getLocator("iDocumentTypeSelect"), pValue);
     }
 
 
@@ -129,12 +118,13 @@ public class TC_06
                         + java.io.File.separator + "test"
                         + java.io.File.separator + "resources"
                         + java.io.File.separator + "Test_Data"
-                        + java.io.File.separator + "sample_upload.pdf");
+                        + java.io.File.separator + "Cover_Letter.pdf");
 
         // Send the file path directly to the hidden <input type="file"> element —
         // this triggers the same upload handler as the OS file picker without needing
         // to interact with the native dialog
         iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iCorrespondenceFileUpload"), iFilePath);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iUploadBtn"), null);
         log.info("Document uploaded: " + iFilePath);
     }
 
@@ -157,10 +147,7 @@ public class TC_06
         log.info("[STEP] And the agent switches to the '" + pTabName + "' tab on the My Clients page");
 
         // The My Clients page uses mat-tab-group — target the tab label by its visible text
-        iAction("CLICK", "XPATH",
-                "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='" + pTabName.trim() + "']"
-                        + " | //a[normalize-space()='" + pTabName.trim() + "']",
-                null);
+        iAction("CLICK", "XPATH", "//div[@role='tab'][.//span[normalize-space()='" + pTabName + "']]", null);
     }
 
 
@@ -173,13 +160,13 @@ public class TC_06
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 26-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent searches for a transfer herd number {string}")
-    public void theAgentSearchesForTransferHerdNumber(String pHerd)
+    @When("the agent searches for a transfer herd number")
+    public void theAgentSearchesForTransferHerdNumber()
     {
-        log.info("[STEP] When the agent searches for a transfer herd number: " + pHerd);
+        log.info("[STEP] When the agent searches for a transfer herd number: " + Hooks.RUNTIME_HERD);
 
         // Type the herd number into the Transfers-specific search field
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), Hooks.RUNTIME_HERD);
 
         // Hit the search button to filter the Transfers table
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
