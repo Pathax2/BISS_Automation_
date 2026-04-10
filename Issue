@@ -1,80 +1,91 @@
-    @When("the agent completes all mandatory information in Land Details")
-    public void theAgentCompletesAllMandatoryInformationInLandDetails()
+@When("the agent completes all mandatory information in Land Details")
+public void theAgentCompletesAllMandatoryInformationInLandDetails()
+{
+    log.info("[STEP] When the agent completes all mandatory information in Land Details");
+
+    WebDriver iDriver = getDriver();
+    int iMaxIterations = 60;
+    int iIteration     = 0;
+    int iRowsFixed     = 0;
+
+    while (iIteration < iMaxIterations)
     {
-        log.info("[STEP] When the agent completes all mandatory information in Land Details");
+        iIteration++;
 
-        WebDriver iDriver = getDriver();
-        int iMaxIterations = 60; // one per parcel — 53 rows visible in screenshot
-        int iIteration     = 0;
-        int iRowsFixed     = 0;
+        // Re-query every iteration — Angular updates the icon in place after save
+        List<WebElement> iErrorRows = iDriver.findElements(
+            By.xpath(ObjReader.getLocator("iLandTableErrorRows")));
 
-        while (iIteration < iMaxIterations)
+        // ── Exit condition — no error rows remain ────────────────────────────────
+        if (iErrorRows.isEmpty())
         {
-            iIteration++;
-
-            // Re-query every iteration — Angular updates the icon in place after save
-            // so a fresh findElements gives us the true remaining error count
-            List<WebElement> iErrorRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iLandTableErrorRows")));
-
-            if (iErrorRows.isEmpty())
-            {
-                log.info("✅ All error rows resolved. Total fixed: " + iRowsFixed);
-                break;
-            }
-
-            log.info("Iteration " + iIteration + " — error rows remaining: " + iErrorRows.size());
-
-            // ── Open the first error row in the Edit Parcel drawer ──────────────────
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLandTableFirstErrorRow"), null);
-            log.info("Opened Edit Parcel drawer for first error row.");
-
-            // ── 1. Rental / Lease Expiry Date ────────────────────────────────────────
-            // Only appears when Ownership Status is Rented In or Leased In.
-            // Identified by the red-bordered date input with placeholder DD/MM/YYYY.
-            if (isVisible(By.xpath(ObjReader.getLocator("iRentalExpiryDateInput")), 2))
-            {
-
-                String iToday = LocalDate.now().plusMonths(1).with(TemporalAdjusters.lastDayOfMonth()).format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iRentalExpiryDateInput"), iToday);
-                log.info("Set Rental/Lease Expiry Date to last day of current month: " + iToday);
-            }
-
-            // ── 2. Agricultural Activity ─────────────────────────────────────────────
-            // Identified by the "Required" validation message below the dropdown.
-            if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivityRequired")), 2))
-            {
-                iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect"), " Milking Platform ");
-                log.info("Set Agricultural Activity to 'Grazing'.");
-            }
-
-            // ── 3. Organic Status ────────────────────────────────────────────────────
-            // Identified by an empty or unset Organic Status dropdown.
-            if (isVisible(By.xpath(ObjReader.getLocator("iOrganicStatusEmpty")), 2))
-            {
-                iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), "Conventional");
-                log.info("Set Organic Status to 'Conventional'.");
-            }
-
-            // ── Save ─────────────────────────────────────────────────────────────────
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelChangesBtn"), null);
-            log.info("Saved parcel changes.");
-
-            // ── Verify the row's error icon is gone before next iteration ────────────
-            // Give Angular up to 3s to update the icon after save
-            boolean iRowCleared = isVisible(By.xpath(ObjReader.getLocator("iLandTableNoErrorRows")), 1);
-
-            if (!iRowCleared)
-            {
-                // Row still shows error after filling all known fields — unknown error type
-                throw new AssertionError("Could not resolve all errors for parcel on iteration " + iIteration + ". Unknown mandatory field still flagged. " + "Check the herd manually — multiple unrecognised errors may exist.");
-            }
-
-            iRowsFixed++;
+            log.info("✅ All error rows resolved. Total fixed: " + iRowsFixed);
+            break;
         }
 
-        if (iIteration >= iMaxIterations)
+        log.info("Iteration " + iIteration + " — error rows remaining: " + iErrorRows.size());
+
+        // ── Open the first error row in the Edit Parcel drawer ───────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iLandTableFirstErrorRow"), null);
+        log.info("Opened Edit Parcel drawer for first error row.");
+
+        // Track whether this iteration actually changed anything
+        boolean iAnyFieldFixed = false;
+
+        // ── 1. Rental / Lease Expiry Date ────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iRentalExpiryDateInput")), 2))
         {
-            throw new AssertionError("Safety cap of " + iMaxIterations + " iterations reached. " + "Unresolved error rows still exist in Land Details.");
+            String iExpiryDate = LocalDate.now()
+                .plusMonths(1)
+                .with(TemporalAdjusters.lastDayOfMonth())
+                .format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iRentalExpiryDateInput"), iExpiryDate);
+            log.info("Set Rental/Lease Expiry Date to: " + iExpiryDate);
+            iAnyFieldFixed = true;
         }
+
+        // ── 2. Agricultural Activity ─────────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivityRequired")), 2))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect"), "Milking Platform");
+            log.info("Set Agricultural Activity to 'Milking Platform'.");
+            iAnyFieldFixed = true;
+        }
+
+        // ── 3. Organic Status ────────────────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iOrganicStatusEmpty")), 2))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), "Conventional");
+            log.info("Set Organic Status to 'Conventional'.");
+            iAnyFieldFixed = true;
+        }
+
+        // ── If nothing was fixable — unknown error, fail immediately ─────────────
+        if (!iAnyFieldFixed)
+        {
+            throw new AssertionError(
+                "Iteration " + iIteration + ": Edit Parcel drawer opened but no known "
+                + "mandatory field was missing. Unknown error type detected — "
+                + "check this herd manually.");
+        }
+
+        // ── Save ─────────────────────────────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelChangesBtn"), null);
+        log.info("Saved parcel changes.");
+
+        // ── Wait for Angular to update the icon before re-querying ───────────────
+        // Do NOT assert check_circle here — let the empty-check at the top of the
+        // next iteration be the single source of truth for whether the row is fixed
+        try { Thread.sleep(1500); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+
+        iRowsFixed++;
     }
-java.lang.RuntimeException: iAction failed | Action=[CLICK] | Object=[(//table[contains(@aria-label,'Land details')]//tr[contains(@class,'mat-mdc-row')][.//mat-icon[normalize-space()='error']])[1]] | Reason : Expected condition failed: waiting for visibility of element located by By.xpath: (//table[contains(@aria-label,'Land details')]//tr[contains(@class,'mat-mdc-row')][.//mat-icon[normalize-space()='error']])[1] (tried for 30 second(s) with 500 milliseconds interval)
+
+    // ── Safety cap breach ────────────────────────────────────────────────────────
+    if (iIteration >= iMaxIterations)
+    {
+        throw new AssertionError(
+            "Safety cap of " + iMaxIterations + " iterations reached. "
+            + "Unresolved error rows still exist in Land Details.");
+    }
+}
