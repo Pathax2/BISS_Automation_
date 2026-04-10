@@ -1388,13 +1388,41 @@ public class CommonFunctions
 
     private static void performVerifyElement(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
     {
-        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
-        scrollIntoView(pDriver, iElement);
-        highlightElement(pDriver, iElement);
+        boolean iVerified = false;
 
-        if (!iElement.isDisplayed())
+        for (int iAttempt = 0; iAttempt < 5; iAttempt++)
         {
-            throw new AssertionError("VERIFYELEMENT failed. Element is not displayed for locator : " + pObjectName);
+            try
+            {
+                WebElement iElement = new WebDriverWait(pDriver, Duration.ofSeconds(2))
+                        .until(ExpectedConditions.presenceOfElementLocated(pBy));
+
+                ((JavascriptExecutor) pDriver).executeScript(
+                        "arguments[0].scrollIntoView({block:'center', inline:'center'});", iElement);
+
+                // Re-fetch after scroll — Angular CDK table re-renders on scroll events
+                iElement = new WebDriverWait(pDriver, Duration.ofSeconds(2))
+                        .until(ExpectedConditions.visibilityOfElementLocated(pBy));
+
+                highlightElement(pDriver, iElement);
+
+                if (iElement.isDisplayed())
+                {
+                    iVerified = true;
+                    break;
+                }
+            }
+            catch (StaleElementReferenceException | TimeoutException e)
+            {
+                log.info("VERIFYELEMENT attempt " + (iAttempt + 1) + " – stale/timeout for: "
+                        + pObjectName + ", retrying...");
+                try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            }
+        }
+
+        if (!iVerified)
+        {
+            throw new AssertionError("VERIFYELEMENT failed. Element not visible after retries: " + pObjectName);
         }
     }
 
