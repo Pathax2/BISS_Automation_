@@ -27,10 +27,9 @@ Feature: TC_04 - Verify the Dashboard Page Functionalities
 
   @regression
   Scenario: To Check all working functionalities in the Dashboard Page
-    Given the agent is on the BISS Agent Home Screen
     When the agent clicks on the "Transfer of Entitlements" hyperlink in the Quick Links section
     Then the agent navigates to the "Home" tab
-    When the agent clicks on the "CISYF" hyperlink in the Quick Links section
+    When the agent clicks on the "NR/CISYF" hyperlink in the Quick Links section
     Then the agent navigates to the "Home" tab
     And the agent clicks on the View Clients button in the BISS Applications section
     Then the agent navigates to the "Home" tab
