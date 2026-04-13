@@ -1,44 +1,90 @@
-case "AP5":
-    // ── Radio: "an approved GPS spreader" ────────────────────────────────────
-    // Target the label text directly — more reliable than the input sibling chain
-    iAction("CLICK", "XPATH", ObjReader.getLocator("iEcoAP5_GPSSpreaderRadio"), null);
-    log.info("AP5: Selected 'an approved GPS spreader'.");
-
-    // ── Approved Spreader dropdown — select Lemken ────────────────────────────
-    // mat-select with formcontrolname scoped inside the eco-ap5-form
-    // Using iAction LIST which handles CDK overlay open + option click
-    iAction("LIST", "XPATH", ObjReader.getLocator("iEcoAP5_ApprovedSpreaderDropdown"), "Lemken");
-    log.info("AP5: Selected 'Lemken' from Approved Spreader dropdown.");
-
-    // ── Model dropdown — only appears after Lemken is selected ────────────────
-    // Wait for the model dropdown to become visible before interacting —
-    // Angular renders it dynamically after the spreader manufacturer is set
-    iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iEcoAP5_ModelDropdown"), null);
-    iAction("LIST", "XPATH", ObjReader.getLocator("iEcoAP5_ModelDropdown"), "Polaris 14");
-    log.info("AP5: Selected 'Polaris 14' from Model dropdown.");
-
-    // ── Serial Number — optional text input ───────────────────────────────────
-    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iEcoAP5_SerialNumber"), "A735B78346");
-    log.info("AP5: Entered serial number.");
-    break;
+The thing is that sometimes the panel can already be expanded and sometimes it can be closed hence the script fails since AP1 panel is open and it tries to close it 
+is there a way we can check to open the panel if its closed only ? 
 
 
+<td _ngcontent-ng-c3148690263="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell cdk-column-expand mat-column-expand ng-tns-c3148690263-337 ng-star-inserted" role="cell"><button _ngcontent-ng-c3148690263="" mat-icon-button="" aria-label="expand row" mat-ripple-loader-class-name="mat-mdc-button-ripple" class="mdc-icon-button mat-mdc-icon-button ng-tns-c3148690263-337 mat-unthemed mat-mdc-button-base ng-star-inserted" mat-ripple-loader-centered=""><span class="mat-mdc-button-persistent-ripple mdc-icon-button__ripple"></span><mat-icon _ngcontent-ng-c3148690263="" role="img" class="mat-icon notranslate arrow-button ng-tns-c3148690263-337 material-icons mat-ligature-font mat-icon-no-color ng-star-inserted" aria-hidden="true" data-mat-icon-type="font">keyboard_arrow_down </mat-icon><!----><!----><span class="mat-mdc-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span><span class="mat-ripple mat-mdc-button-ripple"></span></button><!----></td>
 
+    @When("the agent selects eco AP options {string} and {string}")
+    public void theAgentSelectsEcoAPOptions(String pFirstAP, String pSecondAP)
+    {
+        log.info("[STEP] When the agent selects eco AP options: " + pFirstAP + " and " + pSecondAP);
 
-# ── Eco AP5 — GPS Controlled Fertiliser Spreader/Sprayer ──────────────────────────────────────────
+        WebDriver iDriver = getDriver();
 
-# Radio button label for "an approved GPS spreader" — click the label, not the input
-# The label is reliably clickable; the input itself has tabindex=-1 when not selected
-iEcoAP5_GPSSpreaderRadio=//label[@for='mat-radio-2-input']
+        // ── Resolve which two APs to process ────────────────────────────────────────
+        // If both params are empty, auto-detect the first two rows that have a toggle
+        // If params are supplied, use them in order
+        List<String> iTargetAPs = new ArrayList<>();
 
-# Approved Spreader mat-select — scoped inside the AP5 form to avoid clashing with other mat-selects
-iEcoAP5_ApprovedSpreaderDropdown=//form[contains(@class,'eco-ap5-form')]//mat-select[@formcontrolname='selectedSpreaderManufacturer']
+        if (!pFirstAP.isBlank())  iTargetAPs.add(pFirstAP.trim().toUpperCase());
+        if (!pSecondAP.isBlank()) iTargetAPs.add(pSecondAP.trim().toUpperCase());
 
-# Model dropdown — only rendered after a spreader manufacturer is selected
-# Scoped inside the AP5 form — formcontrolname is 'spreaderModel'
-iEcoAP5_ModelDropdown=//form[contains(@class,'eco-ap5-form')]//mat-select[@formcontrolname='spreaderModel']
+        boolean iAutoSelect = iTargetAPs.isEmpty();
 
-# Serial Number optional text input — scoped by formcontrolname inside AP5 form
-iEcoAP5_SerialNumber=//form[contains(@class,'eco-ap5-form')]//input[@formcontrolname='spreaderSerialNo']
+        // ── Find all AP rows that have a toggle button ───────────────────────────────
+        // Toggle presence = this AP is available for this herd
+        // Rows without a toggle are greyed out — skip them entirely
+        List<WebElement> iToggleRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iEcoAPRowsWithToggle")));
 
+        Assertions.assertFalse(iToggleRows.isEmpty(), "No AP rows with toggle buttons found on the Eco screen — check herd eligibility.");
 
+        log.info("Toggle-enabled AP rows found: " + iToggleRows.size());
+
+        int iSelected = 0;
+
+        for (WebElement iRow : iToggleRows)
+        {
+            if (iSelected >= 2) break;
+
+            // ── Read the AP code from this row's label cell ──────────────────────────
+            // e.g. " AP1 - Space for Nature * " → extract "AP1"
+            String iRowText = iRow.findElement(By.xpath(ObjReader.getLocator("iEcoAPRowLabelCell"))).getText().trim();
+
+            String iAPCode = iRowText.replaceAll("(?i)(AP\\d+).*", "$1").trim().toUpperCase();
+            log.info("Found toggleable AP row: " + iAPCode);
+
+            // ── Skip if params were supplied and this AP is not in the target list ───
+            if (!iAutoSelect && !iTargetAPs.contains(iAPCode))
+            {
+                log.info("Skipping " + iAPCode + " — not in target list.");
+                continue;
+            }
+
+            // ── Click the toggle to enable this AP ───────────────────────────────────
+           // WebElement iToggle = iRow.findElement(By.xpath(ObjReader.getLocator("iEcoAPToggleBtn")));
+            //iToggle.click();
+           // log.info("Toggled ON: " + iAPCode);
+
+            // ── Click the expand arrow to open the panel ─────────────────────────────
+            WebElement iExpandBtn = iRow.findElement(By.xpath(ObjReader.getLocator("iEcoAPExpandBtn")));
+            iExpandBtn.click();
+            log.info("Expanded panel for: " + iAPCode);
+
+            // ── Wait for panel content to render ─────────────────────────────────────
+            try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+
+            // ── Fill AP-specific fields ───────────────────────────────────────────────
+            handleEcoAPPanelFields(iAPCode);
+
+            // ── Click Save & Select ───────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iEcoAPSaveAndSelectBtn"), null);
+            log.info("Clicked Save & Select for: " + iAPCode);
+
+            // ── Wait for spinner and panel collapse ───────────────────────────────────
+            String iSpinnerXpath = ObjReader.getLocator("iScreenBuffer2");
+            isVisible(By.xpath(iSpinnerXpath), 2); // soft-wait for spinner to appear
+            iAction("WAITINVISIBLE", "XPATH", iSpinnerXpath, null);
+
+            iSelected++;
+            log.info("AP selected count: " + iSelected);
+        }
+
+        Assertions.assertEquals(2, iSelected,
+                "Expected 2 APs to be selected but only " + iSelected + " were processed. "
+                        + "Check toggle availability for this herd.");
+
+        // ── Assert counter shows "2 of 2 Selected" ───────────────────────────────────
+        String iCounterText = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iEcoAPSelectedCounter"), null);
+        Assertions.assertTrue(iCounterText.contains("2 of 2"), "Expected counter to show '2 of 2 Selected' but found: " + iCounterText);
+        log.info(" Eco AP counter confirmed: " + iCounterText);
+    }
