@@ -1,69 +1,103 @@
-Feature: TC_09 - BISSAGL-20849 2025 iNet - Agent unable to view payments or land details for client
-
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Verifies that an agent is able to view payment details for a specific client
-  #   without a technical error appearing on screen.
-  #
-  #   Defect Context:
-  #     BISSAGL-20849 reported that agents were unable to view payments or land details
-  #     for certain clients — a technical error message was shown instead of the data.
-  #
-  #   Active Scenario:
-  #     Verifies: login with specific agent account → My Clients herd search → Applications /
-  #               Payments navigation → scheme year 2023 → Payments tab →
-  #               no technical error message on screen
-  #
-  # Notes:
-  #   1. This scenario uses a fixed agent username "agr14385" in the Background as the
-  #      defect was reported against that specific account. Update in TestData.xlsx if
-  #      the account changes.
-  #   2. Herd "D3350968" is the specific client herd referenced in the defect report.
-  #   3. The error message text verified is the exact string from the defect report.
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 26-03-2026
-  # --------------------------------------------------------------------------------------------------------------------
-
-  Background:
-    Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-
-  #@tmslink=BISSAGL-1647
-  @regression
-  Scenario: Agent is able to view payments or land details for client
-    # -----------------------------------------
-    # Farmer selection and dashboard validation
-    # -----------------------------------------
-    When the agent opens a farmer dashboard using herd data
-    Then the farmer dashboard should be displayed
-
-    # -----------------------------------------
-    # Side navigation validation
-    # -----------------------------------------
-    When the agent navigates through the farmer side navigation tabs
-      | Applications / Payments           |
-    Then each requested side navigation tab should open successfully
-    And the agent selects "2023" from the "schemeYear" dropdown
-    And the agent clicks on the "Payments" tab
-    Then Agent Verifes No "Techinal error getting information extra information for herd number" Error shown on page.
-
-
-
-above is the feature file i want you to generate step definition for below lines 
-    And the agent selects "2023" from the "schemeYear" dropdown
-    And the agent clicks on the "Payments" tab
-    Then Agent Verifes No "Techinal error getting information extra information for herd number" Error shown on page.
-
 package stepdefinitions;
 
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Then;
+import org.junit.jupiter.api.Assertions;
 import org.openqa.selenium.By;
+import utilities.ObjReader;
+import java.util.logging.Logger;
+import static commonFunctions.CommonFunctions.*;
 
+// ===================================================================================================================================
+// File          : TC_09.java
+// Package       : stepdefinitions
+// Description   : Step definitions for TC_09 — BISSAGL-20849
+//                 Verifies an agent can view payments and land details for a client
+//                 without a technical error appearing on screen.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 26-03-2026
+// ===================================================================================================================================
 
 public class TC_09 {
+
+    private static final Logger log = Logger.getLogger(TC_09.class.getName());
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : And the agent selects "2023" from the "schemeYear" dropdown
+    // Description   : Selects the specified scheme year from the named mat-select dropdown.
+    //                 The dropdown is identified by its formcontrolname attribute.
+    //                 pDropdownName maps directly to formcontrolname in the DOM.
+    // Parameters    : pYear         — the scheme year to select e.g. "2023"
+    //                 pDropdownName — the formcontrolname of the mat-select e.g. "schemeYear"
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent selects {string} from the {string} dropdown")
+    public void theAgentSelectsFromTheDropdown(String pYear, String pDropdownName)
+    {
+        log.info("[STEP] And the agent selects '" + pYear + "' from the '" + pDropdownName + "' dropdown");
+
+        // Build the mat-select locator dynamically using the formcontrolname parameter —
+        // avoids hardcoding a locator per dropdown and keeps the step reusable across TCs
+        String iDropdownXpath = "//mat-select[@formcontrolname='" + pDropdownName + "']";
+
+        iAction("LIST", "XPATH", iDropdownXpath, pYear);
+        log.info("Selected '" + pYear + "' from dropdown with formcontrolname='" + pDropdownName + "'.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : And the agent clicks on the "Payments" tab
+    // Description   : Clicks the named tab on the Applications / Payments screen.
+    //                 Targets a mat-tab-link or mat-tab label containing the exact tab text.
+    // Parameters    : pTabName — the visible tab label text e.g. "Payments"
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent clicks on the {string} tab")
+    public void theAgentClicksOnTheTab(String pTabName)
+    {
+        log.info("[STEP] And the agent clicks on the '" + pTabName + "' tab");
+
+        // Target the tab by its visible label text — mat-tab-link covers Angular Material
+        // tab navigation headers; the normalize-space() handles any surrounding whitespace
+        String iTabXpath = "//div[contains(@class,'mat-mdc-tab-labels')]//div[contains(@class,'mat-mdc-tab') and normalize-space()='" + pTabName + "']";
+
+        iAction("WAITVISIBLE",   "XPATH", iTabXpath, null);
+        iAction("WAITCLICKABLE", "XPATH", iTabXpath, null);
+        iAction("CLICK",         "XPATH", iTabXpath, null);
+        log.info("Clicked on tab: " + pTabName);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Then Agent Verifies No "Technical error..." Error shown on page
+    // Description   : Asserts that the specified error message text is NOT present anywhere
+    //                 on the current page. Used to verify defect BISSAGL-20849 is resolved —
+    //                 the technical error message should not appear after navigating to Payments.
+    //                 Uses findElements rather than a hard assertion so a missing element
+    //                 (the happy path) passes cleanly without throwing NoSuchElementException.
+    // Parameters    : pErrorMessage — the exact error text to verify is absent
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("Agent Verifes No {string} Error shown on page.")
+    public void agentVerifiesNoErrorShownOnPage(String pErrorMessage)
+    {
+        log.info("[STEP] Then Agent Verifies No '" + pErrorMessage + "' Error shown on page.");
+
+        // Search for any element on the page that contains the error message text —
+        // uses contains() to handle partial text matches and surrounding whitespace
+        String iErrorXpath = "//*[contains(normalize-space(),'" + pErrorMessage + "')]";
+
+        boolean iErrorPresent = isVisible(By.xpath(iErrorXpath), 3);
+
+        Assertions.assertFalse(iErrorPresent,
+            "Technical error message was found on screen — defect BISSAGL-20849 may have regressed. "
+            + "Error text: '" + pErrorMessage + "'");
+
+        log.info("No technical error message found on page. Defect BISSAGL-20849 is not regressed.");
+    }
 }
