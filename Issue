@@ -1,32 +1,33 @@
-    private static void performClick(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
+private static void performClick(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
+{
+    final int    MAX_RETRIES     = 3;
+    final int    TIMEOUT_SECONDS = 10;
+    final int    POLL_MILLIS     = 500;
+
+    Wait<WebDriver> iFluentWait = new FluentWait<>(pDriver)
+            .withTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+            .pollingEvery(Duration.ofMillis(POLL_MILLIS))
+            .ignoring(StaleElementReferenceException.class)
+            .ignoring(ElementNotInteractableException.class)  // ← added
+            .withMessage("Element still not interactable after retries for : " + pObjectName);
+
+    iFluentWait.until(iDriver ->
     {
-        final int    MAX_RETRIES     = 3;
-        final int    TIMEOUT_SECONDS = 10;
-        final int    POLL_MILLIS     = 500;
+        WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+        pWait.until(ExpectedConditions.elementToBeClickable(iElement));
+        scrollIntoView(pDriver, iElement);
+        highlightElement(pDriver, iElement);
 
-        Wait<WebDriver> iFluentWait = new FluentWait<>(pDriver)
-                .withTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
-                .pollingEvery(Duration.ofMillis(POLL_MILLIS))
-                .ignoring(StaleElementReferenceException.class)
-                .withMessage("Element still stale after retries for : " + pObjectName);
-
-        iFluentWait.until(iDriver ->
+        try
         {
-            WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
-            pWait.until(ExpectedConditions.elementToBeClickable(iElement));
-            scrollIntoView(pDriver, iElement);
-            highlightElement(pDriver, iElement);
+            iElement.click();
+        }
+        catch (ElementClickInterceptedException iException)
+        {
+            log.warning("[" + getCurrentTimestamp() + "] Normal click intercepted. Retrying with JavaScript click for locator : " + pObjectName);
+            ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", iElement);
+        }
 
-            try
-            {
-                iElement.click();
-            }
-            catch (ElementClickInterceptedException iException)
-            {
-                log.warning("[" + getCurrentTimestamp() + "] Normal click intercepted. Retrying with JavaScript click for locator : " + pObjectName);
-                ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", iElement);
-            }
-
-            return true;
-        });
-    }
+        return true;
+    });
+}
