@@ -1,48 +1,32 @@
-/**
- * Description : Performs a click with up to 3 retries on ElementNotInteractableException.
- *               On each retry, waits for the element to be clickable before attempting again.
- *               Designed for slow-loading map components and Angular CDK overlays where
- *               elements become visible before they are fully interactable.
- * Parameters  : pDriver     - WebDriver instance
- *               pWait       - WebDriverWait instance
- *               pBy         - locator for the target element
- *               pObjectName - locator string for logging/error messages
- * Author      : Aniket Pathare
- * Date        : 10/04/2026
- */
-private static void performClickWithRetry(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
-{
-    int iMaxAttempts = 3;
-
-    for (int iAttempt = 1; iAttempt <= iMaxAttempts; iAttempt++)
+    private static void performClick(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
     {
-        try
-        {
-            // Wait for clickable before each attempt — slow pages may need extra time
-            WebElement iElement = new WebDriverWait(pDriver, Duration.ofSeconds(10))
-                .until(ExpectedConditions.elementToBeClickable(pBy));
+        final int    MAX_RETRIES     = 3;
+        final int    TIMEOUT_SECONDS = 10;
+        final int    POLL_MILLIS     = 500;
 
+        Wait<WebDriver> iFluentWait = new FluentWait<>(pDriver)
+                .withTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+                .pollingEvery(Duration.ofMillis(POLL_MILLIS))
+                .ignoring(StaleElementReferenceException.class)
+                .withMessage("Element still stale after retries for : " + pObjectName);
+
+        iFluentWait.until(iDriver ->
+        {
+            WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
+            pWait.until(ExpectedConditions.elementToBeClickable(iElement));
             scrollIntoView(pDriver, iElement);
             highlightElement(pDriver, iElement);
-            iElement.click();
-            return; // success — exit immediately
 
-        }
-        catch (ElementNotInteractableException | StaleElementReferenceException e)
-        {
-            log.warn("CLICK attempt " + iAttempt + "/" + iMaxAttempts
-                + " failed for: " + pObjectName
-                + " | Reason: " + e.getClass().getSimpleName()
-                + " — retrying in 1s...");
-
-            if (iAttempt == iMaxAttempts)
+            try
             {
-                throw new RuntimeException(
-                    "iAction failed | Action=[CLICK] | Object=[" + pObjectName + "]"
-                    + " | Reason: Element not interactable after " + iMaxAttempts + " attempts.", e);
+                iElement.click();
+            }
+            catch (ElementClickInterceptedException iException)
+            {
+                log.warning("[" + getCurrentTimestamp() + "] Normal click intercepted. Retrying with JavaScript click for locator : " + pObjectName);
+                ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", iElement);
             }
 
-            try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-        }
+            return true;
+        });
     }
-}
