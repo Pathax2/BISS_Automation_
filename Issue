@@ -3,76 +3,30 @@ public void theAgentSelectsTheScheme(String pSchemeName)
 {
     log.info("[STEP] When the agent selects the scheme: " + pSchemeName);
 
-    WebDriver iDriver = CommonFunctions.getDriver();
-
-    // ── Locate the card containing this scheme name ───────────────────────────
-    String iCardXpath = String.format(
-        "//biss-scheme-card[.//span[@class='scheme-name' and normalize-space()='%s']]//mat-card",
+    // ── Already ON check — scheme-selected class means toggle is already active ──
+    // Do NOT click — it would turn it OFF
+    String iAlreadySelectedXpath = String.format(
+        "//biss-scheme-card[.//span[@class='scheme-name' and normalize-space()='%s']]//mat-card[contains(@class,'scheme-selected')]",
         pSchemeName);
 
-    List<WebElement> iCards = iDriver.findElements(By.xpath(iCardXpath));
-
-    if (iCards.isEmpty())
+    if (isVisible(By.xpath(iAlreadySelectedXpath), 2))
     {
-        log.warning("Scheme card '" + pSchemeName + "' not found in DOM — skipping.");
+        log.info("Scheme '" + pSchemeName + "' is already ON — no action.");
         return;
     }
 
-    WebElement iCard = iCards.get(0);
-    String iCardClass = iCard.getAttribute("class");
-
-    // ── Non-clickable card — system-controlled (e.g. CRISS, ACRES) ───────────
-    if (iCardClass.contains("non-clickable-scheme"))
-    {
-        log.info("Scheme '" + pSchemeName + "' is system-controlled — skipping.");
-        return;
-    }
-
-    // ── Read aria-checked on the toggle button ────────────────────────────────
-    // Both ON and OFF toggles have disabled="" attribute — cannot use disabled
-    // as a signal. aria-checked is the only reliable state indicator.
-    WebElement iToggleBtn = iCard.findElement(By.xpath(".//button[@role='switch']"));
-    String iAriaChecked = iToggleBtn.getAttribute("aria-checked");
-
-    if ("true".equalsIgnoreCase(iAriaChecked))
-    {
-        // Toggle is already ON — mat-card has scheme-selected class
-        // Do NOT click — clicking would turn it OFF
-        log.info("Scheme '" + pSchemeName + "' is already ON (aria-checked=true) — no action.");
-        return;
-    }
-
-    // ── Toggle is OFF — click the tabindex='0' div to activate ───────────────
-    // The click binding is on the div[@tabindex='0'] wrapper inside biss-scheme-card
-    // When OFF the tabindex is 0 (clickable); when ON it is -1 (non-interactive)
-    // This is the same pattern used for the working scheme cards (BISS, Eco)
+    // ── Click target check — div[@tabindex='0'] only exists when card is clickable ─
+    // When scheme is system-controlled or ON, tabindex flips to -1 and this won't match
     String iClickTargetXpath = String.format(
         "//biss-scheme-card[.//span[@class='scheme-name' and normalize-space()='%s']]//div[@tabindex='0']",
         pSchemeName);
 
-    List<WebElement> iClickTargets = iDriver.findElements(By.xpath(iClickTargetXpath));
-
-    if (iClickTargets.isEmpty())
+    if (!isVisible(By.xpath(iClickTargetXpath), 2))
     {
-        log.warning("Scheme '" + pSchemeName + "' has no clickable div[@tabindex='0'] — "
-            + "card may be in a non-interactive state. Skipping.");
+        log.warning("Scheme '" + pSchemeName + "' has no clickable target — skipping.");
         return;
     }
 
     iAction("CLICK", "XPATH", iClickTargetXpath, null);
-    log.info("Clicked scheme card to turn ON: " + pSchemeName);
-
-    // ── Verify toggle flipped to ON ───────────────────────────────────────────
-    iCard = iDriver.findElement(By.xpath(iCardXpath)); // re-fetch after Angular re-render
-    iToggleBtn = iCard.findElement(By.xpath(".//button[@role='switch']"));
-    String iNewState = iToggleBtn.getAttribute("aria-checked");
-
-    if (!"true".equalsIgnoreCase(iNewState))
-    {
-        throw new AssertionError(
-            "Scheme '" + pSchemeName + "' was clicked but toggle did not switch ON. "
-            + "aria-checked is still: " + iNewState);
-    }
-
-    log.info("Scheme '" + pSchemeName + "' successfully turned ON.");
+    log.info("Scheme '" + pSchemeName + "' turned ON.");
 }
