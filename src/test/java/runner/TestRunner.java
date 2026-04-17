@@ -227,9 +227,7 @@ public class TestRunner
                 //    Browser → defaults to CHROME  (or -Dbrowser=FIREFOX if set via Maven/Bamboo)
                 //    Tags    → defaults to ""       (tags column is used in HTML report only)
                 //
-                iBrowser = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Browser",
-                        System.getProperty("browser", "CHROME"));
-
+                iBrowser = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Browser", System.getProperty("browser", "CHROME"));
                 iTags = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Tags", "");
 
                 // ── Locate the feature file ──────────────────────────────────────────────────────
