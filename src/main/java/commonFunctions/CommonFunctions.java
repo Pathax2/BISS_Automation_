@@ -300,6 +300,8 @@ public class CommonFunctions
 
                     System.setProperty("webdriver.chrome.driver","drivers/chromedriver.exe");
                     iDriver = new ChromeDriver(iOptions);
+
+
                     break;
                 }
 
@@ -340,6 +342,8 @@ public class CommonFunctions
             iDriverHolder.set(iDriver);
             iWaitHolder.set(new WebDriverWait(iDriver, Duration.ofSeconds(iExplicitWaitSeconds)));
             iDriver.get(pUrl.trim());
+            JavascriptExecutor js = (JavascriptExecutor) iDriver;
+            js.executeScript("document.body.style.zoom='80%'");
 
             log.info("[" + getCurrentTimestamp() + "] Browser launched successfully | Browser=" + pBrowserType.toUpperCase()
                     + " | Headless=" + iHeadless
@@ -520,6 +524,7 @@ public class CommonFunctions
                 .withTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
                 .pollingEvery(Duration.ofMillis(POLL_MILLIS))
                 .ignoring(StaleElementReferenceException.class)
+                .ignoring(ElementNotInteractableException.class)
                 .withMessage("Element still stale after retries for : " + pObjectName);
 
         iFluentWait.until(iDriver ->
@@ -1170,11 +1175,12 @@ public class CommonFunctions
         }
     }
 
-    private static void performWaitClickable(WebDriver pDriver, WebDriverWait pWait, By pBy)
+    private static WebElement performWaitClickable(WebDriver pDriver, WebDriverWait pWait, By pBy)
     {
         WebElement iElement = pWait.until(ExpectedConditions.visibilityOfElementLocated(pBy));
         pWait.until(ExpectedConditions.elementToBeClickable(iElement));
         scrollIntoView(pDriver, iElement);
+        return iElement;
     }
 
     private static void performWaitInvisible(WebDriver pDriver, WebDriverWait pWait, By pBy, String pObjectName)
@@ -1414,8 +1420,7 @@ public class CommonFunctions
             }
             catch (StaleElementReferenceException | TimeoutException e)
             {
-                log.info("VERIFYELEMENT attempt " + (iAttempt + 1) + " – stale/timeout for: "
-                        + pObjectName + ", retrying...");
+                log.info("VERIFYELEMENT attempt " + (iAttempt + 1) + " – stale/timeout for: " + pObjectName + ", retrying...");
                 try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
             }
         }
@@ -1425,6 +1430,7 @@ public class CommonFunctions
             throw new AssertionError("VERIFYELEMENT failed. Element not visible after retries: " + pObjectName);
         }
     }
+
 
     private static void performCalendar(WebDriver pDriver, WebDriverWait pWait, By pBy, String pValue)
     {
