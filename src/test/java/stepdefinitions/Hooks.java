@@ -15,6 +15,7 @@ import utilities.SoftAssertManager;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public class Hooks
 {
@@ -32,14 +33,59 @@ public class Hooks
     private static final String iTestDataSheetName = "Data";
     private static final String iConfigSheetName   = "Config";
     private static final String iDefaultBrowser    = "CHROME";
+
     public static String RUNTIME_HERD = null;
     public static String RUNTIME_USERNAME = null;
+
+    // ─── Blacklisted herds — re-fetch if we land on one of these ──────────────
+    private static final Set<String> BLACKLISTED_HERDS = Set.of("R1230577","C2280025","C1281036","Q1060377","M1391623","M1701886","D1160614","X1120993","P1261051","E209434X","D1174054","H2621144","B1240361" ,"G1930639","G194082X","B1560048","R1050781","D201078X", "M1952021","W1040563","B1150150","B1380562","C129112X","G1221786","T209028X","T1790688","G1280928","G1930167","Y1070492","Y1791564","R1040514","C1430554","D2450985");
+
+    private static void rerunIfBlacklisted()
+    {
+        int retries = 0;
+
+        while (RUNTIME_HERD != null && BLACKLISTED_HERDS.contains(RUNTIME_HERD) && retries < 50)
+        {
+            retries++;
+            CommonFunctions.log.warning("[HOOKS] Blacklisted herd detected: " + RUNTIME_HERD + " — re-fetching (attempt " + retries + ")");
+
+            // Re-run DATA query with increased limit to fetch a different list
+            database.DBRouter.runDB("DATA", "List of herds with no errors at all", String.valueOf(java.time.Year.now().getValue()), String.valueOf(10 + retries)   // bump limit on each attempt
+            );
+
+            List<Map<String, Object>> rows = database.DBRouter.getRows();
+            if (rows == null || rows.isEmpty()) {
+                throw new RuntimeException("[HOOKS] Re-fetch returned no rows — cannot find replacement herd.");
+            }
+
+            boolean replaced = false;
+            for (Map<String, Object> r : rows) {
+                String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
+                if (!h.isEmpty() && !BLACKLISTED_HERDS.contains(h)) {
+                    RUNTIME_HERD = h;
+                    CommonFunctions.log.info("[HOOKS] Replacement herd selected: " + RUNTIME_HERD);
+                    replaced = true;
+                    break;
+                }
+            }
+
+            if (!replaced) {
+                CommonFunctions.log.warning("[HOOKS] No non-blacklisted herd found — retrying...");
+            }
+        }
+
+        if (BLACKLISTED_HERDS.contains(RUNTIME_HERD)) {
+            throw new RuntimeException("[HOOKS] Could not resolve a non-blacklisted herd after "
+                    + retries + " retries. Last herd=" + RUNTIME_HERD);
+        }
+    }
 
     @BeforeAll
     public static void beforeAllExecution()
     {
         try
         {
+
             killProcessByName("chrome");
             killProcessByName("chromedriver");
             iTestCaseID  = System.getProperty("testcase",    "").trim();
@@ -79,13 +125,15 @@ public class Hooks
             try { herdFromSheet  = ExcelUtilities.getCurrentTestDataValue("HerdNumber"); } catch (Exception ignored) {}
             try { unameFromSheet = ExcelUtilities.getCurrentTestDataValue("Username");   } catch (Exception ignored) {}
 
-            String runtimeHerd = null;
-            String runtimeUsername = null;
+            //  FIX: Use class variables (Option A) — no shadowing
+            RUNTIME_HERD = null;
+            RUNTIME_USERNAME = null;
 
             if (!usernameOverride.isEmpty()) {
-                runtimeUsername = usernameOverride;
-                runtimeHerd     = herdFromSheet;
-                CommonFunctions.log.info("[BOOT] Using usernameOverride=" + runtimeUsername + ", herd(sheet)=" + runtimeHerd);
+                RUNTIME_USERNAME = usernameOverride;
+                RUNTIME_HERD     = herdFromSheet;
+                CommonFunctions.log.info("[BOOT] Using usernameOverride=" + RUNTIME_USERNAME + ", herd(sheet)=" + RUNTIME_HERD);
+                rerunIfBlacklisted(); // Apply blacklist
             } else {
                 final int maxAttempts = Integer.parseInt(herdRetry);
                 final int limit       = Integer.parseInt(herdLimit);
@@ -119,9 +167,11 @@ public class Hooks
                         String candidateUser = database.DBRouter.getValue("USERNAME");
 
                         if (candidateUser != null && !candidateUser.isBlank()) {
-                            runtimeHerd     = candidate;
-                            runtimeUsername = candidateUser.trim();
-                            CommonFunctions.log.info("[BOOT] SELECTED Herd=" + runtimeHerd + " | Username=" + runtimeUsername);
+                            RUNTIME_HERD     = candidate;
+                            RUNTIME_USERNAME = candidateUser.trim();
+                            CommonFunctions.log.info("[BOOT] SELECTED Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
+
+                            rerunIfBlacklisted(); //  Apply blacklist
                             found = true;
                             break;
                         } else {
@@ -137,10 +187,11 @@ public class Hooks
 
                 if (!found) {
                     if (!unameFromSheet.isBlank()) {
-                        runtimeUsername = unameFromSheet;
-                        runtimeHerd     = (runtimeHerd == null || runtimeHerd.isBlank()) ? herdFromSheet : runtimeHerd;
-                        CommonFunctions.log.warning("[BOOT] Falling back to Username from sheet: " + runtimeUsername +
-                                " | Herd=" + runtimeHerd);
+                        RUNTIME_USERNAME = unameFromSheet;
+                        RUNTIME_HERD     = (RUNTIME_HERD == null || RUNTIME_HERD.isBlank()) ? herdFromSheet : RUNTIME_HERD;
+                        CommonFunctions.log.warning("[BOOT] Falling back to Username from sheet: " + RUNTIME_USERNAME +
+                                " | Herd=" + RUNTIME_HERD);
+                        rerunIfBlacklisted(); //  Apply blacklist
                     } else {
                         throw new RuntimeException("Runtime DB (INET) returned no USERNAME after " + herdRetry +
                                 " attempt(s). Try -Dherd.limit=10 or set -DusernameOverride=... for this run.");
@@ -149,25 +200,25 @@ public class Hooks
             }
 
             // Publish TD:* variables so steps can consume TD:HerdNumber / TD:Username
-            System.setProperty("TD:HerdNumber", runtimeHerd == null ? "" : runtimeHerd);
-            System.setProperty("TD:Username",   runtimeUsername == null ? "" : runtimeUsername);
-            Hooks.RUNTIME_HERD = runtimeHerd;
-            Hooks.RUNTIME_USERNAME = runtimeUsername;
+            System.setProperty("TD:HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
+            System.setProperty("TD:Username",   RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
+
+            Hooks.RUNTIME_HERD = RUNTIME_HERD;
+            Hooks.RUNTIME_USERNAME = RUNTIME_USERNAME;
 
             // Persist into Excel (Data sheet) for the current TestCase_ID
             try {
                 int dataRowIdx = iTestDataExcel.findRow(iTestDataSheetName, "TestCase_ID", iTestCaseID);
                 if (dataRowIdx != -1) {
-                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "HerdNumber", runtimeHerd == null ? "" : runtimeHerd);
-                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "Username",   runtimeUsername == null ? "" : runtimeUsername);
-                    CommonFunctions.log.info("[BOOT→Excel] Data updated: HerdNumber=" + runtimeHerd + ", Username=" + runtimeUsername);
+                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
+                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "Username",   RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
+                    CommonFunctions.log.info("[BOOT→Excel] Data updated: HerdNumber=" + RUNTIME_HERD + ", Username=" + RUNTIME_USERNAME);
                 } else {
                     CommonFunctions.log.warning("[BOOT→Excel] Row not found for TestCase_ID=" + iTestCaseID + " (skipped write-back)");
                 }
             } catch (Exception e) {
                 CommonFunctions.log.warning("[BOOT→Excel] Persist failed: " + e.getMessage());
             }
-            // =====================================================================================
 
             String iBrowserType = System.getProperty("browser", iDefaultBrowser).trim().toUpperCase();
             CommonFunctions.launchBrowser(iBrowserType, iUrl);
@@ -329,42 +380,41 @@ public class Hooks
         }
     }
 
-// -------------------------------------------------------------------------------------------------------------------------------
-// BEFORE: Step definitions had no way to take screenshots on demand. The only screenshots
-//         in the Word report came from @After when a scenario failed. You couldn't capture
-//         "this page loaded correctly" evidence without introducing a failure.
-//
-// AFTER:  Call Hooks.captureStep("your label") from any step definition at any point.
-//         One line. The screenshot goes straight into the Word report with your label.
-// -------------------------------------------------------------------------------------------------------------------------------
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // BEFORE: Step definitions had no way to take screenshots on demand. The only screenshots
+    //         in the Word report came from @After when a scenario failed. You couldn't capture
+    //         "this page loaded correctly" evidence without introducing a failure.
+    //
+    // AFTER:  Call Hooks.captureStep("your label") from any step definition at any point.
+    //         One line. The screenshot goes straight into the Word report with your label.
+    // -------------------------------------------------------------------------------------------------------------------------------
 
     // ***************************************************************************************************************************************************************************************
-// Function Name : captureStep
-// Description   : On-demand screenshot method for step definitions.
-//                 Takes a screenshot of the current browser state and embeds it into the
-//                 running Word report with the supplied label as the caption.
-//
-//                 This works because iDocument, iDocPath, and iTestCaseID are all already
-//                 held as public static fields on this class — step definitions don't need
-//                 to pass them.
-//
-// Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
-//                                       in the Word report. Be descriptive — this is what the
-//                                       reader sees when they open the .docx after the run.
-//
-//                 Examples:
-//                   Hooks.captureStep("Login page loaded");
-//                   Hooks.captureStep("Farmer dashboard — herd " + Hooks.RUNTIME_HERD);
-//                   Hooks.captureStep("Parcel A1190600017 added to Land Details");
-//                   Hooks.captureStep("ACRES panel 1 — warning accepted");
-//
-// Author        : Aniket Pathare | aniket.pathare@goverment.ie
-// Date Created  : 26-03-2026
-// ***************************************************************************************************************************************************************************************
+    // Function Name : captureStep
+    // Description   : On-demand screenshot method for step definitions.
+    //                 Takes a screenshot of the current browser state and embeds it into the
+    //                 running Word report with the supplied label as the caption.
+    //
+    //                 This works because iDocument, iDocPath, and iTestCaseID are all already
+    //                 held as public static fields on this class — step definitions don't need
+    //                 to pass them.
+    //
+    // Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
+    //                                       in the Word report. Be descriptive — this is what the
+    //                                       reader sees when they open the .docx after the run.
+    //
+    //                 Examples:
+    //                   Hooks.captureStep("Login page loaded");
+    //                   Hooks.captureStep("Farmer dashboard — herd " + Hooks.RUNTIME_HERD);
+    //                   Hooks.captureStep("Parcel A1190600017 added to Land Details");
+    //                   Hooks.captureStep("ACRES panel 1 — warning accepted");
+    //
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
     public static void captureStep(String pStepLabel)
     {
         CommonFunctions.captureStepScreenshot(iDocument, iDocPath, pStepLabel);
     }
-
 
 }
