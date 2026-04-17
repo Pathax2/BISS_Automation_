@@ -141,7 +141,7 @@ public class TC_06
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 26-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent switches to the {string} tab on the My Clients page")
+    @And("the agent switches to the {string} tab on the My Client page")
     public void theAgentSwitchesToTheTabOnTheMyClientsPage(String pTabName)
     {
         log.info("[STEP] And the agent switches to the '" + pTabName + "' tab on the My Clients page");
@@ -166,8 +166,8 @@ public class TC_06
         log.info("[STEP] When the agent searches for a transfer herd number: " + Hooks.RUNTIME_HERD);
 
         // Type the herd number into the Transfers-specific search field
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), Hooks.RUNTIME_HERD);
-
+        //iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), Hooks.RUNTIME_HERD);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), "A1240326");
         // Hit the search button to filter the Transfers table
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
     }
