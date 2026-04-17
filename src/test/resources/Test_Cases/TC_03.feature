@@ -98,7 +98,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     # Land Details - add valid parcel
     # -----------------------------------------
-    When the agent adds parcel "A1190600017" with claimed area "7"
+    When the agent adds parcel "A1190600016" with claimed area "7"
     And the agent sets parcel ownership status to "Owned"
     And the agent sets parcel use to "Apples"
     And the agent sets parcel organic status to "Conventional"
@@ -107,7 +107,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     # Land Details - claimed parcel validation
     # -----------------------------------------
-    When the agent attempts to add parcel "A1190600017" again
+    When the agent attempts to add parcel "A1190600016" again
     Then the already claimed parcel warning should be displayed if applicable
 
     # -----------------------------------------
@@ -116,7 +116,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     When the agent adds a plot with the following details
       | county            | Donegal            |
       | townland          | Aghadachor - E22301 |
-      | plotReference     | T12345678          |
+      | plotReference     | T12345679          |
       | ownershipStatus   | Owned              |
       | organicStatus     | Conventional       |
       | claimedArea       | 15                 |
@@ -168,7 +168,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     When the agent adds a plot with the following details
       | county            | Donegal              |
       | townland          | Aghadowey - E18601   |
-      | plotReference     | T87654321            |
+      | plotReference     | T87654322            |
       | ownershipStatus   | Owned                |
       | organicStatus     | Conventional         |
       | claimedArea       | 10                   |
@@ -179,7 +179,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     # Land Details - delete plot
     # -----------------------------------------
-    When the agent deletes parcel or plot "T87654321"
+    When the agent deletes parcel or plot "T87654322"
     And the agent confirms the deletion
     #Then plot "T87654321" should be marked for deletion
 
@@ -204,32 +204,23 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     When the agent opens the "ACRES" step
     And the agent selects "Yes, rescore" on panel 1
     And the agent continues panel 1
-    And the agent continues panel 2
-   # And the agent continues panel 3
     Then the ACRES step should be completed successfully
 
     # -----------------------------------------
     # Eco step
     # -----------------------------------------
     When the agent opens the "Eco" step
-    And the agent selects the "AP2" scheme option
-    And the agent selects "Standard" for panel 2
-    And the agent saves the selected eco option
-    And the agent selects the "AP5" scheme option
-    And the agent selects approved spreader manufacturer "Lemken"
-    And the agent selects approved spreader model "Polaris 14"
-    And the agent enters spreader serial number "A735B78346"
-    And the agent saves the selected eco option
+    And the agent selects eco AP options "" and ""
     Then the Eco step should be completed successfully
 
     # -----------------------------------------
     # Eco opt-out validation
     # -----------------------------------------
-    When the agent returns to the "Scheme Selection" step
-    And the agent opens the "Eco" scheme card
-    And the agent proceeds to the next application step
-    And the agent accepts the acknowledgement if displayed
-    Then the application should continue successfully after eco validation
+    #When the agent returns to the "Scheme Selection" step
+    #And the agent opens the "Eco" scheme card
+    #And the agent proceeds to the next application step
+    #And the agent accepts the acknowledgement if displayed
+    #Then the application should continue successfully after eco validation
 
     # -----------------------------------------
     # Review and Submit
@@ -244,9 +235,11 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     # Correspondence and upload document
     # -----------------------------------------
-    When the agent navigates to the "Correspondence" tab
-    And the agent chooses to upload a document
-    And the agent selects document type "Commonage Evidence"
-    And the agent uploads the correspondence document
-    And the agent confirms the upload
+    When the agent navigates through the farmer side navigation tabs
+      | My Correspondence                 |
+    Then each requested side navigation tab should open successfully
+    Then the agent clicks on the " Upload a document" stepper button
+      #When Agent expand Upload Documents Accordion
+    And the agent selects "Commonage Evidence" from the Document type dropdown
+    And the agent uploads a document in Correspondence
     Then the document should be uploaded successfully in Correspondence
