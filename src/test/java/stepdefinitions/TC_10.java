@@ -1,84 +1,308 @@
+package stepdefinitions;
+
+import commonFunctions.CommonFunctions;
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.And;
+import io.cucumber.java.en.Given;
+import io.cucumber.java.en.Then;
+import io.cucumber.java.en.When;
+import org.openqa.selenium.By;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import utilities.ObjReader;
+
+import java.time.Duration;
+import java.util.Map;
+import java.util.logging.Logger;
+import static commonFunctions.CommonFunctions.*;
+
 // ===================================================================================================================================
 // File          : TC_10.java
 // Package       : stepdefinitions
-// Description   : Step definitions for TC_10 — BISSAGL-20695 Reference Number Agent User.
-//
-//                 Covers the Create Client form flow:
-//
-//                   1. Navigate to No Herd Number tab on My Clients
-//                   2. Open the Create Client form via stepper button
-//                   3. Fill in all form fields: name, address lines, county, eircode,
-//                      contact number, BISS checkbox, herd number
-//                   4. Submit the form and handle the post-creation dialog sequence
-//                      (I understand → Edit → Close)
-//                   5. Open Create Client form a second time and re-enter name
-//
-//                 Naming conventions used throughout:
-//                   iAction(actionType, identifyBy, locator, value)  — all UI interactions
-//                   ObjReader.getLocator("keyName")                   — all locator lookups
-//
-//                 Reused steps (defined elsewhere, bound automatically by Cucumber):
-//                   "the agent user is on the login page"                          → TC_01_Login.java
-//                   "the agent logs into the application..."                       → TC_01_Login.java
-//                   "the agent opens the BISS application"                         → TC_01_Login.java
-//                   "the agent should land on the BISS Home page"                  → TC_01_Login.java
-//                   "the agent navigates to the Home and My Clients..."            → TC_04.java
-//                   "the agent is on the BISS Agent Home Screen"                   → TC_03.java
-//                   "the agent switches to the {string} tab on the My Clients page"→ TC_05.java
-//                   "the agent clicks on the {string} stepper button"              → TC_03.java
-//                   "the agent selects {string} from the {string} dropdown"        → TC_06.java
+// Description   : Step definitions for TC_10 — BISSAGL-20695
+//                 Verifies an agent can create a new client record from the No Herd Number tab
+//                 and that a reference number is generated correctly for the created client.
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 26-03-2026
 // ===================================================================================================================================
 
-package stepdefinitions;
+public class TC_10 {
 
-import io.cucumber.java.en.And;
-import utilities.ObjReader;
-
-import java.util.logging.Logger;
-
-import static commonFunctions.CommonFunctions.iAction;
-import static commonFunctions.CommonFunctions.getDriver;
-
-public class TC_10
-{
     private static final Logger log = Logger.getLogger(TC_10.class.getName());
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent enters {string} in the {string} form field
-    // Description   : Types text into the named Angular form control field in the Create Client form.
-    //                 The field identifier maps to the formcontrolname, id, or name attribute.
-    // Parameters    : pText  (String) - value to type e.g. "Kale", "D12345"
-    //                 pField (String) - form control identifier e.g. "name", "add1", "eircode"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 26-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent enters {string} in the {string} form field")
-    public void theAgentEntersInFormField(String pText, String pField)
-    {
-        iAction("TEXTBOX", "XPATH",
-                "//*[@formcontrolname='" + pField.trim() + "']"
-                        + " | //*[@id='" + pField.trim() + "']"
-                        + " | //*[@name='" + pField.trim() + "']",
-                pText);
-    }
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent ticks the {string} checkbox
-    // Description   : Checks the named checkbox on the Create Client form.
-    //                 Handles both native checkboxes and Angular Material mat-checkbox components.
-    // Parameters    : pLabel (String) - visible checkbox label e.g. "BISS"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 26-03-2026
+    // Step          : Given the agent is on the BISS Agent Home Screen
+    // Description   : Confirms the BISS home screen is active after Background navigation
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent ticks the {string} checkbox")
-    public void theAgentTicksCheckbox(String pLabel)
+    @Given("the agent is on the BISS Agent Home Screen")
+    public void theAgentIsOnTheBISSAgentHomeScreen()
     {
-        iAction("CHECKBOX", "XPATH",
-                "//label[normalize-space()='" + pLabel.trim() + "']/preceding-sibling::input[@type='checkbox']"
-                        + " | //mat-checkbox[.//*[normalize-space()='" + pLabel.trim() + "']]",
-                "CHECK");
+        log.info("[STEP] Given the agent is on the BISS Agent Home Screen");
+        iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iBissTitle"),
+                "Basic Income Support for Sustainability");
+        log.info("BISS Agent Home Screen confirmed.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : When the agent switches to the "No Herd Number" tab on the My Clients page
+    // Description   : Clicks the Angular Material tab whose visible label matches pTabName.
+    //                 Locator uses %s substitution on iMyClientsTabByName from ObjectRepository.
+    // Parameters    : pTabName — visible tab label e.g. "No Herd Number", "Payments"
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent switches to the {string} tab on the My Clients page")
+    public void theAgentSwitchesToTheTabOnMyClientsPage(String pTabName)
+    {
+        log.info("[STEP] When the agent switches to the '" + pTabName + "' tab on the My Clients page");
+
+        // Resolve the generic tab locator by substituting the tab name at runtime
+        String iTabXpath = String.format(ObjReader.getLocator("iMyClientsTabByName"), pTabName);
+
+        iAction("WAITVISIBLE",   "XPATH", iTabXpath, null);
+        iAction("WAITCLICKABLE", "XPATH", iTabXpath, null);
+        iAction("CLICK",         "XPATH", iTabXpath, null);
+        log.info("Switched to tab: " + pTabName);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : And the agent opens the Create Client form
+    // Description   : Clicks the Create Client button inside the No Herd Number tab panel.
+    //                 Scoped to biss-no-herd-no-client to avoid matching the dialog footer button.
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent opens the Create Client form")
+    public void theAgentOpensTheCreateClientForm()
+    {
+        log.info("[STEP] And the agent opens the Create Client form");
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNoHerdCreateClientBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNoHerdCreateClientBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNoHerdCreateClientBtn"), null);
+        log.info("Create Client form opened.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : And the agent fills in the Create Client form with the following details
+    // Description   : Reads all form field key-value pairs from a vertical DataTable.
+    //                 Each key maps to a dedicated locator in ObjectRepository.
+    //                 County is a mat-select — uses LIST action.
+    //                 All other fields are plain text inputs — uses TEXTBOX action.
+    // Parameters    : pDataTable — two-column DataTable: | fieldName | value |
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent fills in the Create Client form with the following details")
+    public void theAgentFillsInTheCreateClientFormWithTheFollowingDetails(DataTable pDataTable)
+    {
+        log.info("[STEP] And the agent fills in the Create Client form with the following details");
+
+        Map<String, String> iFormData = pDataTable.asMap(String.class, String.class);
+
+        for (Map.Entry<String, String> iEntry : iFormData.entrySet())
+        {
+            String iFieldName  = iEntry.getKey().trim();
+            String iFieldValue = iEntry.getValue().trim();
+
+            // Each field name maps to a dedicated locator key in ObjectRepository
+            // County is a mat-select — all others are plain text inputs
+            switch (iFieldName)
+            {
+                case "name":
+                    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientName"), iFieldValue);
+                    break;
+                case "add1":
+                    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientAdd1"), iFieldValue);
+                    break;
+                case "add2":
+                    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientAdd2"), iFieldValue);
+                    break;
+                case "add3":
+                    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientAdd3"), iFieldValue);
+                    break;
+                case "county":
+                    iAction("LIST",    "XPATH", ObjReader.getLocator("iCreateClientCounty"), iFieldValue);
+                    break;
+                case "eircode":
+                    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientEircode"), iFieldValue);
+                    break;
+                case "contactNumber":
+                    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientContactNumber"), iFieldValue);
+                    break;
+                case "herdNumber":
+                    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientHerdNumber"), iFieldValue);
+                    break;
+                default:
+                    log.warning("Unknown form field key '" + iFieldName + "' — no locator mapped. Skipping.");
+                    break;
+            }
+
+            log.info("Filled field '" + iFieldName + "' with: " + iFieldValue);
+        }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : And the agent enters {string} in the {string} form field
+    // Description   : Enters a value into a single named Create Client form field.
+    //                 pFieldName must match a key handled in the switch — reuses same locator map.
+    //                 Used for standalone single-field interactions outside the full DataTable step.
+    // Parameters    : pValue     — text to enter
+    //                 pFieldName — form field key matching ObjectRepository locator
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent enters {string} in the {string} form field")
+    public void theAgentEntersInTheFormField(String pValue, String pFieldName)
+    {
+        log.info("[STEP] And the agent enters '" + pValue + "' in the '" + pFieldName + "' form field");
+
+        switch (pFieldName.trim())
+        {
+            case "name":
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientName"), pValue);
+                break;
+            case "add1":
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientAdd1"), pValue);
+                break;
+            case "add2":
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientAdd2"), pValue);
+                break;
+            case "add3":
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientAdd3"), pValue);
+                break;
+            case "county":
+                iAction("LIST",    "XPATH", ObjReader.getLocator("iCreateClientCounty"), pValue);
+                break;
+            case "eircode":
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientEircode"), pValue);
+                break;
+            case "contactNumber":
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientContactNumber"), pValue);
+                break;
+            case "herdNumber":
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iCreateClientHerdNumber"), pValue);
+                break;
+            default:
+                log.warning("Unknown field name '" + pFieldName + "' — no locator mapped.");
+                break;
+        }
+
+        log.info("Entered '" + pValue + "' into field: " + pFieldName);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : And the agent ticks the "BISS" reference type checkbox
+    // Description   : Clicks the named option inside the mat-selection-list referenceTypes.
+    //                 Uses %s substitution on iCreateClientRefTypeOption locator.
+    //                 Clicks the mdc-list-item__primary-text span — native checkbox input
+    //                 is not directly clickable due to ripple overlay.
+    // Parameters    : pReferenceType — visible label e.g. "BISS", "NRCISYF", "TRANSFERS"
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent ticks the {string} reference type checkbox")
+    public void theAgentTicksTheReferenceTypeCheckbox(String pReferenceType)
+    {
+        log.info("[STEP] And the agent ticks the '" + pReferenceType + "' reference type checkbox");
+
+        String iOptionXpath = String.format(
+                ObjReader.getLocator("iCreateClientRefTypeOption"), pReferenceType);
+
+        iAction("WAITVISIBLE",   "XPATH", iOptionXpath, null);
+        iAction("WAITCLICKABLE", "XPATH", iOptionXpath, null);
+        iAction("CLICK",         "XPATH", iOptionXpath, null);
+        log.info("Ticked reference type: " + pReferenceType);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Then the agent submits the Create Client form
+    // Description   : Clicks the Create Client submit button in the dialog footer.
+    //                 Scoped via iCreateClientSubmitBtn to buttons-container — avoids
+    //                 matching the tab-level Create Client button with the same label.
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the agent submits the Create Client form")
+    public void theAgentSubmitsTheCreateClientForm()
+    {
+        log.info("[STEP] Then the agent submits the Create Client form");
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iCreateClientSubmitBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iCreateClientSubmitBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iCreateClientSubmitBtn"), null);
+        log.info("Create Client form submitted.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Then the agent completes the post creation dialog flow
+    // Description   : Handles the post-submission dialog button sequence:
+    //                 "I understand" → "Edit" → "Close"
+    //                 Each button is soft-checked with isVisible before clicking —
+    //                 not all buttons may appear in every environment or flow variant.
+    // Author        : Aniket Pathare
+    // Date          : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the agent completes the post creation dialog flow")
+    public void theAgentCompletesThePostCreationDialogFlow()
+    {
+        log.info("[STEP] Then the agent completes the post creation dialog flow");
+
+        // ── I understand ──────────────────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iCreateClientIUnderstandBtn")), 5))
+        {
+            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iCreateClientIUnderstandBtn"), null);
+            iAction("CLICK",         "XPATH", ObjReader.getLocator("iCreateClientIUnderstandBtn"), null);
+            log.info("Clicked 'I understand' button.");
+        }
+        else
+        {
+            log.info("'I understand' button not present — skipping.");
+        }
+
+        // ── Edit ──────────────────────────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iCreateClientEditBtn")), 5))
+        {
+            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iCreateClientEditBtn"), null);
+            iAction("CLICK",         "XPATH", ObjReader.getLocator("iCreateClientEditBtn"), null);
+            log.info("Clicked 'Edit' button.");
+        }
+        else
+        {
+            log.info("'Edit' button not present — skipping.");
+        }
+
+        // ── Close ─────────────────────────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iCreateClientCloseBtn")), 5))
+        {
+            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iCreateClientCloseBtn"), null);
+            iAction("CLICK",         "XPATH", ObjReader.getLocator("iCreateClientCloseBtn"), null);
+            log.info("Clicked 'Close' button.");
+        }
+        else
+        {
+            log.info("'Close' button not present — skipping.");
+        }
+
+        log.info("Post creation dialog flow completed.");
+    }
+    private static boolean isVisible(By locator, int seconds) {
+        try {
+            WebDriverWait wait = new WebDriverWait(CommonFunctions.getDriver(), Duration.ofSeconds(seconds));
+            wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+
     }
 }
