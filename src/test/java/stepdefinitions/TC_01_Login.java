@@ -16,6 +16,8 @@ import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
 import utilities.ObjReader;
 
+import static commonFunctions.CommonFunctions.iAction;
+
 public class TC_01_Login
 {
     // ***************************************************************************************************************************************************************************************
@@ -169,7 +171,7 @@ public class TC_01_Login
     // Precondition  : Browser must be open; test data row must be loaded for TD: resolution
     // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("user enters invalid credentials")
+    @When("user enters invalid credentials {string}")
     public void enterInvalidCredentials(String pColumnName)
     {
         try
@@ -178,15 +180,19 @@ public class TC_01_Login
             {
                 throw new RuntimeException("Field name passed from feature file cannot be blank.");
             }
+            // Hit the initial 'Log In' button on the BISS landing screen to get to the Keycloak form
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
 
             if (pColumnName.equalsIgnoreCase("Username"))
+            {
+
+            }
+            else if (pColumnName.equalsIgnoreCase("Password"))
             {
                 CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), "TD:Username");
                 CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), "");
                 CommonFunctions.log.info("Username entered and Continue clicked successfully.");
-            }
-            else if (pColumnName.equalsIgnoreCase("Password"))
-            {
+
                 CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "Invalid");
                 CommonFunctions.log.info("Invalid Password entered successfully.");
 
