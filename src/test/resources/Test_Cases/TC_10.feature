@@ -38,20 +38,17 @@ Feature: TC_10 - BISS_25.3.Sprint_3 TC2 for BISSAGL-20695 Reference Number Agent
   @regression
   Scenario: Reference Number Agent User — Create Client flow
     Given the agent is on the BISS Agent Home Screen
-    When the agent switches to the "No Herd Number" tab on the My Clients page
-    And the agent clicks on the " Create Client " stepper button
-    And the agent enters "Kale" in the "name" form field
-    And the agent enters "Address1" in the "add1" form field
-    And the agent enters "Address2" in the "add2" form field
-    And the agent enters "Address3" in the "add3" form field
-    And the agent selects "Carlow" from the "county" dropdown
-    And the agent enters "D12345" in the "eircode" form field
-    And the agent enters "123456789" in the "contactNumber" form field
-    And the agent ticks the "BISS" checkbox
-    And the agent enters "DXH1234" in the "herdNumber" form field
-    Then the agent clicks on the "Create Client" stepper button
-    And the agent clicks on the "I understand" stepper button
-    And the agent clicks on the "Edit" stepper button
-    And the agent clicks on the "Close" stepper button
-    And the agent clicks on the " Create Client " stepper button
-    And the agent enters "Kale" in the "name" form field
+    When the agent switches to the "No Herd Number" tab on the My Client page
+    And the agent opens the Create Client form
+    And the agent fills in the Create Client form with the following details
+      | name          | Kale      |
+      | add1          | Address1  |
+      | add2          | Address2  |
+      | add3          | Address3  |
+      | county        | Carlow    |
+      | eircode       | D12345    |
+      | contactNumber | 123456789 |
+      | herdNumber    | DXH1234   |
+    And the agent ticks the "BISS" reference type checkbox
+    And the agent submits the Create Client form
+    Then the agent completes the post creation dialog flow
