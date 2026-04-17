@@ -37,6 +37,14 @@ import org.openqa.selenium.support.ui.ExpectedConditions;
 import java.time.Duration;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Assertions;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.TemporalAdjusters;
+
 import static commonFunctions.CommonFunctions.*;
 
 public class TC_03 {
@@ -175,7 +183,7 @@ public class TC_03 {
 
 
     /** SIMPLE helper to avoid ambiguous method call */
-    private boolean isVisible(By locator, int seconds) {
+    private static boolean isVisible(By locator, int seconds) {
         try {
             WebDriverWait wait = new WebDriverWait(CommonFunctions.getDriver(), Duration.ofSeconds(seconds));
             wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
@@ -283,7 +291,7 @@ public class TC_03 {
         // Type the herd number from the runtime hook into the search field
         // then click Search to filter the client list down to this specific farmer
         //iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), Hooks.RUNTIME_HERD);    Original Statement Commented till the SQL query is fixed
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "A1030216");
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "A1240326");
         //iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "G1300554");
         iAction("CLICK",   "XPATH",    ObjReader.getLocator("herdSearchBtn"),   null);
         log.info("Farmer dashboard opened for herd number: " + "TD:iHerdNumber");
@@ -534,35 +542,35 @@ public class TC_03 {
     //  SCHEME SELECTION STEP
     // ===================================================================================================================================
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent selects the "Organics" scheme
-    // Description   : Clicks the scheme card or checkbox for the named scheme
-    // ***************************************************************************************************************************************************************************************
     @When("the agent selects the {string} scheme")
     public void theAgentSelectsTheScheme(String pSchemeName)
-    {
-        log.info("[STEP] When the agent selects the scheme: " + pSchemeName);
 
-        // Build the XPath dynamically using the scheme name — looks for the toggle button
-        // that sits just before the scheme's label text in the DOM
-        String toggleXpath = String.format("//span[normalize-space()='%s']/preceding::button[@role='switch'][1]", pSchemeName);
+        {
+            log.info("[STEP] When the agent selects the scheme: " + pSchemeName);
 
-        // Read the current toggle state before touching it — we only want to turn it ON,
-        // not accidentally flip it off if it was already selected from a previous run
-        WebElement toggle = CommonFunctions.getDriver().findElement(By.xpath(toggleXpath));
-        String state = toggle.getAttribute("aria-checked");
+            // ── Already ON check — scheme-selected class means toggle is already active ──
+            // Do NOT click — it would turn it OFF
+            String iAlreadySelectedXpath = String.format("//biss-scheme-card[.//span[@class='scheme-name' and normalize-space()='%s']]//mat-card[contains(@class,'scheme-selected')]", pSchemeName);
 
-        if ("false".equalsIgnoreCase(state)) {
-            // Toggle is currently OFF — click the scheme card to switch it ON
-            log.info("Scheme '" + pSchemeName + "' is OFF → turning ON");
-            iAction("CLICK", "XPATH", "//mat-card/descendant::span[contains(text(),'"+pSchemeName+"')]", null);
+            if (isVisible(By.xpath(iAlreadySelectedXpath), 3))
+            {
+                log.info("Scheme '" + pSchemeName + "' is already ON — no action.");
+                return;
+            }
+
+            // ── Click target check — div[@tabindex='0'] only exists when card is clickable ─
+            // When scheme is system-controlled or ON, tabindex flips to -1 and this won't match
+            String iClickTargetXpath = String.format("//biss-scheme-card[.//span[@class='scheme-name' and normalize-space()='%s']]//div[@tabindex='0']", pSchemeName);
+
+            if (!isVisible(By.xpath(iClickTargetXpath), 3))
+            {
+                log.warning("Scheme '" + pSchemeName + "' has no clickable target — skipping.");
+                return;
+            }
+
+            iAction("CLICK", "XPATH", iClickTargetXpath, null);
+            log.info("Scheme '" + pSchemeName + "' turned ON.");
         }
-        else {
-            // Already ON — nothing to do, just log it and move on
-            log.info("Scheme '" + pSchemeName + "' is already ON → no action");
-        }
-
-    }
 
 
     // ***************************************************************************************************************************************************************************************
@@ -743,6 +751,12 @@ public class TC_03 {
         log.info("[STEP] And the agent sets parcel organic status to: " + pOrganicStatus);
         // Pick whether this parcel is farmed organically or conventionally
         iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), pOrganicStatus);
+        if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivitySelect")), 2))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect"), "Milking Platform");
+            log.info("Set Agricultural Activity to 'Milking Platform'.");
+
+        }
     }
 
 
@@ -755,6 +769,7 @@ public class TC_03 {
         log.info("[STEP] Then the parcel should be added successfully to Land Details");
         // All the parcel fields are filled — click Add to submit the form and close the dialog.
         // The parcel row should now appear in the Land Details table.
+
         iAction("CLICK", "XPATH", ObjReader.getLocator("iParcelFormAddBtn"), null);
         log.info("Parcel added successfully: ");
     }
@@ -851,6 +866,12 @@ public class TC_03 {
         // Choose what the land is used for — e.g. Grassland, Tillage etc.
         iAction("LIST", "XPATH", ObjReader.getLocator("iPlotUseSelect"), iPlotData.get("plotUse"));
 
+        if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivitySelect2")), 2))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect2"), "Milking Platform");
+            log.info("Set Agricultural Activity to 'Milking Platform'.");
+
+        }
         // Select the map change method — hardcoded to 'Submit Paper Map By Post'
         // because online map editing is out of scope for this automated flow
         iAction("RADIOBUTTON", "XPATH", ObjReader.getLocator("iMapChangeOption_SubmitPaperMap"), null);
@@ -867,6 +888,12 @@ public class TC_03 {
     public void thePlotShouldBeAddedSuccessfullyToLandDetails() {
         log.info("[STEP] Then the plot should be added successfully to Land Details");
         // Click Next inside the Add Plot dialog to proceed to the final submission step
+        if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivitySelect")), 2))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect"), "Milking Platform");
+            log.info("Set Agricultural Activity to 'Milking Platform'.");
+
+        }
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn2"), null);
 
     }
@@ -908,12 +935,12 @@ public class TC_03 {
 
         // The GIS map may need a 'Select Feature' link to activate selection mode —
         // wait up to 7 seconds for it to appear, then click it if it does
-        if (isVisible(By.xpath(ObjReader.getLocator("selectFeature")), 12))
+        if (isVisible(By.xpath(ObjReader.getLocator("selectFeature")), 22))
         {
             iAction("CLICK", "XPATH", ObjReader.getLocator("selectFeature"), null);
         }
 
-        if (isVisible(By.xpath(ObjReader.getLocator("selectFeature")), 12)) {
+        if (isVisible(By.xpath(ObjReader.getLocator("mainMapImage")), 12)) {
             // Click somewhere on the map image to trigger the parcel selection underneath
             iAction("CLICK", "XPATH", ObjReader.getLocator("mainMapImage"), null);
         }
@@ -1048,6 +1075,13 @@ public class TC_03 {
     @And("the agent saves the parcel changes")
     public void theAgentSavesTheParcelChanges() {
         log.info("[STEP] And the agent saves the parcel changes");
+        // ── 2. Agricultural Activity ─────────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivityRequired")), 1))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect"), "Milking Platform");
+            log.info("Set Agricultural Activity to 'Milking Platform'.");
+
+        }
         // Submit all the edits made in the side drawer back to the server
         iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelChangesBtn"), null);
     }
@@ -1104,7 +1138,8 @@ public class TC_03 {
     // Description   : Clicks the Undo button on the deleted parcel row
     // ***************************************************************************************************************************************************************************************
     @When("the agent undoes deletion for parcel {string}")
-    public void theAgentUndoesDeletionForParcel(String pParcelId) {
+    public void theAgentUndoesDeletionForParcel(String pParcelId)
+    {
         log.info("[STEP] When the agent undoes deletion for parcel: " + pParcelId);
         // Click Undo to take the parcel out of the 'pending deletion' state
         iAction("CLICK", "XPATH", ObjReader.getLocator("iUndoDeletion"), null);
@@ -1120,30 +1155,11 @@ public class TC_03 {
     // Description   : Confirms the parcel row no longer has a deletion indicator
     // ***************************************************************************************************************************************************************************************
     @Then("parcel {string} should be restored in Land Details")
-    public void parcelShouldBeRestoredInLandDetails(String pParcelId) {
-
+    public void parcelShouldBeRestoredInLandDetails(String pParcelId)
+    {
         log.info("[STEP] Then parcel should be restored in Land Details: " + pParcelId);
-
-        By parcelCell = By.xpath("//td/span[normalize-space()='" + pParcelId + "']");
-
-        boolean isRestored = false;
-        int retries = 0;
-
-        while (retries < 5)
-        { // ~10s total
-
-            if (isVisible(parcelCell, 2))
-            {
-                isRestored = true;
-                iAction("VERIFYELEMENT", "XPATH", "//td/span[contains(text(),'" + pParcelId + "')]", null);
-                break;
-            }
-
-            retries++;
-        }
-
-        Assertions.assertTrue(isRestored, "Parcel " + pParcelId + " was NOT restored in Land Details after waiting");
-        log.info("✅ Parcel restored confirmed: " + pParcelId);
+        iAction("VERIFYELEMENT", "XPATH", "//td/span[contains(text(),'" + pParcelId + "')]", null);
+        log.info(" Parcel restored confirmed: " + pParcelId);
     }
 
 
@@ -1227,78 +1243,100 @@ public class TC_03 {
     @When("the agent completes all mandatory information in Land Details")
     public void theAgentCompletesAllMandatoryInformationInLandDetails()
     {
-            log.info("[STEP] When the agent completes all mandatory information in Land Details");
+        log.info("[STEP] When the agent completes all mandatory information in Land Details");
 
-            WebDriver iDriver = getDriver();
-            int iMaxIterations = 10;  // safety cap to prevent infinite loops
-            int iIteration = 0;
-            int iRowsFixed = 0;
+        WebDriver iDriver = getDriver();
+        int iMaxIterations = 60;
+        int iIteration     = 0;
+        int iRowsFixed     = 0;
 
-            // Loop until no error rows remain or we hit the safety cap
-            while (iIteration < iMaxIterations)
+        while (iIteration < iMaxIterations)
+        {
+            iIteration++;
+
+            // Re-query every iteration — Angular updates the icon in place after save
+            List<WebElement> iErrorRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iLandTableErrorRows")));
+
+            // ── Exit condition — no error rows remain ────────────────────────────────
+            if (iErrorRows.isEmpty())
             {
-                iIteration++;
-
-                // Re-query the error rows on every iteration — the DOM updates after each fix
-                List<WebElement> iErrorRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iLandTableErrorRows")));
-
-                if (iErrorRows.isEmpty())
-                {
-                    log.info("No more error rows found. All mandatory information completed.");
-                    break;
-                }
-
-                log.info("Iteration " + iIteration + " — error rows remaining: " + iErrorRows.size());
-
-                try
-                {
-                    // Always target the FIRST error row — after fixing, the next one becomes first
-                    String iFirstErrorRowXpath = ObjReader.getLocator("iLandTableFirstErrorRow");
-                    iAction("CLICK", "XPATH", iFirstErrorRowXpath, null);
-                    log.info("Clicked first error row.");
-
-                    // Fill in the mandatory Organic Status dropdown
-                    iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), "Conventional");
-
-                    log.info("Set Organic Status to 'Conventional'.");
-
-                    // Save the row change so the error indicator clears before the next iteration
-                    try
-                    {
-                        iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelChangesBtn"), null);
-                        log.info("Saved parcel changes.");
-                    }
-                    catch (Exception saveEx)
-                    {
-                        log.info("No explicit save button — change auto-applied.");
-                    }
-
-                    iRowsFixed++;
-                }
-                catch (Exception rowEx)
-                {
-                    log.warning("Could not fix error row on iteration " + iIteration
-                            + ": " + rowEx.getMessage());
-                    break;  // exit early so we don't loop forever on a stuck row
-                }
+                log.info(" All error rows resolved. Total fixed: " + iRowsFixed);
+                break;
             }
 
-            if (iIteration >= iMaxIterations)
+            log.info("Iteration " + iIteration + " — error rows remaining: " + iErrorRows.size());
+
+            // ── Open the first error row in the Edit Parcel drawer ───────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLandTableFirstErrorRow"), null);
+            log.info("Opened Edit Parcel drawer for first error row.");
+
+            // Track whether this iteration actually changed anything
+            boolean iAnyFieldFixed = false;
+
+            // ── 1. Rental / Lease Expiry Date ────────────────────────────────────────
+            if (isVisible(By.xpath(ObjReader.getLocator("iRentalExpiryDateInput")), 2))
             {
-                log.warning("Reached safety cap of " + iMaxIterations + " iterations — there may still be unresolved error rows.");
+                String iExpiryDate = LocalDate.now().plusMonths(1).with(TemporalAdjusters.lastDayOfMonth()).format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iRentalExpiryDateInput"), iExpiryDate);
+                log.info("Set Rental/Lease Expiry Date to: " + iExpiryDate);
+                iAnyFieldFixed = true;
             }
 
-            log.info("Total rows fixed: " + iRowsFixed);
 
-            // Click Next to proceed to the next application step
-            try
+            // ── 3. Organic Status ────────────────────────────────────────────────────
+            if (isVisible(By.xpath(ObjReader.getLocator("iOrganicStatusEmpty")), 1))
             {
-                log.info("All Errors cleared moving to next screen");
+                iAction("LIST", "XPATH", ObjReader.getLocator("iOrganicStatusSelect"), "Conventional");
+                log.info("Set Organic Status to 'Conventional'.");
+                iAnyFieldFixed = true;
             }
-            catch (Exception e)
+
+            // ── 2. Agricultural Activity ─────────────────────────────────────────────
+            if (isVisible(By.xpath(ObjReader.getLocator("iAgriculturalActivitySelect")), 3))
             {
-                log.info("No explicit Next button — mandatory fields resolved inline.");
+                iAction("LIST", "XPATH", ObjReader.getLocator("iAgriculturalActivitySelect"), "Milking Platform");
+                log.info("Set Agricultural Activity to 'Milking Platform'.");
+                iAnyFieldFixed = true;
             }
+
+
+            if (isVisible(By.xpath(ObjReader.getLocator("iParcelUseRequired")), 1))
+            {
+                iAction("LIST", "XPATH", ObjReader.getLocator("iParcelUseSelect"), "Permanent Pasture");
+                log.info("Set Parcel Use to 'Permanent Pasture'.");
+                iAnyFieldFixed = true;
+            }
+
+
+
+
+            // ── If nothing was fixable — unknown error, fail immediately ─────────────
+            if (!iAnyFieldFixed)
+            {
+                throw new AssertionError(
+                        "Iteration " + iIteration + ": Edit Parcel drawer opened but no known "
+                                + "mandatory field was missing. Unknown error type detected — "
+                                + "check this herd manually.");
+            }
+
+            // ── Save ─────────────────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveParcelChangesBtn"), null);
+            log.info("Saved parcel changes.");
+
+            // ── Wait for Angular to update the icon before re-querying ───────────────
+            // Do NOT assert check_circle here — let the empty-check at the top of the
+            // next iteration be the single source of truth for whether the row is fixed
+            try { Thread.sleep(1500); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+
+            iRowsFixed++;
+        }
+
+        // ── Safety cap breach ────────────────────────────────────────────────────────
+        if (iIteration >= iMaxIterations)
+        {
+            throw new AssertionError("Safety cap of " + iMaxIterations + " iterations reached. " + "Unresolved error rows still exist in Land Details.");
+        }
+
     }
 
 
@@ -1325,8 +1363,8 @@ public class TC_03 {
     @When("the agent opens the {string} step")
     public void theAgentOpensTheStep(String pStepName) {
         String iStepHeader = iAction("GETTEXT", "XPATH", "//h1[contains(@class,'application-step-content-title')]//span[normalize-space()='"+pStepName+"']", null);
-        Assertions.assertFalse(iStepHeader.isEmpty(), "GAEC 7 step header should be visible after advancing.");
-        log.info("✅ Next application step opened successfully: " + pStepName);
+        Assertions.assertFalse(iStepHeader.isEmpty(), pStepName+ " step header should be visible after advancing.");
+        log.info(" Next application step opened successfully: " + pStepName);
     }
 
 
@@ -1349,49 +1387,65 @@ public class TC_03 {
     // Description   : Opens Select Option, ticks checkbox, enters area, and saves
     // ***************************************************************************************************************************************************************************************
     @And("the agent handles any GAEC 7 continue action if present")
-    public void theAgentHandlesAnyGAEC7ContinueActionIfPresent() {
-
-
-
+    public void theAgentHandlesAnyGAEC7ContinueActionIfPresent()
+    {
         log.info("[STEP] And the agent handles GAEC 7 select option actions");
 
-        int index = 1;
+        int iIndex = 1;
 
-        while (true) {
+        while (true)
+        {
+            try
+            {
+                // ── Build indexed Select Option locator ──────────────────────────────
+                String iSelectOptionXpath = ObjReader.getLocator("iGAEC7_SelectOption_ByIndex")
+                        .replace("${INDEX}", String.valueOf(iIndex));
 
-            try {
-                // ----- Build indexed Select Option locator -----
-                String selectOption = ObjReader.getLocator("iGAEC7_SelectOption_ByIndex").replace("${INDEX}", String.valueOf(index));
+                // ── If the Select Option row is not visible, no more rows remain ──────
+                if (!isVisible(By.xpath(iSelectOptionXpath), 3))
+                {
+                    log.info("No more GAEC 7 Select Option rows at index " + iIndex + " — exiting loop.");
+                    break;
+                }
 
-                // ----- Click Select Option -----
-                iAction("CLICK", "XPATH", selectOption, null);
-                log.info("Clicked GAEC 7 Select Option at index: " + index);
+                // ── Click Select Option ──────────────────────────────────────────────
+                iAction("CLICK", "XPATH", iSelectOptionXpath, null);
+                log.info("Clicked GAEC 7 Select Option at index: " + iIndex);
 
-                // ----- Tick checkbox -----
-
+                // ── Tick checkbox ────────────────────────────────────────────────────
                 iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ActionCheckbox"), null);
 
-
-                // ----- Enter Catch Crop Area -----
+                // ── Enter Catch Crop Area ────────────────────────────────────────────
                 iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iGAEC7_CatchCropArea"), "1.00");
 
-                // ----- Save changes -----
+                // ── Save changes ─────────────────────────────────────────────────────
                 iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_SaveBtn"), null);
 
-                // Restart index because Angular re-renders rows after save
-                iAction("WAITINVISIBLE", "XPATH", "iScreenBuffer2", "MDC Progress Spinner");
-                index = 1;
+                // ── Wait for spinner to appear then disappear ────────────────────────
+                // Angular shows the MDC indeterminate spinner while it processes the save.
+                // First wait for it to become visible (confirms save was triggered),
+                // then wait for it to vanish (confirms Angular has finished re-rendering).
+                // Both waits use the resolved XPath — not a raw key string.
+                String iSpinnerXpath = ObjReader.getLocator("iScreenBuffer2");
 
+                isVisible(By.xpath(iSpinnerXpath), 2); // soft-wait for spinner to appear
+                iAction("WAITINVISIBLE", "XPATH", iSpinnerXpath, null);
+                log.info("Spinner gone — Angular re-render complete after save at index: " + iIndex);
+
+                // ── Reset index — Angular re-renders the full row list after save ────
+                iIndex = 1;
             }
-            catch (Exception noMoreRows) {
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ContinueBtn"), null);
-                log.info("[STEP] Then the application should move beyond the GAEC 7 step");
-                log.info("✅ No more GAEC 7 Select Option rows to process.");
-
+            catch (Exception iNoMoreRows)
+            {
+                log.warning("Unexpected exception in GAEC 7 loop: " + iNoMoreRows.getMessage());
                 break;
             }
         }
+
+        // ── Advance past GAEC 7 step ─────────────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iGAEC7_ContinueBtn"), null);
+        log.info(" GAEC 7 step completed. Moving to next screen.");
     }
 
 
@@ -1402,11 +1456,21 @@ public class TC_03 {
     @Then("the application should move beyond the GAEC 7 step")
     public void theApplicationShouldMoveBeyondTheGAEC7Step() {
 
-        // Read whatever step header is now on screen — if it still says 'GAEC 7' the navigation failed
-        String iCurrentStep = iAction("GETTEXT", "XPATH", "//h1[contains(@class,'application-step-content-title')]//span[normalize-space()='ACRES']", null);
-        Assertions.assertFalse(iCurrentStep.contains("GAEC 7"), "Application should have moved past GAEC 7. Current step: " + iCurrentStep);
-        log.info("Application moved beyond GAEC 7 | Current step: " + iCurrentStep);
+        log.info("[STEP] Then the application should move beyond the GAEC 7 step");
 
+        // ── Wait for the ACRES header to appear ───────────────────────────────────
+        // Angular takes time to transition between steps — poll for up to 15 seconds
+        // before asserting. isVisible returns as soon as the element is found,
+        // so if the page loads quickly the step won't waste time waiting.
+        By iACRESHeader = By.xpath(ObjReader.getLocator("iACRESStepHeader"));
+
+        boolean iACRESVisible = isVisible(iACRESHeader, 15);
+
+        Assertions.assertTrue(iACRESVisible, "Application did not navigate to the ACRES step within 15 seconds after GAEC 7. " + "Check that iNextBtn and iGAEC7_ContinueBtn fired correctly.");
+
+        // ── Confirm header text as a secondary assertion ──────────────────────────
+        String iCurrentStep = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iACRESStepHeader"), null);
+        log.info(" Application moved beyond GAEC 7 | Current step header: " + iCurrentStep);
     }
 
 
@@ -1432,20 +1496,22 @@ public class TC_03 {
 // Description   : Clicks the Continue button within the specified panel
 // ***************************************************************************************************************************************************************************************
     @And("the agent continues panel {int}")
-    public void theAgentContinuesPanel(int pPanelNumber) {
+    public void theAgentContinuesPanel(int pPanelNumber)
+    {
 
-        log.info("[STEP] And the agent continues panel: " + pPanelNumber);
+        WebDriver iDriver = getDriver();
+        log.info("[STEP] And the agent continues through all applicable panels");
+        List<WebElement> panels = iDriver.findElements(By.xpath("//mat-expansion-panel[.//button[.//span[normalize-space()='Continue']]]"));
+        log.info("Total panels with Continue button found: " + panels.size());
 
-        try {
-            String continueBtnXpath = ObjReader.getLocator("iContinueBtnIndex").replace("${INDEX}", String.valueOf(pPanelNumber));
+        for (int i = 1; i <= panels.size(); i++) {
 
-            iAction("WAITVISIBLE", "XPATH", continueBtnXpath, "Continue button for panel " + pPanelNumber);
+            String continueBtnXpath = "(//mat-expansion-panel[.//button[.//span[normalize-space()='Continue']]])[" + i + "]" + "//button[.//span[normalize-space()='Continue']]";
+            log.info("Clicking Continue on panel index: " + i);
+            iAction("WAITVISIBLE", "XPATH", continueBtnXpath, "Continue button in panel " + i);
             iAction("CLICK", "XPATH", continueBtnXpath, null);
-
-        } catch (Exception e) {
-
-            log.info("No Continue button found for panel " + pPanelNumber + " — moving on.");
         }
+
     }
 
 
@@ -1456,26 +1522,208 @@ public class TC_03 {
     @Then("the ACRES step should be completed successfully")
     public void theACRESStepShouldBeCompletedSuccessfully() {
         log.info("[STEP] Then the ACRES step should be completed successfully");
+        By iACRESHeader = By.xpath("//h1[contains(@class,'application-step-content-title')]//span[normalize-space()='Eco']");
+        boolean iACRESVisible = isVisible(iACRESHeader, 15);
+        Assertions.assertTrue(iACRESVisible, "Application did not navigate to the ECO step within 15 seconds after GAEC 7. " + "Check that iNextBtn Btn fired correctly.");
 
-        String iStepStatus = iAction("GETTEXT", "XPATH", "//h1[contains(@class,'application-step-content-title')]//span[normalize-space()='Eco']", null);
-        Assertions.assertFalse(iStepStatus.isEmpty(), "ACRES step completion indicator should be visible.");
-        log.info("ACRES step completed: " + iStepStatus);
+        log.info("ACRES step completed: " + iACRESHeader);
     }
 
 
     // ===================================================================================================================================
     //  ECO STEP
     // ===================================================================================================================================
+    // ***************************************************************************************************************************************************************************************
+    // Step          : When the agent selects eco AP options "AP1" and "AP5"
+    // Description   : Iterates through the Eco AP table, identifies rows with available toggle buttons,
+    //                 selects the two specified APs (or first two available if params are empty),
+    //                 expands each panel, fills AP-specific fields, clicks Save & Select,
+    //                 then asserts the "2 of 2 Selected" counter before proceeding.
+    // Parameters    : pFirstAP  — e.g. "AP1" or "" for auto-select
+    //                 pSecondAP — e.g. "AP5" or "" for auto-select
+    // Author        : Aniket Pathare
+    // Date          : 10/04/2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent selects eco AP options {string} and {string}")
+    public void theAgentSelectsEcoAPOptions(String pFirstAP, String pSecondAP)
+    {
+        log.info("[STEP] When the agent selects eco AP options: " + pFirstAP + " and " + pSecondAP);
+
+        WebDriver iDriver = getDriver();
+
+        // ── Resolve which two APs to process ────────────────────────────────────────
+        // If both params are empty, auto-detect the first two rows that have a toggle
+        // If params are supplied, use them in order
+        List<String> iTargetAPs = new ArrayList<>();
+
+        if (!pFirstAP.isBlank())  iTargetAPs.add(pFirstAP.trim().toUpperCase());
+        if (!pSecondAP.isBlank()) iTargetAPs.add(pSecondAP.trim().toUpperCase());
+
+        boolean iAutoSelect = iTargetAPs.isEmpty();
+
+        // ── Find all AP rows that have a toggle button ───────────────────────────────
+        // Toggle presence = this AP is available for this herd
+        // Rows without a toggle are greyed out — skip them entirely
+        List<WebElement> iToggleRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iEcoAPRowsWithToggle")));
+
+        Assertions.assertFalse(iToggleRows.isEmpty(), "No AP rows with toggle buttons found on the Eco screen — check herd eligibility.");
+
+        log.info("Toggle-enabled AP rows found: " + iToggleRows.size());
+
+        int iSelected = 0;
+
+        for (WebElement iRow : iToggleRows)
+        {
+            if (iSelected >= 2) break;
+
+            // ── Read the AP code from this row's label cell ──────────────────────────
+            // e.g. " AP1 - Space for Nature * " → extract "AP1"
+            String iRowText = iRow.findElement(By.xpath(ObjReader.getLocator("iEcoAPRowLabelCell"))).getText().trim();
+
+            String iAPCode = iRowText.replaceAll("(?i)(AP\\d+).*", "$1").trim().toUpperCase();
+            log.info("Found toggleable AP row: " + iAPCode);
+
+            // ── Skip if params were supplied and this AP is not in the target list ───
+            if (!iAutoSelect && !iTargetAPs.contains(iAPCode))
+            {
+                log.info("Skipping " + iAPCode + " — not in target list.");
+                continue;
+            }
+
+            // ── Click the expand arrow — only if panel is currently collapsed ─────────
+            // Angular toggles the mat-icon between keyboard_arrow_down (closed)
+            // and keyboard_arrow_up (open) — check before clicking to avoid collapsing
+            // a panel that is already open
+            WebElement iExpandBtn = iRow.findElement(By.xpath(ObjReader.getLocator("iEcoAPExpandBtn")));
+
+            String iArrowIcon = iExpandBtn.findElement(By.xpath(".//mat-icon")).getText().trim();
+
+            if (iArrowIcon.contains("keyboard_arrow_down"))
+            {
+                iExpandBtn.click();
+                log.info("Panel was collapsed — expanded for: " + iAPCode);
+
+                // Wait for panel content to render after opening
+                try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            }
+            else
+            {
+                log.info("Panel already expanded for: " + iAPCode + " — skipping expand click.");
+            }
+
+
+            // ── Fill AP-specific fields ───────────────────────────────────────────────
+            handleEcoAPPanelFields(iAPCode);
+
+            // ── Click Save & Select ───────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iEcoAPSaveAndSelectBtn"), null);
+            log.info("Clicked Save & Select for: " + iAPCode);
+
+            // ── Wait for spinner and panel collapse ───────────────────────────────────
+            String iSpinnerXpath = ObjReader.getLocator("iScreenBuffer2");
+            isVisible(By.xpath(iSpinnerXpath), 2); // soft-wait for spinner to appear
+            iAction("WAITINVISIBLE", "XPATH", iSpinnerXpath, null);
+
+            iSelected++;
+            log.info("AP selected count: " + iSelected);
+        }
+
+        Assertions.assertEquals(2, iSelected,
+                "Expected 2 APs to be selected but only " + iSelected + " were processed. "
+                        + "Check toggle availability for this herd.");
+
+        // ── Assert counter shows "2 of 2 Selected" ───────────────────────────────────
+        String iCounterText = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iEcoAPSelectedCounter"), null);
+        Assertions.assertTrue(iCounterText.contains("2 of 2"), "Expected counter to show '2 of 2 Selected' but found: " + iCounterText);
+        log.info(" Eco AP counter confirmed: " + iCounterText);
+    }
+
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent selects the "AP2" scheme option
-    // Description   : Clicks the named Eco scheme option card or radio button
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent selects the {string} scheme option")
-    public void theAgentSelectsTheSchemeOption(String pSchemeOption) {
-        log.info("[STEP] And the agent selects the scheme option: " + pSchemeOption);
-        // Click the named Eco scheme option — can be a card, radio button, or label depending on the option type
-        iAction("CLICK", "XPATH", "//label[contains(text(),'" + pSchemeOption + "')] | //div[contains(@data-scheme,'" + pSchemeOption + "')]", null);
+// Method        : handleEcoAPPanelFields
+// Description   : Switch-case handler for AP-specific inner panel fields.
+//                 Called after the panel is expanded — fills only the fields relevant to each AP.
+// Parameters    : pAPCode — e.g. "AP1", "AP2", "AP5", "AP6"
+// Author        : Aniket Pathare
+// Date          : 10/04/2026
+// ***************************************************************************************************************************************************************************************
+    private void handleEcoAPPanelFields(String pAPCode)
+    {
+        log.info("Handling panel fields for: " + pAPCode);
+
+        switch (pAPCode)
+        {
+            case "AP1":
+                // Radio button: Standard / Enhanced — always select Standard
+                iAction("RADIOBUTTON", "XPATH", ObjReader.getLocator("iEcoAP1_StandardRadio"), null);
+                log.info("AP1: Selected 'Standard' radio button.");
+                break;
+
+            case "AP2":
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iEcoAP2_Checkbox"), null);
+                // Radio button: Standard / Enhanced stocking rate — always select Standard
+                iAction("RADIOBUTTON", "XPATH", ObjReader.getLocator("iEcoAP2_StandardRadio"), null);
+                log.info("AP2: Selected 'Standard' stocking rate radio button.");
+                break;
+
+            case "AP3":
+                // Single confirmation checkbox — tick it
+                iAction("CHECKBOX", "XPATH", ObjReader.getLocator("iEcoAP3_ConfirmCheckbox"), "CHECK");
+                log.info("AP3: Ticked confirmation checkbox.");
+                break;
+
+            case "AP4":
+                // No fields defined yet — panel may be info-only
+                log.info("AP4: No fields to fill — skipping.");
+                break;
+
+            case "AP5":
+                // ── Radio: "an approved GPS spreader" ────────────────────────────────────
+                // Target the label text directly — more reliable than the input sibling chain
+                iAction("RADIOBUTTON", "XPATH", ObjReader.getLocator("iEcoAP5_GPSSpreaderRadio"), null);
+                log.info("AP5: Selected 'an approved GPS spreader'.");
+
+                // ── Approved Spreader dropdown — select Lemken ────────────────────────────
+                // mat-select with formcontrolname scoped inside the eco-ap5-form
+                // Using iAction LIST which handles CDK overlay open + option click
+                iAction("LIST", "XPATH", ObjReader.getLocator("iEcoAP5_ApprovedSpreaderDropdown"), "Lemken");
+                log.info("AP5: Selected 'Lemken' from Approved Spreader dropdown.");
+
+                // ── Model dropdown — only appears after Lemken is selected ────────────────
+                // Wait for the model dropdown to become visible before interacting —
+                // Angular renders it dynamically after the spreader manufacturer is set
+                iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iEcoAP5_ModelDropdown"), null);
+                iAction("LIST", "XPATH", ObjReader.getLocator("iEcoAP5_ModelDropdown"), "Polaris 14");
+                log.info("AP5: Selected 'Polaris 14' from Model dropdown.");
+
+                // ── Serial Number — optional text input ───────────────────────────────────
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iEcoAP5_SerialNumber"), "A735B78346");
+                log.info("AP5: Entered serial number.");
+                break;
+
+
+            case "AP6":
+                // Two confirmation checkboxes — tick both
+                iAction("CHECKBOX", "XPATH", ObjReader.getLocator("iEcoAP6_ConfirmCheckbox1"), "CHECK");
+                log.info("AP6: Ticked first confirmation checkbox.");
+                iAction("CHECKBOX", "XPATH", ObjReader.getLocator("iEcoAP6_ConfirmCheckbox2"), "CHECK");
+                log.info("AP6: Ticked second confirmation checkbox.");
+                break;
+
+            case "AP7":
+                // No fields defined yet
+                log.info("AP7: No fields to fill — skipping.");
+                break;
+
+            case "AP8":
+                // No fields defined yet
+                log.info("AP8: No fields to fill — skipping.");
+                break;
+
+            default:
+                log.warning("Unknown AP code encountered in switch: " + pAPCode + " — no fields filled.");
+                break;
+        }
     }
 
 
@@ -1487,9 +1735,7 @@ public class TC_03 {
     public void theAgentSelectsForPanel(String pOption, int pPanelNumber) {
         log.info("[STEP] And the agent selects: " + pOption + " for panel: " + pPanelNumber);
         // Eco panels are indexed the same way as ACRES — scope to the right panel before clicking
-        iAction("CLICK", "XPATH",
-                "(//div[contains(@class,'eco-panel')])[" + pPanelNumber + "]//label[contains(text(),'" + pOption + "')]",
-                null);
+        iAction("CLICK", "XPATH", "(//div[contains(@class,'eco-panel')])[" + pPanelNumber + "]//label[contains(text(),'" + pOption + "')]", null);
     }
 
 
@@ -1551,10 +1797,11 @@ public class TC_03 {
         log.info("[STEP] Then the Eco step should be completed successfully");
         // Look for a step-complete or step-success div — the portal renders one of these
         // when all mandatory Eco selections have been filled in correctly
-        String iStepStatus = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'step-complete') or contains(@class,'step-success')]",
-                null);
-        Assertions.assertFalse(iStepStatus.isEmpty(), "Eco step completion indicator should be visible.");
+
+        iAction("VERIFYELEMENT", "XPATH", "//a[normalize-space()='Scheme Selection']", null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtn"), null);
+        String iStepStatus = iAction("GETTEXT", "XPATH", "//h1[contains(@class,'application-step-content-title')]//span[normalize-space()='Review & Submit']", null);
+        Assertions.assertFalse(iStepStatus.isEmpty(), " Review & Submit  step completion indicator should be visible.");
         log.info("Eco step completed: " + iStepStatus);
     }
 
@@ -1573,9 +1820,7 @@ public class TC_03 {
         // Click the named step in the wizard navigation bar to jump back to it.
         // This is used in the Eco opt-out scenario where we need to revisit Scheme Selection
         // after already having progressed further through the wizard.
-        iAction("CLICK", "XPATH",
-                "//a[contains(text(),'" + pStepName + "')] | //button[contains(text(),'" + pStepName + "')]",
-                null);
+        iAction("CLICK", "XPATH", "//a[contains(text(),'" + pStepName + "')] | //button[contains(text(),'" + pStepName + "')]", null);
     }
 
 
@@ -1588,9 +1833,7 @@ public class TC_03 {
         log.info("[STEP] And the agent opens the scheme card: " + pSchemeName);
         // Expand the named scheme card — the click target is the card container itself
         // so we go up to the ancestor scheme-card div from the h3 heading to get a stable target
-        iAction("CLICK", "XPATH",
-                "//div[contains(@class,'scheme-card')]//h3[contains(text(),'" + pSchemeName + "')]/ancestor::div[contains(@class,'scheme-card')]",
-                null);
+        iAction("CLICK", "XPATH", "//div[contains(@class,'scheme-card')]//h3[contains(text(),'" + pSchemeName + "')]/ancestor::div[contains(@class,'scheme-card')]", null);
     }
 
 
@@ -1641,29 +1884,19 @@ public class TC_03 {
     // ***************************************************************************************************************************************************************************************
     @And("the agent completes all review page next actions")
     public void theAgentCompletesAllReviewPageNextActions() {
-        log.info("[STEP] And the agent completes all review page next actions");
-        // The Review & Submit step can span multiple sub-pages — each one has a Next button.
-        // We loop until no more Next buttons are available (max 10 pages as a safety cap)
-        // to avoid an infinite loop if the portal ever behaves unexpectedly.
-        int iMaxPages = 10;
-        int iPage     = 0;
-        while (iPage < iMaxPages) {
-            try {
-                // Only click Next if it's enabled — a disabled Next means there's a validation
-                // error on the current review page that the agent needs to address first
-                iAction("CLICK", "XPATH",
-                        "//button[contains(text(),'Next') and not(@disabled)]",
-                        null);
-                iPage++;
-                log.info("Review page next clicked — page: " + iPage);
-            } catch (Exception e) {
-                // No more Next buttons found — we've reached the last review sub-page
-                log.info("No more Next buttons on review — all review pages completed.");
-                break;
-            }
+        WebDriver iDriver = getDriver();
+        log.info("[STEP] And the agent continues through all applicable panels");
+        List<WebElement> panels = iDriver.findElements(By.xpath("//mat-expansion-panel[.//button[.//span[normalize-space()='Next']]]"));
+        log.info("Total panels with Continue button found: " + panels.size());
+
+        for (int i = 1; i <= panels.size(); i++) {
+
+            String continueBtnXpath = "(//mat-expansion-panel[.//button[.//span[normalize-space()='Next']]])[" + i + "]" + "//button[.//span[normalize-space()='Next']]";
+            log.info("Clicking Continue on panel index: " + i);
+            iAction("WAITVISIBLE", "XPATH", continueBtnXpath, "Next button in panel " + i);
+            iAction("CLICK", "XPATH", continueBtnXpath, null);
         }
     }
-
 
     // ***************************************************************************************************************************************************************************************
     // Step          : And the agent accepts the Terms and Conditions
@@ -1674,7 +1907,7 @@ public class TC_03 {
         log.info("[STEP] And the agent accepts the Terms and Conditions");
         // The Submit button stays disabled until this checkbox is ticked —
         // the farmer is legally declaring the information they've provided is correct
-        iAction("CHECKBOX", "ID", "termsAndConditions", "CHECK");
+        iAction("CHECKBOX", "XPATH", ObjReader.getLocator("termsAndConditions"), "CHECK");
     }
 
 
@@ -1687,9 +1920,7 @@ public class TC_03 {
         log.info("[STEP] And the agent submits the application");
         // Click Submit — the XPath explicitly excludes any 'Confirm Submit' buttons
         // to make sure we're hitting the initial Submit action rather than the confirmation
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Submit') and not(contains(text(),'Confirm'))]",
-                null);
+        iAction("CLICK", "XPATH", "//button[.//span[normalize-space()='Submit']]", null);
     }
 
 
@@ -1702,9 +1933,14 @@ public class TC_03 {
         log.info("[STEP] And the agent confirms the application submission");
         // After clicking Submit a confirmation modal appears asking "are you sure?" —
         // click whichever affirmative button is on that modal to finalise the submission
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Confirm') or contains(text(),'Yes, Submit') or contains(text(),'OK')]",
-                null);
+        iAction("CLICK", "XPATH", "//button[.//span[normalize-space()='Yes, I confirm']]", null);
+        By iPDFGneratedSubmission = By.xpath("//div[@class='ng-star-inserted'][normalize-space()='Download, view or print your BISS Application Summary']");
+        boolean iACRESVisible = isVisible(iPDFGneratedSubmission, 55);
+        Assertions.assertTrue(iACRESVisible, "You have successfully submitted a BISS 2026 application amendment page not displayed " + "Download, view or print your BISS Application Summary");
+
+        log.info("ACRES step completed: " + iPDFGneratedSubmission);
+
+
     }
 
 
@@ -1718,12 +1954,24 @@ public class TC_03 {
         // After a successful submission the portal shows a success banner or confirmation panel.
         // Read its text and assert it's not empty — an empty result means the page didn't
         // advance to the confirmation screen and something went wrong.
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation') or contains(@class,'submitted')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(),
-                "Application submission success message should be visible.");
-        log.info("Application submitted successfully | Confirmation: " + iConfirmation);
+        // Now click 'My Clients' to get to the client search screen
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+
+        // Confirm the BISS header is still visible — makes sure we're still inside the portal
+        iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iBissTitle"), "Basic Income Support for Sustainability");
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iSubmittedTab"), "");
+
+        log.info("[STEP] When the agent opens a farmer dashboard using herd data");
+        //iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), Hooks.RUNTIME_HERD);    Original Statement Commented till the SQL query is fixed
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "A1240326");
+
+        iAction("CLICK",   "XPATH",    ObjReader.getLocator("herdSearchBtn"),   null);
+        log.info("Farmer dashboard opened for herd number: " + "TD:iHerdNumber");
+
+        String iConfirmation = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iSubmittedStatusChip"), null);
+        Assertions.assertTrue(iConfirmation.trim().equalsIgnoreCase("Submitted"), "Expected first row status to be 'Submitted' but found: '" + iConfirmation + "'");
+        log.info(" Application submitted successfully | Status confirmed: " + iConfirmation);
     }
 
 
@@ -1739,9 +1987,7 @@ public class TC_03 {
     public void theAgentChoosesToUploadADocument() {
         log.info("[STEP] And the agent chooses to upload a document");
         // Click the Upload Document button on the Correspondence tab to open the upload dialog
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Upload') or contains(text(),'Upload Document')]",
-                null);
+        iAction("CLICK", "XPATH", "//button[contains(text(),'Upload') or contains(text(),'Upload Document')]", null);
     }
 
 
