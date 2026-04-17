@@ -43,7 +43,7 @@ public class DBRouter {
     // DB CONFIGURATION
     // =====================================================================
     private static final Logger log = Logger.getLogger(DBRouter.class.getName());
-    private static final String PROPERTIES_FILE = "src/test/resources/db.properties"; // keeps your existing path
+    private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
 
     // DATA (default) — existing keys
     private static String DB_URL;
@@ -61,7 +61,7 @@ public class DBRouter {
     }
 
     // =====================================================================
-    // PUBLIC API — Option B ONLY (no ambiguous overloads)
+    // PUBLIC API
     // =====================================================================
     /**
      * Run a labeled SQL on the chosen DB.
@@ -74,7 +74,7 @@ public class DBRouter {
         Objects.requireNonNull(dbKey, "dbKey cannot be null");
         Objects.requireNonNull(label, "label cannot be null");
 
-        final String which = normalizeDb(dbKey);  // "DATA" or "INET"
+        final String which = normalizeDb(dbKey);
         final String key   = normalize(label);
 
         lastLabel = label;
@@ -88,35 +88,24 @@ public class DBRouter {
             // DATA DB: list of herds with no errors (year, optional limit)
             // ------------------------------------------------------------
             case "LIST OF HERDS WITH NO ERRORS AT ALL": {
-                // params:
-                // params[0] = year (required)
-                // params[1] = limit (optional)
-                // params[2] = mode: NORMAL (default) or NOT_STARTED (NEW)
                 requireParamCountBetween(key, params, 1, 3);
 
                 int year    = parseInt(params[0], "year");
                 int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
 
-                // NEW: detection of mode
                 String mode = (params.length >= 3) ? params[2].trim().toUpperCase() : "NORMAL";
 
                 if (mode.equals("NOT_STARTED")) {
-                    // ----------------------------------------------------------
-                    // Mode 2 — Return NOT STARTED herds (app_mde_code = 1)
-                    // ----------------------------------------------------------
                     sql =
                             "SELECT app_herd_no, app_year, aph_herd_type " +
                                     "FROM vwbs_application_herd " +
-                                    "WHERE app_mde_code = 1 " +     // 1 = NOT STARTED
+                                    "WHERE app_mde_code = 1 " +
                                     "AND app_year = ? " +
                                     "AND ROWNUM <= ? " +
                                     "ORDER BY app_herd_no ASC";
                     jdbcParams = new Object[]{ year, maxRows };
                 }
                 else {
-                    // ----------------------------------------------------------
-                    // Mode 1 — Original query (NO ERRORS)
-                    // ----------------------------------------------------------
                     sql =
                             "SELECT a.app_herd_no, a.aph_herd_no, a.applicant_type " +
                                     "FROM vwbs_error e, vwbs_application_herd a " +
@@ -135,7 +124,7 @@ public class DBRouter {
             }
 
             // ------------------------------------------------------------
-            // DATA DB: herds by scheme year (kept from your current router)
+            // DATA DB: herds by scheme year
             // ------------------------------------------------------------
             case "HERDS BY SCHEME YEAR": {
                 requireParamCountBetween(key, params, 1, 1);
@@ -150,7 +139,7 @@ public class DBRouter {
             }
 
             // ------------------------------------------------------------
-            // DATA DB: get_hold (kept from your current router)
+            // DATA DB: get_hold
             // ------------------------------------------------------------
             case "GET HOLD ID FOR HERD": {
                 requireParamCountBetween(key, params, 1, 1);
@@ -164,7 +153,6 @@ public class DBRouter {
             // ------------------------------------------------------------
             case "GET LOGIN ID FOR HERD": {
                 requireParamCountBetween(key, params, 1, 1);
-                // Returns HERDNO + USERNAME
                 sql =
                         "SELECT hbcus.bcus_bus_id AS HERDNO, " +
                                 "       (SELECT ui.uri_username " +
@@ -202,6 +190,7 @@ public class DBRouter {
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
+
             // ------------------------------------------------------------
             // DATA DB: herds with Dual Claims check (year)
             // ------------------------------------------------------------
@@ -233,6 +222,7 @@ public class DBRouter {
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
+
             // ------------------------------------------------------------
             // DATA DB: herds with Prelim Checks AND commonage parcels (year)
             // ------------------------------------------------------------
@@ -254,14 +244,14 @@ public class DBRouter {
             }
 
             // ------------------------------------------------------------
-            // DATA DB: herds with Prelim Checks filtered by response status (year, status)
+            // DATA DB: herds with Prelim Checks filtered by response status
             // e.g. status = "Pending", "Accepted", "Rejected"
             // ------------------------------------------------------------
             case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS": {
                 requireParamCountBetween(key, params, 2, 3);
-                int year    = parseInt(params[0], "year");
+                int year      = parseInt(params[0], "year");
                 String status = params[1].trim();
-                int maxRows = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
+                int maxRows   = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
                 sql =
                         "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
                                 "FROM vwbs_land_validation " +
@@ -274,6 +264,39 @@ public class DBRouter {
                 break;
             }
 
+            // ------------------------------------------------------------
+            // DATA DB: Preliminary Checks — one herd per check type
+            // Returns one row each for: Agricultural Activity, Dual claim, Overclaim
+            // Filters LVS_DESC = 'Pending' to guarantee fresh actionable data
+            // params[0] = year (required)
+            // ------------------------------------------------------------
+            case "PRELIMINARY CHECKS HERDS": {
+                requireParamCountBetween(key, params, 1, 1);
+                int year = parseInt(params[0], "year");
+                sql =
+                        "SELECT * FROM ( " +
+                                "    SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
+                                "           LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
+                                "           VDS_SRC_DESC, LVL_SOURCE_ID, " +
+                                "           ROW_NUMBER() OVER ( " +
+                                "               PARTITION BY LVC_DESC " +
+                                "               ORDER BY LVL_HERD_NO " +
+                                "           ) AS RN " +
+                                "    FROM   vwbs_land_validation " +
+                                "    WHERE  LVL_YEAR  = ? " +
+                                "    AND    LVT_DESC  = 'Preliminary Check' " +
+                                "    AND    LVS_DESC  = 'Pending' " +
+                                "    AND    LVC_DESC  IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
+                                ") WHERE RN = 1 " +
+                                "ORDER BY " +
+                                "    CASE LVC_DESC " +
+                                "        WHEN 'Agricultural Activity' THEN 1 " +
+                                "        WHEN 'Dual claim'            THEN 2 " +
+                                "        WHEN 'Overclaim'             THEN 3 " +
+                                "    END";
+                jdbcParams = new Object[]{ year };
+                break;
+            }
 
             default:
                 throw new RuntimeException("Unknown DB label: " + label);
@@ -321,6 +344,7 @@ public class DBRouter {
     private static Connection getDataConnection() throws SQLException {
         return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
     }
+
     private static Connection getInetConnection() throws SQLException {
         return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
     }
@@ -328,7 +352,7 @@ public class DBRouter {
     // =====================================================================
     // HELPER ACCESSORS
     // =====================================================================
-    /** First row’s column value (case-insensitive), or null if absent. */
+    /** First row's column value (case-insensitive), or null if absent. */
     public static String getValue(String column) {
         if (lastRows.isEmpty()) return null;
         Map<String, Object> first = lastRows.get(0);
@@ -352,7 +376,6 @@ public class DBRouter {
         try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE)) {
             props.load(fis);
 
-            // DATA (existing keys)
             DB_URL      = props.getProperty("db.url");
             DB_USER     = props.getProperty("db.username");
             DB_PASSWORD = props.getProperty("db.password");
@@ -360,7 +383,6 @@ public class DBRouter {
                 throw new RuntimeException("Missing DATA DB properties (db.url / db.username / db.password)");
             }
 
-            // INET (new keys)
             DB_INET_URL      = props.getProperty("db.inet.url");
             DB_INET_USER     = props.getProperty("db.inet.username");
             DB_INET_PASSWORD = props.getProperty("db.inet.password");
@@ -383,7 +405,6 @@ public class DBRouter {
             root.setUseParentHandlers(false);
             root.setLevel(Level.ALL);
 
-            // Fully-qualify to avoid ambiguity with java.util.Formatter
             java.util.logging.Formatter fmt = new java.util.logging.Formatter() {
                 @Override
                 public String format(LogRecord r) {

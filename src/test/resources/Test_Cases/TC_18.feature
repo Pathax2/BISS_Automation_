@@ -1,20 +1,27 @@
-Feature: TC_18 — Validate and Respond to Overclaim Preliminary Check
+Feature: TC_18 - Validate and Respond to Overclaim Preliminary Check
 
   # --------------------------------------------------------------------------------------------------------------------
   # Purpose:
   #   Verifies that an agent can view and respond to the Overclaim Preliminary Check
-  #   for a herd that has a Pending Overclaim notification.
+  #   for a herd that has a Pending Overclaim notification in BISS_DATA.
   #
   #   Flow:
-  #     Login as agent → My Clients → Search herd → Farmer Dashboard →
-  #     Confirm Overclaim shows Response Required →
-  #     View Preliminary Checks → Negative: Submit without selection → assert validation error →
-  #     Respond to all panels row by row → Submit → Confirm → Assert success
+  #     Login as agent (resolved from BISS_INET at runtime) →
+  #     My Clients → Search herd (resolved from BISS_DATA at runtime) →
+  #     Farmer Dashboard → Assert Overclaim shows Response Required →
+  #     View Preliminary Checks →
+  #     Negative test: Submit without selection → assert validation error →
+  #     Respond to all panels row by row per DataTable →
+  #     Submit → Confirm Yes → Assert submission confirmed
   #
   # Notes:
-  #   1. Herd and agent login are resolved at runtime from BISS_DATA / BISS_INET via @preliminary hook.
-  #   2. Response values are passed as DataTable parameters — change them here without touching step defs.
-  #   3. If the herd also has other checks showing Response Required, they are rejected as per DataTable.
+  #   1. Herd and agent login are resolved at runtime from BISS_DATA / BISS_INET
+  #      via the @Before("@preliminary") Hook — no hardcoded values.
+  #   2. Response values are DataTable parameters — change them here without
+  #      touching step definitions.
+  #   3. If the herd has other checks showing Response Required, they are
+  #      responded to with the value specified in the DataTable (e.g. Reject).
+  #   4. LVS_DESC = 'Pending' filter in the DB query guarantees fresh data.
   #
   # Author  : Aniket Pathare | aniket.pathare@government.ie
   # Created : 17-04-2026
@@ -28,16 +35,16 @@ Feature: TC_18 — Validate and Respond to Overclaim Preliminary Check
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
 
   @regression @preliminary @TC_18
-  Scenario: TC_18 — Agent responds to Overclaim Preliminary Check
+  Scenario: TC_18 - Agent validates and responds to Overclaim Preliminary Check
 
     # -----------------------------------------
-    # Farmer selection using Overclaim herd
+    # Farmer selection — herd from DB at runtime
     # -----------------------------------------
     When the agent opens a farmer dashboard for preliminary check herd "OVERCLAIM"
     Then the farmer dashboard should be displayed
 
     # -----------------------------------------
-    # Dashboard validation
+    # Dashboard — assert Preliminary Checks card
     # -----------------------------------------
     Then the preliminary checks card should be visible on the dashboard
     And the "Overclaim Checks" preliminary check should show "Response required" on the dashboard
@@ -56,15 +63,19 @@ Feature: TC_18 — Validate and Respond to Overclaim Preliminary Check
 
     # -----------------------------------------
     # Respond to all panels row by row
+    # Panel Name must match span.prelim-heading text exactly
+    # Response must match the radio button label text exactly
+    # Panels with green icon are skipped automatically by the step
     # -----------------------------------------
     When the agent responds to all preliminary check panels row by row
-      | Overclaim Checks                | Accept        |
-      | Dual Claim Checks               | No, Keep it   |
-      | No Agricultural Activity Checks | Reject        |
+      | Panel Name                      | Response    |
+      | Overclaim Checks                | Accept      |
+      | Dual Claim Checks               | No, Keep it |
+      | No Agricultural Activity Checks | Reject      |
 
     # -----------------------------------------
     # Submit and confirm
     # -----------------------------------------
     When the agent submits the Preliminary Checks response
     Then the agent confirms the Preliminary Checks submission
-    Then the Preliminary Checks submission should be confirmed successfully
+    And the Preliminary Checks submission should be confirmed successfully
