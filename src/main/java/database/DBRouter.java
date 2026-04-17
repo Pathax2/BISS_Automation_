@@ -265,36 +265,47 @@ public class DBRouter {
             }
 
             // ------------------------------------------------------------
-            // DATA DB: Preliminary Checks — one herd per check type
-            // Returns one row each for: Agricultural Activity, Dual claim, Overclaim
-            // Filters LVS_DESC = 'Pending' to guarantee fresh actionable data
-            // params[0] = year (required)
+            // DATA DB: one herd per preliminary check type (Overclaim,
+            // Dual claim, Agricultural Activity) — offset-based so each
+            // retry skips to the next candidate per check type.
+            //
+            // params[0] = year   (required)
+            // params[1] = offset (required — 0 on first call, increment
+            //                     on each retry that fails INET validation)
+            //
+            // Query mirrors Image 1 exactly:
+            //   ROW_NUMBER() OVER (PARTITION BY LVC_DESC ORDER BY LVL_HERD_NO)
+            //   WHERE RN = 1 + offset  -->  gives the Nth herd per check type
+            //
+            // The OFFSET trick: wrap in another layer so we can skip N rows
+            // per partition. Oracle doesn't support OFFSET in ROWNUM queries
+            // directly, so we use RN BETWEEN (offset+1) AND (offset+1) which
+            // gives exactly one row per check type at the requested position.
             // ------------------------------------------------------------
             case "PRELIMINARY CHECKS HERDS": {
-                requireParamCountBetween(key, params, 1, 1);
-                int year = parseInt(params[0], "year");
+                requireParamCountBetween(key, params, 2, 2);
+                int year   = parseInt(params[0], "year");
+                int offset = parseInt(params[1], "offset");   // 0 = first candidate, 1 = second, etc.
+                int targetRn = offset + 1;                    // ROW_NUMBER is 1-based
+
+                // Exact query from Image 1, but RN = targetRn instead of hardcoded 1
+                // Returns 3 rows max (one per LVC_DESC value)
                 sql =
                         "SELECT * FROM ( " +
-                                "    SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
-                                "           LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
-                                "           VDS_SRC_DESC, LVL_SOURCE_ID, " +
-                                "           ROW_NUMBER() OVER ( " +
-                                "               PARTITION BY LVC_DESC " +
-                                "               ORDER BY LVL_HERD_NO " +
-                                "           ) AS RN " +
-                                "    FROM   vwbs_land_validation " +
-                                "    WHERE  LVL_YEAR  = ? " +
-                                "    AND    LVT_DESC  = 'Preliminary Check' " +
-                                "    AND    LVS_DESC  = 'Pending' " +
-                                "    AND    LVC_DESC  IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
-                                ") WHERE RN = 1 " +
-                                "ORDER BY " +
-                                "    CASE LVC_DESC " +
-                                "        WHEN 'Agricultural Activity' THEN 1 " +
-                                "        WHEN 'Dual claim'            THEN 2 " +
-                                "        WHEN 'Overclaim'             THEN 3 " +
-                                "    END";
-                jdbcParams = new Object[]{ year };
+                                "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
+                                "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
+                                "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
+                                "         ROW_NUMBER() OVER ( " +
+                                "             PARTITION BY LVC_DESC " +
+                                "             ORDER BY LVL_HERD_NO " +
+                                "         ) AS RN " +
+                                "  FROM vwbs_land_validation " +
+                                "  WHERE LVL_YEAR = ? " +
+                                "  AND LVT_DESC = 'Preliminary Check' " +
+                                "  AND LVS_DESC = 'Pending' " +
+                                "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
+                                ") WHERE RN = ?";
+                jdbcParams = new Object[]{ year, targetRn };
                 break;
             }
 

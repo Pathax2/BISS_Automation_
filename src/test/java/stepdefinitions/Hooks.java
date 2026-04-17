@@ -250,79 +250,122 @@ public class Hooks
         }
     }
 
-    // =================================================================================================
-    // BEFORE — @preliminary tag
-    // Runs before every scenario tagged @preliminary (TC_18, TC_19, TC_20)
-    // Step 1: Query BISS_DATA for one pending herd per check type
-    // Step 2: Query BISS_INET for the agent login ID for each herd
-    // =================================================================================================
-    // ***************************************************************************************************************************************************************************************
-    // Hook          : @Before("@preliminary")
-    // Description   : Populates six static runtime fields before any @preliminary scenario runs.
-    //                 Runs AFTER @BeforeAll so the browser and report are already initialised.
-    //                 Step 1 — BISS_DATA: "Preliminary Checks Herds" query returns one row per
-    //                          check type (LVC_DESC) where LVS_DESC = 'Pending'.
-    //                 Step 2 — BISS_INET: "Get Login Id for herd" called once per herd to resolve
-    //                          the agent username.
-    //                 Fields populated:
-    //                   OVERCLAIM_HERD / OVERCLAIM_USERNAME
-    //                   DUAL_CLAIM_HERD / DUAL_CLAIM_USERNAME
-    //                   AGRI_ACTIVITY_HERD / AGRI_ACTIVITY_USERNAME
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 17-04-2026
-    // ***************************************************************************************************************************************************************************************
+    // ***********************************************************************
+// @Before("@preliminary")
+// Description : Resolves one valid herd+username per preliminary check
+//               type (Overclaim, Dual claim, Agricultural Activity) for
+//               TC_18 / TC_19 / TC_20.
+//
+//               Strategy — offset-based retry loop:
+//                 1. Query BISS_DATA with offset N to get the Nth herd
+//                    per check type from the ROW_NUMBER partition.
+//                 2. For each of the 3 rows returned, validate BISS_INET.
+//                 3. If any check type has no USERNAME → increment offset
+//                    and repeat the whole 3-row fetch.
+//                 4. After MAX_PRELIM_ATTEMPTS fail → throw to abort TC.
+//
+//               This solves the "always same 3 herds, Overclaim has no
+//               agent" problem observed in CENTEST on 17-Apr-2026.
+// ***********************************************************************
     @Before("@preliminary")
-    public void beforePreliminaryCheck()
+    public void resolveRuntimePreliminaryHerds(Scenario pScenario)
     {
-        CommonFunctions.log.info("[HOOKS] @preliminary — fetching preliminary check herds from BISS_DATA...");
+        final int    MAX_PRELIM_ATTEMPTS = 10;
+        final String YEAR                = System.getProperty("herd.year", "2026").trim();
 
-        String iHerdYear = System.getProperty("herd.year", "2026").trim();
+        CommonFunctions.log.info("[PRELIM-HOOK] Resolving preliminary check herds for: " + pScenario.getName());
 
-        // ── Step 1: One herd per check type from BISS_DATA ──────────────────────────────────────
-        database.DBRouter.runDB("DATA", "Preliminary Checks Herds", iHerdYear);
-        List<Map<String, Object>> iRows = database.DBRouter.getRows();
+        boolean iAllResolved = false;
 
-        if (iRows == null || iRows.isEmpty())
+        for (int iOffset = 0; iOffset < MAX_PRELIM_ATTEMPTS; iOffset++)
+        {
+            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_PRELIM_ATTEMPTS
+                    + " — offset=" + iOffset);
+
+            // Step 1: fetch one herd per check type at this offset position
+            database.DBRouter.runDB("DATA", "Preliminary checks herds", YEAR, String.valueOf(iOffset));
+            List<Map<String, Object>> iRows = database.DBRouter.getRows();
+
+            if (iRows == null || iRows.isEmpty())
+            {
+                CommonFunctions.log.warning("[PRELIM-HOOK] BISS_DATA returned 0 rows at offset=" + iOffset
+                        + " — no more candidates in DB. Aborting.");
+                break;
+            }
+
+            // Step 2: reset per-attempt state
+            String iOverclaimHerd       = null;  String iOverclaimUser       = null;
+            String iDualClaimHerd       = null;  String iDualClaimUser       = null;
+            String iAgriActivityHerd    = null;  String iAgriActivityUser    = null;
+
+            // Step 3: resolve USERNAME for each row from BISS_INET
+            for (Map<String, Object> iRow : iRows)
+            {
+                String iLvcDesc = Objects.toString(iRow.get("LVC_DESC"), "").trim();
+                String iHerd    = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
+
+                if (iHerd.isEmpty()) continue;
+
+                database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
+                String iUsername = database.DBRouter.getValue("USERNAME");
+
+                if (iUsername == null || iUsername.isBlank())
+                {
+                    CommonFunctions.log.warning("[PRELIM-HOOK] No USERNAME in BISS_INET for herd="
+                            + iHerd + " (" + iLvcDesc + ") — will retry with next offset.");
+                    // Don't break — log all misses for visibility, then retry whole offset
+                    continue;
+                }
+
+                iUsername = iUsername.trim();
+                CommonFunctions.log.info("[PRELIM-HOOK] Resolved " + iLvcDesc + " → herd=" + iHerd
+                        + " | username=" + iUsername);
+
+                switch (iLvcDesc)
+                {
+                    case "Overclaim":
+                        iOverclaimHerd  = iHerd; iOverclaimUser  = iUsername; break;
+                    case "Dual claim":
+                        iDualClaimHerd  = iHerd; iDualClaimUser  = iUsername; break;
+                    case "Agricultural Activity":
+                        iAgriActivityHerd  = iHerd; iAgriActivityUser  = iUsername; break;
+                    default:
+                        CommonFunctions.log.warning("[PRELIM-HOOK] Unexpected LVC_DESC value: " + iLvcDesc);
+                }
+            }
+
+            // Step 4: check if all 3 check types are resolved
+            if (iOverclaimHerd != null && iDualClaimHerd != null && iAgriActivityHerd != null)
+            {
+                // All 3 resolved — commit to static fields
+                OVERCLAIM_HERD       = iOverclaimHerd;    OVERCLAIM_USERNAME    = iOverclaimUser;
+                DUAL_CLAIM_HERD      = iDualClaimHerd;    DUAL_CLAIM_USERNAME   = iDualClaimUser;
+                AGRI_ACTIVITY_HERD   = iAgriActivityHerd; AGRI_ACTIVITY_USERNAME = iAgriActivityUser;
+
+                CommonFunctions.log.info("[PRELIM-HOOK] All 3 preliminary check herds resolved:");
+                CommonFunctions.log.info("[PRELIM-HOOK]   Overclaim         → " + OVERCLAIM_HERD     + " / " + OVERCLAIM_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK]   Dual claim        → " + DUAL_CLAIM_HERD    + " / " + DUAL_CLAIM_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK]   Agri Activity     → " + AGRI_ACTIVITY_HERD + " / " + AGRI_ACTIVITY_USERNAME);
+
+                iAllResolved = true;
+                break;
+            }
+
+            CommonFunctions.log.warning("[PRELIM-HOOK] Not all 3 resolved at offset=" + iOffset
+                    + " — Overclaim=" + (iOverclaimHerd != null ? "✓" : "✗")
+                    + " DualClaim=" + (iDualClaimHerd != null ? "✓" : "✗")
+                    + " AgriActivity=" + (iAgriActivityHerd != null ? "✓" : "✗")
+                    + " — trying offset=" + (iOffset + 1));
+        }
+
+        if (!iAllResolved)
         {
             throw new RuntimeException(
-                    "[HOOKS] @preliminary — BISS_DATA query returned no rows. " +
-                            "No pending preliminary check herds found for year=" + iHerdYear + ". " +
-                            "Ensure LVS_DESC = 'Pending' records exist in vwbs_land_validation.");
+                    "[PRELIM-HOOK] Could not resolve all 3 preliminary check herds after "
+                            + MAX_PRELIM_ATTEMPTS + " offset attempts. "
+                            + "Check vwbs_land_validation for LVT_DESC='Preliminary Check' AND LVS_DESC='Pending' "
+                            + "in year " + YEAR + " has sufficient rows with BISS_INET agents.");
         }
-
-        for (Map<String, Object> iRow : iRows)
-        {
-            String iCheckType = Objects.toString(iRow.get("LVC_DESC"), "").trim();
-            String iHerd      = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
-
-            switch (iCheckType)
-            {
-                case "Overclaim":
-                    OVERCLAIM_HERD = iHerd;
-                    CommonFunctions.log.info("[HOOKS] OVERCLAIM_HERD      = " + OVERCLAIM_HERD);
-                    break;
-                case "Dual claim":
-                    DUAL_CLAIM_HERD = iHerd;
-                    CommonFunctions.log.info("[HOOKS] DUAL_CLAIM_HERD     = " + DUAL_CLAIM_HERD);
-                    break;
-                case "Agricultural Activity":
-                    AGRI_ACTIVITY_HERD = iHerd;
-                    CommonFunctions.log.info("[HOOKS] AGRI_ACTIVITY_HERD  = " + AGRI_ACTIVITY_HERD);
-                    break;
-                default:
-                    CommonFunctions.log.warning("[HOOKS] Unrecognised LVC_DESC value: '" + iCheckType + "' — skipping.");
-                    break;
-            }
-        }
-
-        // ── Step 2: Resolve agent login IDs from BISS_INET ─────────────────────────────────────
-        OVERCLAIM_USERNAME    = fetchPrelimUsername(OVERCLAIM_HERD,    "OVERCLAIM");
-        DUAL_CLAIM_USERNAME   = fetchPrelimUsername(DUAL_CLAIM_HERD,   "DUAL_CLAIM");
-        AGRI_ACTIVITY_USERNAME = fetchPrelimUsername(AGRI_ACTIVITY_HERD, "AGRI_ACTIVITY");
-
-        CommonFunctions.log.info("[HOOKS] OVERCLAIM_USERNAME      = " + OVERCLAIM_USERNAME);
-        CommonFunctions.log.info("[HOOKS] DUAL_CLAIM_USERNAME     = " + DUAL_CLAIM_USERNAME);
-        CommonFunctions.log.info("[HOOKS] AGRI_ACTIVITY_USERNAME  = " + AGRI_ACTIVITY_USERNAME);
     }
 
     // ***************************************************************************************************************************************************************************************
