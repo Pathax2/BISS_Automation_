@@ -278,40 +278,327 @@ public class TC_03 {
     //  FARMER SELECTION AND DASHBOARD
     // ===================================================================================================================================
 
+// ===================================================================================================================================
+    //  FARMER SELECTION AND DASHBOARD
+    // ===================================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent opens a farmer dashboard using herd data from row 4
-    // Description   : Reads herd number from the specified row of the HerdData sheet in TestData.xlsx
-    //                 and searches for that farmer on the My Clients screen
+    // Step          : When the agent opens a farmer dashboard using herd data
+    // Description   : Searches for the runtime herd on the My Clients screen.
+    //
+    //                 Three-layer validation — a herd must pass ALL three before the test proceeds:
+    //                   Layer 1 (DB — done in Hooks @BeforeAll) : herd exists in BISS_DATA
+    //                   Layer 2 (DB — done in Hooks @BeforeAll) : herd has an agent in BISS_INET
+    //                   Layer 3 (UI — done HERE)                : herd returns visible rows in My Clients
+    //
+    //                 If layer 3 fails (0 rows in UI) the method:
+    //                   1. Re-queries BISS_DATA with an increased limit to get a fresh candidate pool
+    //                   2. Validates each candidate against BISS_INET (layer 2)
+    //                   3. Logs out of the current session
+    //                   4. Logs back in as the NEW agent (the agents differ per herd)
+    //                   5. Navigates back to My Clients
+    //                   6. Searches again — up to MAX_HERD_RETRIES total attempts
+    //
+    //                 Updates Hooks.RUNTIME_HERD and Hooks.RUNTIME_USERNAME on every
+    //                 successful swap so all downstream steps reference the correct pair.
+    //
+    // Parameters    : none
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date          : 17-04-2026
     // ***************************************************************************************************************************************************************************************
     @When("the agent opens a farmer dashboard using herd data")
     public void theAgentOpensAFarmerDashboardUsingHerdDataFromRow()
     {
         log.info("[STEP] When the agent opens a farmer dashboard using herd data");
 
-        // Type the herd number from the runtime hook into the search field
-        // then click Search to filter the client list down to this specific farmer
-        //iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), Hooks.RUNTIME_HERD);    Original Statement Commented till the SQL query is fixed
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "A1240326");
-        //iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "G1300554");
-        iAction("CLICK",   "XPATH",    ObjReader.getLocator("herdSearchBtn"),   null);
-        log.info("Farmer dashboard opened for herd number: " + "TD:iHerdNumber");
+        final int    MAX_HERD_RETRIES = 5;
+        final String YEAR             = System.getProperty("herd.year",  "2026").trim();
+        final String BASE_LIMIT       = System.getProperty("herd.limit", "25").trim();
+        final By     iClientRowsBy    = By.xpath(ObjReader.getLocator("clientTableRows"));
 
-        // The default page size might be 10, which could hide our farmer if there are many results.
-        // Open the items-per-page dropdown so we can bump it up to the maximum.
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iListItemsPerPage"), null);
+        boolean iFound = false;
 
-        // Wait until the dropdown panel is actually visible before trying to interact with it
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
+        for (int iAttempt = 0; iAttempt < MAX_HERD_RETRIES; iAttempt++)
+        {
+            String iCurrentHerd = Hooks.RUNTIME_HERD;
+            log.info("[HERD-RETRY] Attempt " + (iAttempt + 1) + "/" + MAX_HERD_RETRIES
+                    + " — searching herd: " + iCurrentHerd
+                    + " | logged in as: " + Hooks.RUNTIME_USERNAME);
 
-        // Make sure the panel is also in a clickable state (not just visible but still animating)
-        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
+            // ── Search for the herd on My Clients ──────────────────────────────
+            iAction("CLEAR",   "XPATH", ObjReader.getLocator("herdSearchInput"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
 
-        // Pick the last option in the list — this gives us the highest available page size
-        // so all farmers show on one page and we don't have to worry about pagination
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iMatSelectLastOption"), null);
+            // Allow the table to respond before counting rows
+            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
 
-        log.info("[STEP] Last item from Page Size dropdown selected at runtime");
-        log.info("[STEP] Last Item from Total Number of Pages List Box is selected");
+            java.util.List<org.openqa.selenium.WebElement> iRows =
+                    getDriver().findElements(iClientRowsBy);
+
+            if (!iRows.isEmpty())
+            {
+                // Herd is visible — layer 3 passed
+                log.info("[HERD-RETRY] Herd " + iCurrentHerd + " returned " + iRows.size()
+                        + " row(s). Proceeding.");
+                iFound = true;
+                break;
+            }
+
+            // ── Layer 3 failed — 0 rows returned ──────────────────────────────
+            log.warning("[HERD-RETRY] Herd " + iCurrentHerd
+                    + " returned 0 rows in My Clients UI — fetching replacement from DB.");
+
+            // Re-query BISS_DATA with a larger window so we surface different herds
+            int iNewLimit = Integer.parseInt(BASE_LIMIT) + ((iAttempt + 1) * 10);
+            database.DBRouter.runDB("DATA", "List of herds with no errors at all",
+                    YEAR, String.valueOf(iNewLimit));
+
+            java.util.List<java.util.Map<String, Object>> iDbRows = database.DBRouter.getRows();
+            if (iDbRows == null || iDbRows.isEmpty())
+            {
+                log.warning("[HERD-RETRY] BISS_DATA returned no rows at limit=" + iNewLimit
+                        + " — cannot recover. Stopping retry.");
+                break;
+            }
+
+            // Shuffle so we don't always evaluate in the same order
+            java.util.List<String> iCandidates = new java.util.ArrayList<>();
+            for (java.util.Map<String, Object> r : iDbRows)
+            {
+                String h = java.util.Objects.toString(r.get("APP_HERD_NO"), "").trim();
+                if (!h.isEmpty() && !h.equals(iCurrentHerd))
+                {
+                    iCandidates.add(h);
+                }
+            }
+            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
+
+            if (iCandidates.isEmpty())
+            {
+                log.warning("[HERD-RETRY] No fresh candidates from DB — stopping retry.");
+                break;
+            }
+
+            // Validate each candidate against BISS_INET before committing
+            String iNextHerd     = null;
+            String iNextUsername = null;
+
+            for (String iCandidate : iCandidates)
+            {
+                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
+                String iUsername = database.DBRouter.getValue("USERNAME");
+
+                if (iUsername != null && !iUsername.isBlank())
+                {
+                    iNextHerd     = iCandidate;
+                    iNextUsername = iUsername.trim();
+                    log.info("[HERD-RETRY] INET-validated replacement: herd=" + iNextHerd
+                            + " | username=" + iNextUsername);
+                    break;
+                }
+                else
+                {
+                    log.info("[HERD-RETRY] No INET agent for candidate " + iCandidate + " — skipping.");
+                }
+            }
+
+            if (iNextHerd == null)
+            {
+                log.warning("[HERD-RETRY] No INET-validated replacement found — stopping retry.");
+                break;
+            }
+
+            // ── Agent has changed — must re-login as the new agent ─────────────
+            // The My Clients list is agent-scoped: agent A cannot see agent B's herds.
+            // We must log out of the current session and log back in as the new agent
+            // before searching, otherwise the herd will still return 0 rows.
+            if (!iNextUsername.equalsIgnoreCase(Hooks.RUNTIME_USERNAME))
+            {
+                log.info("[HERD-RETRY] Agent change required: "
+                        + Hooks.RUNTIME_USERNAME + " → " + iNextUsername
+                        + ". Performing logout/login cycle.");
+
+                performLogout();
+                performLogin(iNextUsername);
+                navigateToMyClients();
+            }
+            else
+            {
+                // Same agent, different herd — just clear the search and retry
+                log.info("[HERD-RETRY] Same agent (" + iNextUsername
+                        + ") — no re-login needed. Retrying search.");
+                iAction("CLEAR", "XPATH", ObjReader.getLocator("herdSearchInput"), null);
+            }
+
+            // Commit the new pair to the shared Hooks fields
+            Hooks.RUNTIME_HERD     = iNextHerd;
+            Hooks.RUNTIME_USERNAME = iNextUsername;
+
+            log.info("[HERD-RETRY] Hooks updated — RUNTIME_HERD=" + Hooks.RUNTIME_HERD
+                    + " | RUNTIME_USERNAME=" + Hooks.RUNTIME_USERNAME);
+        }
+
+        if (!iFound)
+        {
+            throw new RuntimeException(
+                    "[HERD-RETRY] Could not find a herd with visible UI records after "
+                            + MAX_HERD_RETRIES + " attempts. Last herd: " + Hooks.RUNTIME_HERD
+                            + ". Ensure the herd has an active BISS application visible in My Clients "
+                            + "for agent " + Hooks.RUNTIME_USERNAME + " on " + Hooks.iEnvironment + ".");
+        }
+
+        // ── Herd confirmed visible — set page size to maximum ─────────────────
+        iAction("CLICK",        "XPATH", ObjReader.getLocator("iListItemsPerPage"),   null);
+        iAction("WAITVISIBLE",  "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
+        iAction("WAITCLICKABLE","XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
+        iAction("CLICK",        "XPATH", ObjReader.getLocator("iMatSelectLastOption"),null);
+
+        log.info("[STEP] Farmer dashboard opened | herd=" + Hooks.RUNTIME_HERD
+                + " | agent=" + Hooks.RUNTIME_USERNAME);
+    }
+
+
+    // ===================================================================================================================================
+    //  PRIVATE HELPERS — Login / Logout / Navigation (reused by herd retry loop)
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performLogout
+    // Description   : Clicks the logout icon and waits for the landing page to confirm
+    //                 the session has been terminated. Safe to call at any point when
+    //                 the agent is inside the BISS portal.
+    // Parameters    : none
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date          : 17-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private void performLogout()
+    {
+        log.info("[RELOGIN] Logging out current session...");
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            // Wait for the welcome/landing page login button to appear —
+            // this confirms the session is fully terminated and we are back at the start
+            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+            log.info("[RELOGIN] Logout complete — landing page visible.");
+        }
+        catch (Exception e)
+        {
+            // If logout fails (e.g. session already expired), navigate directly to
+            // the base URL to force a clean state rather than leaving a broken session
+            log.warning("[RELOGIN] Logout click failed (" + e.getMessage()
+                    + ") — navigating to base URL as fallback.");
+            getDriver().navigate().to(Hooks.iUrl);
+            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+        }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performLogin
+    // Description   : Executes the full Keycloak login sequence for the given username.
+    //                 Handles PIN screen (slots 1–7) and TOTP, same as the Background
+    //                 login step — extracted here so the herd retry loop can call it
+    //                 without duplicating logic.
+    //                 Password is always read from TD:Password (same for all agents
+    //                 in the test environment).
+    //                 Terms & Conditions acceptance is handled if the screen appears.
+    // Parameters    : pUsername (String) — Keycloak username of the agent to log in as
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date          : 17-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private void performLogin(String pUsername)
+    {
+        log.info("[RELOGIN] Logging in as: " + pUsername);
+
+        // Keycloak entry point
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),    null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),     pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"),null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),     "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),           null);
+
+        // PIN screen (appears for some accounts — safe to skip if not present)
+        By iPinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+        if (isVisible(iPinFormBy, 3))
+        {
+            log.info("[RELOGIN] PIN screen detected.");
+            for (int idx = 1; idx <= 7; idx++)
+            {
+                String iDynXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+                By iPinInputBy   = By.xpath(iDynXpath);
+                if (isVisible(iPinInputBy, 1))
+                {
+                    org.openqa.selenium.WebElement iInput = getDriver().findElement(iPinInputBy);
+                    if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+                    {
+                        iInput.clear();
+                        iInput.sendKeys("1");
+                        log.info("[RELOGIN] PIN slot " + idx + " filled.");
+                    }
+                }
+            }
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info("[RELOGIN] PIN + TOTP submitted.");
+        }
+        else
+        {
+            // OTP-only path
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info("[RELOGIN] OTP-only login submitted.");
+        }
+
+        // Terms & Conditions (appears rarely — accept silently if shown)
+        if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info("[RELOGIN] Terms & Conditions accepted.");
+        }
+
+        log.info("[RELOGIN] Login complete for: " + pUsername);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : navigateToMyClients
+    // Description   : After a re-login, navigates from the portal home screen through
+    //                 BISS application → Home → My Clients so the herd search step
+    //                 starts from a known page state.
+    //                 Mirrors the Background steps exactly so behaviour is identical
+    //                 to a fresh run.
+    // Parameters    : none
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date          : 17-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private void navigateToMyClients()
+    {
+        log.info("[RELOGIN] Navigating to My Clients after re-login...");
+
+        // Open the BISS application from the portal home
+        iAction("CLICK",        "XPATH", ObjReader.getLocator("iAppSearchBar"), "");
+        iAction("TEXTBOX",      "XPATH", ObjReader.getLocator("iAppSearchBar"),
+                "Basic Income Support for Sustainability");
+        iAction("VERIFYELEMENT","XPATH", ObjReader.getLocator("iSearchAppLabel"), "");
+        iAction("CLICK",        "XPATH", ObjReader.getLocator("iBissLink"),       "");
+
+        // Wait for BISS home to load
+        iAction("WAITINVISIBLE","XPATH", "iScreenBuffer",                          "Spinner");
+        iAction("VERIFYELEMENT","XPATH", ObjReader.getLocator("iBissTitle"),        "");
+
+        // Navigate Home → My Clients
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"),   null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+
+        // Reset filters to View all so the search operates on the full client list
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iViewAllTab"), "");
+
+        log.info("[RELOGIN] Now on My Clients page — ready to search.");
     }
 
 
