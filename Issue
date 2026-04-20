@@ -9,19 +9,27 @@
 //                   BISS_INET — tdcr_user_info / tdco_customer_asscs
 //                 via the @Before(”@preliminary”) hook in Hooks.java.
 //
-//                 Retry pattern for herd selection mirrors TC_03 exactly:
-//                   1. Search herd on My Clients
-//                   2. If 0 rows returned OR the row has “Herd expired” flag:
-//                        → Re-query BISS_DATA (“Preliminary checks herds”) at next offset
-//                        → Validate new herd against BISS_INET
-//                        → If agent changed: logout → login as new agent → navigate to My Clients
-//                        → Update Hooks fields
-//                        → Loop again (up to MAX_HERD_RETRIES)
-//                   3. If valid row found → proceed
+//                 Retry flow for theAgentOpensAFarmerDashboardForPreliminaryCheckHerd:
+//
+//                   For each attempt (up to MAX_HERD_RETRIES):
+//                     1. Search current herd on My Clients
+//                     2. If 0 rows returned:
+//                          → logout → DB re-query at next offset → INET validate
+//                          → re-login if agent changed → update Hooks → retry
+//                     3. If row found but marked “Herd expired”:
+//                          → logout → DB re-query at next offset → INET validate
+//                          → re-login if agent changed → update Hooks → retry
+//                     4. Row found and not expired → click through to farmer dashboard
+//                     5. Navigate to Preliminary Checks tab
+//                     6. If tab shows no records:
+//                          → logout → DB re-query at next offset → INET validate
+//                          → re-login if agent changed → update Hooks → retry
+//                     7. Tab has records → iFound = true → break → proceed
+//
+//                 All three failure modes (0 rows, expired, empty prelim tab) go through
+//                 the identical recovery path — same as TC_03 for consistency.
 //
 //                 All locators externalised to ObjectRepository.properties.
-//                 All iAction calls follow framework conventions:
-//                   local vars: i prefix | params: p prefix
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 17-04-2026 | Updated : 20-04-2026
@@ -55,27 +63,56 @@ public class TC_18
 private static final Logger log = Logger.getLogger(TC_18.class.getName());
 
 ```
+// ── "Herd expired" span inside the expired column cell of a data row ──────
+private static final String EXPIRED_SPAN_XPATH =
+        "//tbody[contains(@class,'mdc-data-table__content')]"
+      + "//tr[contains(@class,'client-list-element-row')]"
+      + "//td[contains(@class,'cdk-column-expired')]"
+      + "//span[normalize-space()='Herd expired']";
+
+// ── Preliminary Checks tab in the farmer dashboard ────────────────────────
+private static final String PRELIM_TAB_XPATH =
+        "//div[contains(@class,'tab-style')]//span[normalize-space()='Preliminary Checks']";
+
+// ── Data rows inside the Preliminary Checks table ─────────────────────────
+private static final String PRELIM_TABLE_ROW_XPATH =
+        "//biss-preliminary-checks-table//table//tr[contains(@class,'mat-row')]"
+      + " | //biss-preliminary-checks-table//mat-row";
+
+// ── Empty state message on the Preliminary Checks tab ─────────────────────
+private static final String PRELIM_NO_RECORDS_XPATH =
+        "//*[contains(normalize-space(),'no records to display')]";
+
+// ── Breadcrumb / left-menu back to My Clients ─────────────────────────────
+private static final String MY_CLIENTS_BACK_XPATH =
+        "//breadcrumb//a[contains(.,'My Clients')] | //a[normalize-space()='My Clients']";
+
+
 // ===================================================================================================================================
-//  FARMER DASHBOARD — PRELIMINARY CHECK HERD (mirrors TC_03 retry pattern)
+//  FARMER DASHBOARD — PRELIMINARY CHECK HERD
 // ===================================================================================================================================
 
 // ***************************************************************************************************************************************************************************************
 // Step          : When the agent opens a farmer dashboard for preliminary check herd {string}
-// Description   : Resolves herd + username from Hooks based on pCheckType, searches My Clients,
-//                 and retries with a fresh DB query if the result is unusable (0 rows or expired).
+// Description   : Resolves herd + username from Hooks, searches My Clients, validates the row
+//                 is not expired, clicks through to the dashboard, and confirms the Preliminary
+//                 Checks tab has records.
 //
-//                 Retry logic (mirrors TC_03 exactly):
-//                   - Search current herd on My Clients
-//                   - If 0 rows OR all rows marked "Herd expired":
-//                       → Re-query BISS_DATA ("Preliminary checks herds") at offset = iAttempt+1
-//                       → INET-validate the returned herd for this check type
-//                       → If agent changed: logout → login → navigate to My Clients
-//                       → Update relevant Hooks fields (OVERCLAIM/DUAL_CLAIM/AGRI_ACTIVITY)
-//                       → Loop
-//                   - If valid row found: break and proceed
+//                 All three failure modes trigger the SAME recovery path:
+//                   Failure 1 — 0 rows in My Clients
+//                   Failure 2 — Row found but "Herd expired"
+//                   Failure 3 — Preliminary Checks tab shows no records
+//
+//                 Recovery path (mirrors TC_03 exactly):
+//                   → logout current session
+//                   → re-query BISS_DATA ("Preliminary checks herds") at offset = iAttempt+1
+//                   → INET-validate the returned herd for this check type
+//                   → if agent changed: login as new agent → navigate to My Clients
+//                   → if same agent: navigate to My Clients
+//                   → update Hooks fields → loop
 //
 //                 pCheckType values: OVERCLAIM | DUAL_CLAIM | AGRI_ACTIVITY
-// Parameters    : pCheckType — string key identifying which preliminary check type to open
+// Parameters    : pCheckType — identifies which preliminary check type to open
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date          : 20-04-2026
 // ***************************************************************************************************************************************************************************************
@@ -92,7 +129,6 @@ public void theAgentOpensAFarmerDashboardForPreliminaryCheckHerd(String pCheckTy
 
     for (int iAttempt = 0; iAttempt < MAX_HERD_RETRIES; iAttempt++)
     {
-        // ── Resolve current herd + username from the correct Hooks fields ──────────────────
         String iCurrentHerd     = getPrelimHerd(pCheckType);
         String iCurrentUsername = getPrelimUsername(pCheckType);
 
@@ -105,130 +141,84 @@ public void theAgentOpensAFarmerDashboardForPreliminaryCheckHerd(String pCheckTy
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
         iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
-
         try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
 
         List<WebElement> iRows = getDriver().findElements(iClientRowsBy);
 
-        // ── Check rows — same pattern as TC_03 ───────────────────────────────────────────
-        if (!iRows.isEmpty())
+        // ════════════════════════════════════════════════════════════════
+        // FAILURE 1 — 0 rows returned
+        // ════════════════════════════════════════════════════════════════
+        if (iRows.isEmpty())
         {
-            // Row(s) returned — check if the herd is marked expired
-            // Scoped to client-list-element-row so we only check data rows (not header)
-            boolean iHerdExpired = !getDriver()
-                    .findElements(By.xpath(
-                            "//tbody[contains(@class,'mdc-data-table__content')]"
-                          + "//tr[contains(@class,'client-list-element-row')]"
-                          + "//td[contains(@class,'cdk-column-expired')]"
-                          + "//span[normalize-space()='Herd expired']"))
-                    .isEmpty();
+            log.warning("[PRELIM-RETRY] FAILURE 1 | herd=" + iCurrentHerd
+                    + " returned 0 rows in My Clients.");
+            boolean iRecovered = recoverWithNewHerd(pCheckType, iAttempt, YEAR);
+            if (!iRecovered) break;
+            continue;
+        }
 
-            if (iHerdExpired)
+        // ════════════════════════════════════════════════════════════════
+        // FAILURE 2 — Row found but "Herd expired"
+        // ════════════════════════════════════════════════════════════════
+        boolean iHerdExpired = !getDriver()
+                .findElements(By.xpath(EXPIRED_SPAN_XPATH))
+                .isEmpty();
+
+        if (iHerdExpired)
+        {
+            log.warning("[PRELIM-RETRY] FAILURE 2 | herd=" + iCurrentHerd
+                    + " is marked 'Herd expired'.");
+            boolean iRecovered = recoverWithNewHerd(pCheckType, iAttempt, YEAR);
+            if (!iRecovered) break;
+            continue;
+        }
+
+        // ── Row found and not expired — click through to the farmer dashboard ────────────
+        log.info("[PRELIM-RETRY] Row valid — clicking through to farmer dashboard.");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iFirstClientName"), null);
+        try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+
+        // ── Navigate to Preliminary Checks tab ───────────────────────────────────────────
+        iAction("CLICK", "XPATH", PRELIM_TAB_XPATH, null);
+        try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+
+        // ════════════════════════════════════════════════════════════════
+        // FAILURE 3 — Preliminary Checks tab shows no records
+        // ════════════════════════════════════════════════════════════════
+        List<WebElement> iPrelimRows = getDriver()
+                .findElements(By.xpath(PRELIM_TABLE_ROW_XPATH));
+
+        boolean iPrelimTabEmpty = iPrelimRows.isEmpty()
+                || !getDriver().findElements(By.xpath(PRELIM_NO_RECORDS_XPATH)).isEmpty();
+
+        if (iPrelimTabEmpty)
+        {
+            log.warning("[PRELIM-RETRY] FAILURE 3 | herd=" + iCurrentHerd
+                    + " Preliminary Checks tab has no records.");
+
+            // Navigate back to My Clients before recovery
+            // (we are inside a farmer dashboard so breadcrumb is available)
+            try
             {
-                // Herd exists in UI but expired — treat same as 0 rows, fall through to DB re-query
-                log.warning("[PRELIM-RETRY] Herd " + iCurrentHerd
-                        + " found in UI but marked 'Herd expired' — treating as unusable."
-                        + " Re-querying DB.");
+                iAction("CLICK", "XPATH", MY_CLIENTS_BACK_XPATH, null);
+                try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
             }
-            else
+            catch (Exception e)
             {
-                // Valid row found — proceed
-                log.info("[PRELIM-RETRY] Herd " + iCurrentHerd + " returned " + iRows.size()
-                        + " valid row(s). Proceeding.");
-                iFound = true;
-                break;
+                log.warning("[PRELIM-RETRY] Breadcrumb not found — using left menu.");
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
             }
+
+            boolean iRecovered = recoverWithNewHerd(pCheckType, iAttempt, YEAR);
+            if (!iRecovered) break;
+            continue;
         }
 
-        // ── 0 rows OR expired — re-query BISS_DATA for this check type at next offset ────
-        log.warning("[PRELIM-RETRY] Herd " + iCurrentHerd
-                + " unusable — re-querying BISS_DATA at offset=" + (iAttempt + 1));
-
-        // Use offset = iAttempt+1 so each retry gets a different herd per check type
-        // The "Preliminary checks herds" query uses ROW_NUMBER() OVER (PARTITION BY LVC_DESC)
-        // so offset N gives us the Nth herd for Overclaim / Dual claim / Agricultural Activity
-        database.DBRouter.runDB("DATA", "Preliminary checks herds",
-                YEAR, String.valueOf(iAttempt + 1));
-
-        List<Map<String, Object>> iDbRows = database.DBRouter.getRows();
-
-        if (iDbRows == null || iDbRows.isEmpty())
-        {
-            log.warning("[PRELIM-RETRY] BISS_DATA returned no rows at offset="
-                    + (iAttempt + 1) + " — stopping retry.");
-            break;
-        }
-
-        // ── Find the row for this specific check type and INET-validate it ──────────────
-        String iNextHerd     = null;
-        String iNextUsername = null;
-
-        // Map the ALLCAPS hook key to the LVC_DESC value in vwbs_land_validation
-        String iLvcDescTarget = getLvcDescForCheckType(pCheckType);
-
-        for (Map<String, Object> iRow : iDbRows)
-        {
-            String iLvc  = Objects.toString(iRow.get("LVC_DESC"),    "").trim();
-            String iHerd = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
-
-            // Only process the row matching our check type
-            if (!iLvc.equalsIgnoreCase(iLvcDescTarget) || iHerd.isEmpty()) continue;
-
-            // Validate against BISS_INET — must have an agent login
-            database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
-            String iUsername = database.DBRouter.getValue("USERNAME");
-
-            if (iUsername != null && !iUsername.isBlank())
-            {
-                iNextHerd     = iHerd;
-                iNextUsername = iUsername.trim();
-                log.info("[PRELIM-RETRY] INET-validated replacement: herd=" + iNextHerd
-                        + " | username=" + iNextUsername);
-                break;
-            }
-            else
-            {
-                log.info("[PRELIM-RETRY] No INET agent for " + iLvcDescTarget
-                        + " herd=" + iHerd + " — skipping.");
-            }
-        }
-
-        if (iNextHerd == null)
-        {
-            log.warning("[PRELIM-RETRY] No INET-validated replacement found for "
-                    + pCheckType + " at offset=" + (iAttempt + 1) + " — stopping retry.");
-            break;
-        }
-
-        // ── Agent change check — mirrors TC_03 exactly ───────────────────────────────────
-        // My Clients is agent-scoped. If the agent changed we must re-login
-        // so the new herd is visible in the client list.
-        if (!iNextUsername.equalsIgnoreCase(iCurrentUsername))
-        {
-            log.info("[PRELIM-RETRY] Agent change: " + iCurrentUsername
-                    + " → " + iNextUsername + ". Performing logout → login → navigate.");
-
-            performLogout();
-            performLogin(iNextUsername);
-            navigateToMyClients();
-        }
-        else
-        {
-            // Same agent — just clear the search field and retry
-            log.info("[PRELIM-RETRY] Same agent (" + iNextUsername
-                    + ") — no re-login needed. Retrying search.");
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
-        }
-
-        // ── Commit new herd + username to the correct Hooks fields ───────────────────────
-        setPrelimHerd(pCheckType, iNextHerd, iNextUsername);
-
-        // Also keep RUNTIME_USERNAME in sync so downstream steps reference
-        // the currently logged-in agent correctly
-        Hooks.RUNTIME_USERNAME = iNextUsername;
-
-        log.info("[PRELIM-RETRY] Hooks updated | " + pCheckType
-                + " : herd=" + iNextHerd + " | username=" + iNextUsername);
+        // ── All checks passed ─────────────────────────────────────────────────────────────
+        log.info("[PRELIM-RETRY] ✓ Attempt " + (iAttempt + 1) + " succeeded | herd="
+                + iCurrentHerd + " | " + iPrelimRows.size() + " prelim record(s) found.");
+        iFound = true;
+        break;
     }
 
     if (!iFound)
@@ -236,27 +226,28 @@ public void theAgentOpensAFarmerDashboardForPreliminaryCheckHerd(String pCheckTy
         throw new RuntimeException(
             "[PRELIM-RETRY] Could not find a usable herd for '" + pCheckType
             + "' after " + MAX_HERD_RETRIES + " attempts."
-            + " Last herd tried: "  + getPrelimHerd(pCheckType)
-            + " | Last agent: "     + getPrelimUsername(pCheckType)
+            + " Last herd tried: "   + getPrelimHerd(pCheckType)
+            + " | Last agent: "      + getPrelimUsername(pCheckType)
             + ". Verify vwbs_land_validation has LVT_DESC='Preliminary Check'"
-            + " AND LVS_DESC='Pending' AND LVC_DESC='" + getLvcDescForCheckType(pCheckType)
-            + "' with a non-expired herd and a valid BISS_INET agent.");
+            + " AND LVS_DESC='Pending' AND LVC_DESC='"
+            + getLvcDescForCheckType(pCheckType)
+            + "' with a non-expired herd registration and a valid BISS_INET agent.");
     }
 
-    // ── Herd confirmed visible — expand page size ─────────────────────────────────────────
+    // ── Herd confirmed — expand page size for downstream steps ────────────────────────────
     iAction("CLICK",         "XPATH", ObjReader.getLocator("iListItemsPerPage"),   null);
     iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
     iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
     iAction("CLICK",         "XPATH", ObjReader.getLocator("iMatSelectLastOption"),null);
 
-    log.info("[STEP] Farmer dashboard opened | checkType=" + pCheckType
+    log.info("[STEP] Farmer dashboard ready | checkType=" + pCheckType
             + " | herd=" + getPrelimHerd(pCheckType)
             + " | agent=" + getPrelimUsername(pCheckType));
 }
 
 
 // ===================================================================================================================================
-//  PRELIMINARY CHECKS — BUSINESS STEPS (unchanged from original TC_18.java)
+//  PRELIMINARY CHECKS — BUSINESS STEPS
 // ===================================================================================================================================
 
 // ***************************************************************************************************************************************************************************************
@@ -277,9 +268,9 @@ public void thePreliminaryChecksCardShouldBeVisibleOnTheDashboard()
 // ***************************************************************************************************************************************************************************************
 // Step          : And the {string} preliminary check should show {string} on the dashboard
 // Description   : Asserts the named check type row shows the expected status on the dashboard.
-//                 pCheckName — visible label e.g. "Overclaim Checks", "Dual Claim Checks"
+//                 pCheckName — e.g. "Overclaim Checks", "Dual Claim Checks"
 //                 pStatus    — "Response required" or "No response required"
-// Parameters    : pCheckName — check type label as shown on the dashboard
+// Parameters    : pCheckName — check type label as shown on dashboard
 //                 pStatus    — expected status string
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date          : 17-04-2026
@@ -289,11 +280,9 @@ public void thePreliminaryCheckShouldShowOnTheDashboard(String pCheckName, Strin
 {
     log.info("[STEP] And the '" + pCheckName + "' preliminary check should show '"
             + pStatus + "' on the dashboard");
-
     String iLocatorKey = pStatus.toLowerCase().contains("no response")
             ? "iPrelimCheckStatusNotRequired"
             : "iPrelimCheckStatusRequired";
-
     String iXpath = String.format(ObjReader.getLocator(iLocatorKey), pCheckName);
     iAction("VERIFYELEMENT", "XPATH", iXpath, null);
     log.info("Confirmed '" + pCheckName + "' shows: " + pStatus);
@@ -336,7 +325,6 @@ public void thePreliminaryChecksResponsePageShouldBeDisplayed()
 // ***************************************************************************************************************************************************************************************
 // Step          : When the agent clicks Submit on the Preliminary Checks page without selecting any response
 // Description   : Negative test — Submit clicked before any radio selection.
-//                 Angular should keep form ng-invalid and display validation error.
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date          : 17-04-2026
 // ***************************************************************************************************************************************************************************************
@@ -354,7 +342,6 @@ public void theAgentClicksSubmitWithoutSelectingAnyResponse()
 // ***************************************************************************************************************************************************************************************
 // Step          : Then a validation error should be displayed on the Preliminary Checks page
 // Description   : Asserts form stays ng-invalid after premature submit.
-//                 Angular sets ng-invalid on biss-table when required radios have no selection.
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date          : 17-04-2026
 // ***************************************************************************************************************************************************************************************
@@ -362,13 +349,9 @@ public void theAgentClicksSubmitWithoutSelectingAnyResponse()
 public void aValidationErrorShouldBeDisplayedOnThePreliminaryChecksPage()
 {
     log.info("[STEP] Then a validation error should be displayed on the Preliminary Checks page");
-
     boolean iFormInvalid = isVisible(By.xpath(ObjReader.getLocator("iPrelimFormInvalid")), 3);
-
     Assertions.assertTrue(iFormInvalid,
-            "Expected form to remain ng-invalid after submitting without selections. "
-            + "The biss-table element should carry class 'ng-invalid'.");
-
+            "Expected form to remain ng-invalid after submitting without selections.");
     log.info("Validation error confirmed — form is ng-invalid as expected.");
 }
 
@@ -378,7 +361,7 @@ public void aValidationErrorShouldBeDisplayedOnThePreliminaryChecksPage()
 // Description   : Reads DataTable of panel names and responses. For each panel:
 //                   1. Skips if green icon (no response required)
 //                   2. Expands panel if collapsed (aria-expanded = false)
-//                   3. Finds all row-level radios matching the response label in tbody
+//                   3. Finds all row-level radios matching the response label
 //                   4. Clicks each radio — re-queries DOM per click to avoid stale refs
 //                 DataTable format:
 //                   | Panel Name                      | Response    |
@@ -404,24 +387,20 @@ public void theAgentRespondsToAllPreliminaryCheckPanelsRowByRow(DataTable pDataT
 
         log.info("[STEP] Panel: '" + iPanelLabel + "' | Response: '" + iResponseLabel + "'");
 
-        // ── 1. Skip panels with green icon (no response required) ─────────────────────────
+        // ── 1. Skip panels with green icon ───────────────────────────────────────────────
         String iErrorPanelXpath = String.format(
                 ObjReader.getLocator("iPrelimPanelHeaderError"), iPanelLabel);
-
         if (!isVisible(By.xpath(iErrorPanelXpath), 2))
         {
-            log.info("[STEP] Panel '" + iPanelLabel + "' has green icon — skipping.");
+            log.info("[STEP] Panel '" + iPanelLabel + "' — no response required. Skipping.");
             continue;
         }
 
-        // ── 2. Expand panel if collapsed ──────────────────────────────────────────────────
+        // ── 2. Expand panel if collapsed ─────────────────────────────────────────────────
         String iPanelHeaderXpath = String.format(
                 ObjReader.getLocator("iPrelimPanelHeader"), iPanelLabel);
-
         WebElement iPanelHeader = iDriver.findElement(By.xpath(iPanelHeaderXpath));
-        String iAriaExpanded    = iPanelHeader.getAttribute("aria-expanded");
-
-        if (!"true".equalsIgnoreCase(iAriaExpanded))
+        if (!"true".equalsIgnoreCase(iPanelHeader.getAttribute("aria-expanded")))
         {
             iAction("CLICK", "XPATH", iPanelHeaderXpath, null);
             log.info("[STEP] Expanded panel: " + iPanelLabel);
@@ -432,21 +411,19 @@ public void theAgentRespondsToAllPreliminaryCheckPanelsRowByRow(DataTable pDataT
         // ── 3. Find all row-level radios matching the response label ──────────────────────
         String iRowRadioXpath = String.format(
                 ObjReader.getLocator("iPrelimRowRadioByLabel"), iResponseLabel);
-
         List<WebElement> iRadioLabels = iDriver.findElements(By.xpath(iRowRadioXpath));
 
         if (iRadioLabels.isEmpty())
         {
             throw new AssertionError(
                 "Panel '" + iPanelLabel + "': no row-level radio buttons found with label '"
-                + iResponseLabel + "'. Verify label matches DOM text exactly "
-                + "(case-sensitive, including commas and spaces).");
+                + iResponseLabel + "'. Verify label matches DOM text exactly.");
         }
 
         log.info("[STEP] Found " + iRadioLabels.size()
                 + " row(s) to respond to in panel: " + iPanelLabel);
 
-        // ── 4. Click each radio — re-query per iteration to avoid stale refs ────────────
+        // ── 4. Click each radio — re-query per click to avoid stale refs ─────────────────
         for (int i = 0; i < iRadioLabels.size(); i++)
         {
             String iIndexedXpath = "(" + iRowRadioXpath + ")[" + (i + 1) + "]";
@@ -481,7 +458,7 @@ public void theAgentSubmitsThePreliminaryChecksResponse()
 
 // ***************************************************************************************************************************************************************************************
 // Step          : Then the agent confirms the Preliminary Checks submission
-// Description   : Clicks Yes on the confirmation dialog that appears after Submit.
+// Description   : Clicks Yes on the confirmation dialog after Submit.
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date          : 17-04-2026
 // ***************************************************************************************************************************************************************************************
@@ -498,7 +475,7 @@ public void theAgentConfirmsThePreliminaryChecksSubmission()
 
 // ***************************************************************************************************************************************************************************************
 // Step          : And the Preliminary Checks submission should be confirmed successfully
-// Description   : Asserts submission completed — Submit button disappears as page transitions.
+// Description   : Asserts submission completed — Submit button disappears after confirmation.
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date          : 17-04-2026
 // ***************************************************************************************************************************************************************************************
@@ -506,20 +483,116 @@ public void theAgentConfirmsThePreliminaryChecksSubmission()
 public void thePreliminaryChecksSubmissionShouldBeConfirmedSuccessfully()
 {
     log.info("[STEP] And the Preliminary Checks submission should be confirmed successfully");
-
     boolean iSubmitGone = !isVisible(By.xpath(ObjReader.getLocator("iPrelimSubmitBtn")), 5);
-
     Assertions.assertTrue(iSubmitGone,
             "Submit button still visible after confirmation — "
-            + "Preliminary Checks submission may not have completed successfully.");
-
+            + "submission may not have completed successfully.");
     log.info("Preliminary Checks submitted and confirmed successfully.");
     Hooks.captureStep("Preliminary Checks — submission confirmed successfully");
 }
 
 
 // ===================================================================================================================================
-//  PRIVATE — HOOKS FIELD ACCESSORS (type-safe, no string map fragility)
+//  PRIVATE — RECOVERY (logout + DB re-query + INET validate + re-login)
+// ===================================================================================================================================
+
+// ***************************************************************************************************************************************************************************************
+// Function Name : recoverWithNewHerd
+// Description   : Single recovery method called by ALL three failure modes.
+//                 Mirrors TC_03 exactly:
+//                   1. Logout current session
+//                   2. Re-query BISS_DATA at offset = iAttempt+1
+//                   3. INET-validate the herd for this check type
+//                   4. Login as new agent (or same agent if unchanged)
+//                   5. Navigate to My Clients
+//                   6. Update Hooks fields
+// Returns       : true if a valid replacement was found and session is ready, false if exhausted
+// Parameters    : pCheckType — OVERCLAIM | DUAL_CLAIM | AGRI_ACTIVITY
+//                 pAttempt   — current loop iteration (used as DB offset base)
+//                 pYear      — scheme year
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date          : 20-04-2026
+// ***************************************************************************************************************************************************************************************
+private boolean recoverWithNewHerd(String pCheckType, int pAttempt, String pYear)
+{
+    String iCurrentUsername = getPrelimUsername(pCheckType);
+    int    iOffset          = pAttempt + 1;
+
+    log.info("[PRELIM-RECOVER] Starting recovery | checkType=" + pCheckType
+            + " | offset=" + iOffset);
+
+    // ── Step 1: Logout immediately ────────────────────────────────────────────────────────
+    performLogout();
+
+    // ── Step 2: Re-query BISS_DATA for this check type at the next offset ────────────────
+    database.DBRouter.runDB("DATA", "Preliminary checks herds",
+            pYear, String.valueOf(iOffset));
+
+    List<Map<String, Object>> iDbRows = database.DBRouter.getRows();
+
+    if (iDbRows == null || iDbRows.isEmpty())
+    {
+        log.warning("[PRELIM-RECOVER] BISS_DATA returned 0 rows at offset=" + iOffset
+                + " — no more candidates. Stopping recovery.");
+        return false;
+    }
+
+    // ── Step 3: Find and INET-validate the row for this check type ───────────────────────
+    String iLvcDescTarget = getLvcDescForCheckType(pCheckType);
+    String iNextHerd      = null;
+    String iNextUsername  = null;
+
+    for (Map<String, Object> iRow : iDbRows)
+    {
+        String iLvc  = Objects.toString(iRow.get("LVC_DESC"),    "").trim();
+        String iHerd = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
+
+        if (!iLvc.equalsIgnoreCase(iLvcDescTarget) || iHerd.isEmpty()) continue;
+
+        database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
+        String iUsername = database.DBRouter.getValue("USERNAME");
+
+        if (iUsername != null && !iUsername.isBlank())
+        {
+            iNextHerd     = iHerd;
+            iNextUsername = iUsername.trim();
+            log.info("[PRELIM-RECOVER] INET-validated replacement: " + iLvcDescTarget
+                    + " → herd=" + iNextHerd + " | username=" + iNextUsername);
+            break;
+        }
+        else
+        {
+            log.info("[PRELIM-RECOVER] No INET agent for " + iLvcDescTarget
+                    + " herd=" + iHerd + " at offset=" + iOffset + " — skipping.");
+        }
+    }
+
+    if (iNextHerd == null)
+    {
+        log.warning("[PRELIM-RECOVER] No INET-validated herd found for " + pCheckType
+                + " at offset=" + iOffset + " — stopping recovery.");
+        return false;
+    }
+
+    // ── Step 4: Login (as new agent or same agent — always login since we logged out) ─────
+    log.info("[PRELIM-RECOVER] Agent: " + iCurrentUsername + " → " + iNextUsername);
+    performLogin(iNextUsername);
+
+    // ── Step 5: Navigate to My Clients ───────────────────────────────────────────────────
+    navigateToMyClients();
+
+    // ── Step 6: Update Hooks fields ──────────────────────────────────────────────────────
+    setPrelimHerd(pCheckType, iNextHerd, iNextUsername);
+    Hooks.RUNTIME_USERNAME = iNextUsername;
+
+    log.info("[PRELIM-RECOVER] Recovery complete | " + pCheckType
+            + " → herd=" + iNextHerd + " | username=" + iNextUsername);
+    return true;
+}
+
+
+// ===================================================================================================================================
+//  PRIVATE — HOOKS FIELD ACCESSORS
 // ===================================================================================================================================
 
 private String getPrelimHerd(String pCheckType)
@@ -542,7 +615,7 @@ private String getPrelimUsername(String pCheckType)
         case "OVERCLAIM":     return Hooks.OVERCLAIM_USERNAME;
         case "DUAL_CLAIM":    return Hooks.DUAL_CLAIM_USERNAME;
         case "AGRI_ACTIVITY": return Hooks.AGRI_ACTIVITY_USERNAME;
-        default: throw new IllegalArgumentException("Unknown check type: '" + pCheckType + "'");
+        default: throw new IllegalArgumentException("Unknown: " + pCheckType);
     }
 }
 
@@ -562,12 +635,10 @@ private void setPrelimHerd(String pCheckType, String pHerd, String pUsername)
             Hooks.AGRI_ACTIVITY_HERD     = pHerd;
             Hooks.AGRI_ACTIVITY_USERNAME = pUsername;
             break;
-        default:
-            throw new IllegalArgumentException("Unknown check type: '" + pCheckType + "'");
+        default: throw new IllegalArgumentException("Unknown: " + pCheckType);
     }
 }
 
-// Maps ALLCAPS hook key → LVC_DESC value used in vwbs_land_validation
 private String getLvcDescForCheckType(String pCheckType)
 {
     switch (pCheckType.trim().toUpperCase())
@@ -575,23 +646,23 @@ private String getLvcDescForCheckType(String pCheckType)
         case "OVERCLAIM":     return "Overclaim";
         case "DUAL_CLAIM":    return "Dual claim";
         case "AGRI_ACTIVITY": return "Agricultural Activity";
-        default: throw new IllegalArgumentException("Unknown check type: '" + pCheckType + "'");
+        default: throw new IllegalArgumentException("Unknown: " + pCheckType);
     }
 }
 
 
 // ===================================================================================================================================
-//  PRIVATE — NAVIGATION HELPERS (mirrors TC_03 performLogout/performLogin/navigateToMyClients)
+//  PRIVATE — NAVIGATION (mirrors TC_03 exactly)
 // ===================================================================================================================================
 
 private void performLogout()
 {
-    log.info("[RELOGIN] Logging out current session...");
+    log.info("[RELOGIN] Logging out...");
     try
     {
         iAction("CLICK",       "XPATH", ObjReader.getLocator("iLogoutbtn"),       null);
         iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
-        log.info("[RELOGIN] Logout confirmed — landing page visible.");
+        log.info("[RELOGIN] Logout confirmed.");
     }
     catch (Exception e)
     {
@@ -604,7 +675,6 @@ private void performLogout()
 private void performLogin(String pUsername)
 {
     log.info("[RELOGIN] Logging in as: " + pUsername);
-
     iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
     iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
     iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
@@ -648,7 +718,6 @@ private void performLogin(String pUsername)
         iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
         log.info("[RELOGIN] Terms & Conditions accepted.");
     }
-
     log.info("[RELOGIN] Login complete for: " + pUsername);
 }
 
