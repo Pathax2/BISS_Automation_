@@ -1,149 +1,50 @@
-    public void theAgentOpensAFarmerDashboardUsingHerdDataFromRow()
+for (int iAttempt = 0; iAttempt < MAX_HERD_RETRIES; iAttempt++)
+{
+    String iCurrentHerd = Hooks.RUNTIME_HERD;
+    log.info("[HERD-RETRY] Attempt " + (iAttempt + 1) + "/" + MAX_HERD_RETRIES
+            + " — searching herd: " + iCurrentHerd
+            + " | logged in as: " + Hooks.RUNTIME_USERNAME);
+
+    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
+    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
+    iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
+    try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+
+    java.util.List<org.openqa.selenium.WebElement> iRows =
+            getDriver().findElements(iClientRowsBy);
+
+    if (!iRows.isEmpty())
     {
-        log.info("[STEP] When the agent opens a farmer dashboard using herd data");
+        // ── Layer 3a: row exists — check for Herd expired flag ──────────────
+        boolean iHerdExpired = !getDriver()
+                .findElements(By.xpath(
+                    "//tbody[contains(@class,'mdc-data-table__content')]"
+                  + "//tr[contains(@class,'client-list-element-row')]"
+                  + "//td[contains(@class,'cdk-column-expired')]"
+                  + "//span[normalize-space()='Herd expired']"))
+                .isEmpty();
 
-        final int    MAX_HERD_RETRIES = 5;
-        final String YEAR             = System.getProperty("herd.year",  "2026").trim();
-        final String BASE_LIMIT       = System.getProperty("herd.limit", "25").trim();
-        final By     iClientRowsBy    = By.xpath(ObjReader.getLocator("clientTableRows"));
-
-        boolean iFound = false;
-
-        for (int iAttempt = 0; iAttempt < MAX_HERD_RETRIES; iAttempt++)
+        if (iHerdExpired)
         {
-            String iCurrentHerd = Hooks.RUNTIME_HERD;
-            log.info("[HERD-RETRY] Attempt " + (iAttempt + 1) + "/" + MAX_HERD_RETRIES + " — searching herd: " + iCurrentHerd + " | logged in as: " + Hooks.RUNTIME_USERNAME);
-
-            // ── Search for the herd on My Clients ──────────────────────────────
-            iAction("TEXTBOX",   "XPATH", ObjReader.getLocator("herdSearchInput"), "");
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
-
-            // Allow the table to respond before counting rows
-            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
-
-            java.util.List<org.openqa.selenium.WebElement> iRows = getDriver().findElements(iClientRowsBy);
-
-            if (!iRows.isEmpty())
-            {
-                // Herd is visible — layer 3 passed
-                log.info("[HERD-RETRY] Herd " + iCurrentHerd + " returned " + iRows.size() + " row(s). Proceeding.");
-                iFound = true;
-                break;
-            }
-
-            // ── Layer 3 failed — 0 rows returned ──────────────────────────────
             log.warning("[HERD-RETRY] Herd " + iCurrentHerd
-                    + " returned 0 rows in My Clients UI — fetching replacement from DB.");
-
-            // Re-query BISS_DATA with a larger window so we surface different herds
-            int iNewLimit = Integer.parseInt(BASE_LIMIT) + ((iAttempt + 1) * 10);
-            database.DBRouter.runDB("DATA", "List of herds with no errors at all", YEAR, String.valueOf(iNewLimit));
-
-            java.util.List<java.util.Map<String, Object>> iDbRows = database.DBRouter.getRows();
-            if (iDbRows == null || iDbRows.isEmpty())
-            {
-                log.warning("[HERD-RETRY] BISS_DATA returned no rows at limit=" + iNewLimit + " — cannot recover. Stopping retry.");
-                break;
-            }
-
-            // Shuffle so we don't always evaluate in the same order
-            java.util.List<String> iCandidates = new java.util.ArrayList<>();
-            for (java.util.Map<String, Object> r : iDbRows)
-            {
-                String h = java.util.Objects.toString(r.get("APP_HERD_NO"), "").trim();
-                if (!h.isEmpty() && !h.equals(iCurrentHerd))
-                {
-                    iCandidates.add(h);
-                }
-            }
-            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
-
-            if (iCandidates.isEmpty())
-            {
-                log.warning("[HERD-RETRY] No fresh candidates from DB — stopping retry.");
-                break;
-            }
-
-            // Validate each candidate against BISS_INET before committing
-            String iNextHerd     = null;
-            String iNextUsername = null;
-
-            for (String iCandidate : iCandidates)
-            {
-                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
-                String iUsername = database.DBRouter.getValue("USERNAME");
-
-                if (iUsername != null && !iUsername.isBlank())
-                {
-                    iNextHerd     = iCandidate;
-                    iNextUsername = iUsername.trim();
-                    log.info("[HERD-RETRY] INET-validated replacement: herd=" + iNextHerd
-                            + " | username=" + iNextUsername);
-                    break;
-                }
-                else
-                {
-                    log.info("[HERD-RETRY] No INET agent for candidate " + iCandidate + " — skipping.");
-                }
-            }
-
-            if (iNextHerd == null)
-            {
-                log.warning("[HERD-RETRY] No INET-validated replacement found — stopping retry.");
-                break;
-            }
-
-            // ── Agent has changed — must re-login as the new agent ─────────────
-            // The My Clients list is agent-scoped: agent A cannot see agent B's herds.
-            // We must log out of the current session and log back in as the new agent
-            // before searching, otherwise the herd will still return 0 rows.
-            if (!iNextUsername.equalsIgnoreCase(Hooks.RUNTIME_USERNAME))
-            {
-                log.info("[HERD-RETRY] Agent change required: " + Hooks.RUNTIME_USERNAME + " → " + iNextUsername + ". Performing logout/login cycle.");
-
-                performLogout();
-                performLogin(iNextUsername);
-                navigateToMyClients();
-            }
-            else
-            {
-                // Same agent, different herd — just clear the search and retry
-                log.info("[HERD-RETRY] Same agent (" + iNextUsername + ") — no re-login needed. Retrying search.");
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
-            }
-
-            // Commit the new pair to the shared Hooks fields
-            Hooks.RUNTIME_HERD     = iNextHerd;
-            Hooks.RUNTIME_USERNAME = iNextUsername;
-
-            log.info("[HERD-RETRY] Hooks updated — RUNTIME_HERD=" + Hooks.RUNTIME_HERD + " | RUNTIME_USERNAME=" + Hooks.RUNTIME_USERNAME);
+                    + " found in UI but marked 'Herd expired' — treating as unusable."
+                    + " Fetching replacement from DB.");
+            // Fall through — same re-query path as 0 rows
         }
-
-        if (!iFound)
+        else
         {
-            throw new RuntimeException(
-                    "[HERD-RETRY] Could not find a herd with visible UI records after "
-                            + MAX_HERD_RETRIES + " attempts. Last herd: " + Hooks.RUNTIME_HERD
-                            + ". Ensure the herd has an active BISS application visible in My Clients "
-                            + "for agent " + Hooks.RUNTIME_USERNAME + " on " + Hooks.iEnvironment + ".");
+            // Row present and herd is active — fully valid
+            log.info("[HERD-RETRY] Herd " + iCurrentHerd + " returned " + iRows.size()
+                    + " valid row(s). Proceeding.");
+            iFound = true;
+            break;
         }
+    }
 
-        // ── Herd confirmed visible — set page size to maximum ─────────────────
-        iAction("CLICK",        "XPATH", ObjReader.getLocator("iListItemsPerPage"),   null);
-        iAction("WAITVISIBLE",  "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
-        iAction("WAITCLICKABLE","XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
-        iAction("CLICK",        "XPATH", ObjReader.getLocator("iMatSelectLastOption"),null);
+    // ── 0 rows OR expired herd — fetch replacement from DB ──────────────────
+    log.warning("[HERD-RETRY] Herd " + iCurrentHerd
+            + " returned 0 rows or is expired — fetching replacement.");
 
-        log.info("[STEP] Farmer dashboard opened | herd=" + Hooks.RUNTIME_HERD
-                + " | agent=" + Hooks.RUNTIME_USERNAME);
-
-i want to add one more level of check where if the row is  if (!iRows.isEmpty()) or the row returned has    Herd expired	under Herd Expired Column then also we need to 
-
-Below is the dom stucture
-
-
-<tbody role="rowgroup" class="mdc-data-table__content ng-star-inserted"><tr _ngcontent-ng-c2611081476="" role="row" mat-row="" class="mat-mdc-row mdc-data-table__row cdk-row client-list-element-row ng-tns-c2611081476-2 ng-star-inserted" style=""><td _ngcontent-ng-c2611081476="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell cdk-column-displayName mat-column-displayName ng-tns-c2611081476-2 ng-star-inserted" role="cell"><a _ngcontent-ng-c2611081476="" href="javascript:void(0)" class="ng-tns-c2611081476-2">Michael Boyle</a></td><td _ngcontent-ng-c2611081476="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell code-number-cell cdk-column-herdNumber mat-column-herdNumber ng-tns-c2611081476-2 ng-star-inserted" role="cell">J1050232</td><td _ngcontent-ng-c2611081476="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell icon-number-cell cdk-column-activeFarmer mat-column-activeFarmer ng-tns-c2611081476-2 ng-star-inserted" role="cell"><mat-icon _ngcontent-ng-c2611081476="" role="img" class="mat-icon notranslate ng-tns-c2611081476-2 warning mat-icon-no-color" aria-hidden="true" title="Inactive" aria-label="Inactive" data-mat-icon-type="svg" data-mat-icon-name="inactive-farmer-red-icon"><svg width="100%" height="100%" viewBox="0 0 90 90" fill="none" xmlns="http://www.w3.org/2000/svg" fit="" preserveAspectRatio="xMidYMid meet" focusable="false">
-<path d="M42.3376 17.9993C48.0749 17.9993 52.8003 21.712 54.8254 26.4368C59.8873 27.4492 63.2624 28.7998 63.2629 30.4871C63.2629 31.8371 60.8988 32.851 57.8613 33.8635L42.0007 17.9993H42.3376Z" fill="#DB0000"></path>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M45 0C69.8528 0 90 20.1472 90 45C90 69.8528 69.8528 90 45 90C20.1472 90 0 69.8528 0 45C0 20.1472 20.1472 0 45 0ZM19.7791 12.3669C10.0312 19.9117 3.75 31.7195 3.75 45C3.75 67.7817 22.2183 86.25 45 86.25C57.8618 86.25 69.343 80.3587 76.908 71.1328L67.9871 62.2119C68.6621 63.2244 69.0015 64.2384 69.0015 65.5884V72.3376H15V65.5884C15 56.4759 32.8882 52.0862 42.0007 52.0862C48.0755 52.0863 57.8619 54.1122 63.9368 58.1616L49.0869 43.3118C47.0621 44.6616 44.7004 45.3368 42.0007 45.3369C35.5883 45.3369 30.1892 40.6123 28.8391 34.5374C23.7766 33.5249 20.7385 32.1746 20.7385 30.4871C20.7392 28.7997 24.4504 27.1117 29.8499 26.4368C30.1873 25.7619 30.5268 25.0864 30.8643 24.4116L19.7791 12.3669ZM45 3.75C37.3274 3.75 30.1475 5.85067 23.9941 9.49951L24.375 9.375L34.9109 20.0244C34.9109 20.0244 38.2875 23.401 40.3125 25.426L50.1013 35.2112C51.1065 36.2164 53.4406 38.5541 53.4741 38.5876L80.5261 65.9546C84.157 59.8121 86.25 52.6522 86.25 45C86.25 22.2183 67.7817 3.75 45 3.75Z" fill="#DB0000"></path>
-</svg></mat-icon></td><td _ngcontent-ng-c2611081476="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell icon-number-cell cdk-column-expired mat-column-expired ng-tns-c2611081476-2 ng-star-inserted" role="cell"><mat-icon _ngcontent-ng-c2611081476="" role="img" aria-hidden="false" aria-label="Herd expired" title="Herd expired" class="mat-icon notranslate red material-icon-outline ng-tns-c2611081476-2 material-icons mat-ligature-font mat-icon-no-color ng-star-inserted" data-mat-icon-type="font">do_not_disturb_on</mat-icon><!----> &nbsp; <span _ngcontent-ng-c2611081476="" class="ng-tns-c2611081476-2 ng-star-inserted">Herd expired</span><!----></td><td _ngcontent-ng-c2611081476="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell icon-number-cell cdk-column-sfn mat-column-sfn ng-tns-c2611081476-2 ng-star-inserted" role="cell"><!----><!----><mat-icon _ngcontent-ng-c2611081476="" role="img" aria-hidden="false" aria-label="No data available" title="No data available" class="mat-icon notranslate grey-color material-icon-outline ng-tns-c2611081476-2 material-icons mat-ligature-font mat-icon-no-color ng-star-inserted" data-mat-icon-type="font"> do_not_disturb_on</mat-icon><!----></td><td _ngcontent-ng-c2611081476="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell icon-number-cell cdk-column-status mat-column-status ng-tns-c2611081476-2 ng-star-inserted" role="cell"><div _ngcontent-ng-c2611081476="" class="row flex-center ng-tns-c2611081476-2"><lib-biss-chips _ngcontent-ng-c2611081476="" _nghost-ng-c452974531="" class="ng-tns-c2611081476-2 ng-star-inserted"><mat-chip _ngcontent-ng-c452974531="" class="mat-mdc-chip mat-primary mdc-evolution-chip mat-mdc-standard-chip" mat-ripple-loader-uninitialized="" mat-ripple-loader-class-name="mat-mdc-chip-ripple" id="mat-mdc-chip-13" style="background-color: rgb(240, 240, 240); height: 24px;"><span class="mat-mdc-chip-focus-overlay"></span><span class="mdc-evolution-chip__cell mdc-evolution-chip__cell--primary"><span matchipaction="" class="mdc-evolution-chip__action mat-mdc-chip-action mdc-evolution-chip__action--primary mdc-evolution-chip__action--presentational" aria-disabled="false"><!----><span class="mdc-evolution-chip__text-label mat-mdc-chip-action-label"><div _ngcontent-ng-c452974531="" class="chip-style" style="color: rgb(56, 63, 67);">Not Started</div><span class="mat-mdc-chip-primary-focus-indicator mat-mdc-focus-indicator"></span></span></span></span><!----></mat-chip></lib-biss-chips><!----><!----><!----></div></td><td _ngcontent-ng-c2611081476="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell cdk-column-expand mat-column-expand ng-tns-c2611081476-2 ng-star-inserted" role="cell"><button _ngcontent-ng-c2611081476="" mat-icon-button="" aria-label="expand row" class="ng-tns-c2611081476-2 mdc-icon-button mat-mdc-icon-button mat-unthemed mat-mdc-button-base" mat-ripple-loader-uninitialized="" mat-ripple-loader-class-name="mat-mdc-button-ripple" mat-ripple-loader-centered=""><span class="mat-mdc-button-persistent-ripple mdc-icon-button__ripple"></span><mat-icon _ngcontent-ng-c2611081476="" role="img" class="mat-icon notranslate arrow-button ng-tns-c2611081476-2 material-icons mat-ligature-font mat-icon-no-color ng-star-inserted" aria-hidden="true" data-mat-icon-type="font">keyboard_arrow_down</mat-icon><!----><!----><span class="mat-mdc-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span></button></td><!----></tr><tr _ngcontent-ng-c2611081476="" role="row" mat-row="" class="mat-mdc-row mdc-data-table__row cdk-row client-list-detail-row client-list-detail-row-detail ng-tns-c2611081476-2 ng-star-inserted" style=""><td _ngcontent-ng-c2611081476="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell cdk-column-expandedDetail mat-column-expandedDetail ng-tns-c2611081476-2 ng-star-inserted" role="cell" colspan="7"><div _ngcontent-ng-c2611081476="" class="client-list-element-detail ng-tns-c2611081476-2 ng-trigger ng-trigger-detailExpand ng-star-inserted" style="height: 0px; min-height: 0px;"><div _ngcontent-ng-c2611081476="" class="client-list-element-detail-content ng-tns-c2611081476-2"><div _ngcontent-ng-c2611081476="" class="additional-information-section ng-tns-c2611081476-2"><h1 _ngcontent-ng-c2611081476="" class="bold-font-weight ng-tns-c2611081476-2">Payment Details</h1><mat-divider _ngcontent-ng-c2611081476="" role="separator" class="mat-divider bold-font-weight ng-tns-c2611081476-2 mat-divider-horizontal" aria-orientation="horizontal"></mat-divider><div _ngcontent-ng-c2611081476="" class="address-style client-list-element-detail-content ng-tns-c2611081476-2"><span _ngcontent-ng-c2611081476="" class="bold-font-weight ng-tns-c2611081476-2">Primary Herd Address: </span><div _ngcontent-ng-c2611081476="" class="ng-tns-c2611081476-2 ng-star-inserted" style=""> Screggan Hill, </div><!----><div _ngcontent-ng-c2611081476="" class="ng-tns-c2611081476-2 ng-star-inserted" style=""> Lissycasey, </div><!----><div _ngcontent-ng-c2611081476="" class="ng-tns-c2611081476-2 ng-star-inserted" style=""> Kilworth, </div><!----><div _ngcontent-ng-c2611081476="" class="ng-tns-c2611081476-2 ng-star-inserted" style=""> Co Cork, </div><!----><div _ngcontent-ng-c2611081476="" class="ng-tns-c2611081476-2 ng-star-inserted" style=""> Ireland, </div><!----><div _ngcontent-ng-c2611081476="" class="ng-tns-c2611081476-2 ng-star-inserted" style=""> N11 37DP </div><!----></div><table _ngcontent-ng-c2611081476="" mat-table="" aria-label="Table that displays payment details of agents clients" class="mat-mdc-table mdc-data-table__table cdk-table ng-tns-c2611081476-2" role="table"><!----><thead role="rowgroup" class="ng-star-inserted" style=""><tr _ngcontent-ng-c2611081476="" role="row" mat-header-row="" class="mat-mdc-header-row mdc-data-table__header-row cdk-header-row ng-tns-c2611081476-2 ng-star-inserted"><th _ngcontent-ng-c2611081476="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell cdk-column-schemeApplied mat-column-schemeApplied ng-tns-c2611081476-2 ng-star-inserted"> Schemes applied </th><th _ngcontent-ng-c2611081476="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell cdk-column-paymentStatus mat-column-paymentStatus ng-tns-c2611081476-2 ng-star-inserted"> Payment status </th><th _ngcontent-ng-c2611081476="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell cdk-column-paymentDate mat-column-paymentDate ng-tns-c2611081476-2 ng-star-inserted"> Payment approval date </th><!----></tr><!----></thead><tbody role="rowgroup" class="mdc-data-table__content ng-star-inserted" style=""><!----><!----></tbody><tfoot role="rowgroup" class="ng-star-inserted mat-mdc-table-sticky" style="display: none; bottom: 0px; z-index: 10;"><!----></tfoot><!----><!----></table></div><div _ngcontent-ng-c2611081476="" class="view-client-button ng-tns-c2611081476-2"><button _ngcontent-ng-c2611081476="" mat-flat-button="" color="primary" class="ng-tns-c2611081476-2 mdc-button mdc-button--unelevated mat-mdc-unelevated-button mat-primary mat-mdc-button-base" mat-ripple-loader-uninitialized="" mat-ripple-loader-class-name="mat-mdc-button-ripple"><span class="mat-mdc-button-persistent-ripple mdc-button__ripple"></span><span class="mdc-button__label"> View payments </span><span class="mat-mdc-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span></button><button _ngcontent-ng-c2611081476="" mat-flat-button="" color="default" class="ng-tns-c2611081476-2 mdc-button mdc-button--unelevated mat-mdc-unelevated-button mat-default mat-mdc-button-base" mat-ripple-loader-uninitialized="" mat-ripple-loader-class-name="mat-mdc-button-ripple"><span class="mat-mdc-button-persistent-ripple mdc-button__ripple"></span><span class="mdc-button__label"> View dashboard </span><span class="mat-mdc-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span></button></div></div></div><!----></td><!----></tr><!----><!----></tbody>
+    int iNewLimit = Integer.parseInt(BASE_LIMIT) + ((iAttempt + 1) * 10);
+    // ... rest of existing DB re-query + INET + re-login logic unchanged ...
+}
