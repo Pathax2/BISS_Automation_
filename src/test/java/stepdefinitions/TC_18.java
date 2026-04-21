@@ -5,9 +5,9 @@
 //                 and TC_20 (No Agricultural Activity) Preliminary Checks automation.
 //
 //                 Herd numbers and agent usernames are resolved at runtime from:
-//                   BISS_DATA — vwbs_land_validation (LVS_DESC = ‘Pending’)
+//                   BISS_DATA — vwbs_land_validation (LVS_DESC = 'Pending')
 //                   BISS_INET — tdcr_user_info / tdco_customer_asscs
-//                 via the @Before(”@preliminary”) hook in Hooks.java.
+//                 via the @Before("@preliminary") hook in Hooks.java.
 //
 //                 Retry flow for theAgentOpensAFarmerDashboardForPreliminaryCheckHerd:
 //
@@ -16,7 +16,7 @@
 //                     2. If 0 rows returned:
 //                          → logout → DB re-query at next offset → INET validate
 //                          → re-login if agent changed → update Hooks → retry
-//                     3. If row found but marked “Herd expired”:
+//                     3. If row found but marked "Herd expired":
 //                          → logout → DB re-query at next offset → INET validate
 //                          → re-login if agent changed → update Hooks → retry
 //                     4. Row found and not expired → click through to farmer dashboard
@@ -242,7 +242,7 @@ public class TC_18
     }
 
 
-// ***************************************************************************************************************************************************************************************
+    // ***************************************************************************************************************************************************************************************
 // Step          : And the {string} preliminary check should show {string} on the dashboard
 // Description   : Asserts the named check type row shows the expected status on the dashboard.
 //                 pCheckName — e.g. "Overclaim Checks", "Dual Claim Checks"
@@ -263,7 +263,7 @@ public class TC_18
     }
 
 
-// ***************************************************************************************************************************************************************************************
+    // ***************************************************************************************************************************************************************************************
 // Step          : When the agent clicks View Preliminary Checks
 // Description   : Clicks the "View preliminary checks" button on the dashboard card.
 // Author        : Aniket Pathare | aniket.pathare@government.ie
@@ -280,7 +280,7 @@ public class TC_18
     }
 
 
-// ***************************************************************************************************************************************************************************************
+    // ***************************************************************************************************************************************************************************************
 // Step          : Then the Preliminary Checks response page should be displayed
 // Description   : Confirms the prelims-accordion inside biss-response-page is visible.
 // Author        : Aniket Pathare | aniket.pathare@government.ie
@@ -295,7 +295,7 @@ public class TC_18
     }
 
 
-// ***************************************************************************************************************************************************************************************
+    // ***************************************************************************************************************************************************************************************
 // Step          : When the agent clicks Submit on the Preliminary Checks page without selecting any response
 // Description   : Negative test — Submit clicked before any radio selection.
 // Author        : Aniket Pathare | aniket.pathare@government.ie
@@ -312,7 +312,7 @@ public class TC_18
     }
 
 
-// ***************************************************************************************************************************************************************************************
+    // ***************************************************************************************************************************************************************************************
 // Step          : Then a validation error should be displayed on the Preliminary Checks page
 // Description   : Asserts form stays ng-invalid after premature submit.
 // Author        : Aniket Pathare | aniket.pathare@government.ie
@@ -328,7 +328,7 @@ public class TC_18
     }
 
 
- // ***************************************************************************************************************************************************************************************
+    // ***************************************************************************************************************************************************************************************
 // Step          : When the agent responds to all preliminary check panels row by row
 // Description   : Reads DataTable of panel names and responses. For each panel:
 //                   1. Skips if green icon (no response required)
@@ -461,90 +461,126 @@ public class TC_18
 // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-// Function Name : recoverWithNewHerd
-// Description   : Single recovery method called by ALL three failure modes.
-//                 Mirrors TC_03 exactly:
-//                   1. Logout current session
-//                   2. Re-query BISS_DATA at offset = iAttempt+1
-//                   3. INET-validate the herd for this check type
-//                   4. Login as new agent (or same agent if unchanged)
-//                   5. Navigate to My Clients
-//                   6. Update Hooks fields
-// Returns       : true if a valid replacement was found and session is ready, false if exhausted
-// Parameters    : pCheckType — OVERCLAIM | DUAL_CLAIM | AGRI_ACTIVITY
-//                 pAttempt   — current loop iteration (used as DB offset base)
-//                 pYear      — scheme year
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date          : 20-04-2026
-// ***************************************************************************************************************************************************************************************
+    // Function Name : recoverWithNewHerd
+    // Description   : Single recovery method called by ALL three failure modes.
+    //                 Steps:
+    //                   1. Logout current session
+    //                   2. Try consecutive DB offsets (startOffset to startOffset+MAX_OFFSET_TRIES)
+    //                      until an INET-validated herd is found for this check type.
+    //                      Prints full DB result table to console on every query.
+    //                   3. Login as resolved agent (always — session was terminated in step 1)
+    //                   4. Navigate to My Clients
+    //                   5. Update Hooks fields
+    //
+    // PATCH (20-04-2026): Previously tried only a single offset then returned false.
+    //                     Now retries up to MAX_OFFSET_TRIES consecutive offsets so that
+    //                     herds with no INET agent are skipped automatically instead of
+    //                     causing the entire recovery to abort.
+    //
+    // Returns       : true if a valid replacement was found and session is ready, false if exhausted
+    // Parameters    : pCheckType — OVERCLAIM | DUAL_CLAIM | AGRI_ACTIVITY
+    //                 pAttempt   — current outer loop iteration (offset starts at pAttempt+1)
+    //                 pYear      — scheme year
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date          : 20-04-2026
+    // ***************************************************************************************************************************************************************************************
     private boolean recoverWithNewHerd(String pCheckType, int pAttempt, String pYear)
     {
         String iCurrentUsername = getPrelimUsername(pCheckType);
-        int    iOffset          = pAttempt + 1;
+        int    iStartOffset     = pAttempt + 1;
 
-        log.info("[PRELIM-RECOVER] Starting recovery | checkType=" + pCheckType + " | offset=" + iOffset);
+        // How many consecutive offsets to probe before giving up in a single recovery call.
+        // Covers the case where several consecutive herds have no INET agent.
+        final int MAX_OFFSET_TRIES = 10;
+
+        log.info("[PRELIM-RECOVER] Starting recovery | checkType=" + pCheckType
+                + " | startOffset=" + iStartOffset);
 
         // ── Step 1: Logout immediately ────────────────────────────────────────────────────────
         performLogout();
 
-        // ── Step 2: Re-query BISS_DATA for this check type at the next offset ────────────────
-        database.DBRouter.runDB("DATA", "Preliminary checks herds", pYear, String.valueOf(iOffset));
-
-        List<Map<String, Object>> iDbRows = database.DBRouter.getRows();
-
-        if (iDbRows == null || iDbRows.isEmpty())
-        {
-            log.warning("[PRELIM-RECOVER] BISS_DATA returned 0 rows at offset=" + iOffset
-                    + " — no more candidates. Stopping recovery.");
-            return false;
-        }
-
-        // ── Step 3: Find and INET-validate the row for this check type ───────────────────────
+        // ── Step 2: Try consecutive offsets until INET-valid herd found ──────────────────────
         String iLvcDescTarget = getLvcDescForCheckType(pCheckType);
         String iNextHerd      = null;
         String iNextUsername  = null;
 
-        for (Map<String, Object> iRow : iDbRows)
+        for (int iOff = iStartOffset; iOff < iStartOffset + MAX_OFFSET_TRIES; iOff++)
         {
-            String iLvc  = Objects.toString(iRow.get("LVC_DESC"),    "").trim();
-            String iHerd = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
+            log.info("[PRELIM-RECOVER] Querying BISS_DATA | LVC_DESC='" + iLvcDescTarget
+                    + "' | offset=" + iOff);
 
-            if (!iLvc.equalsIgnoreCase(iLvcDescTarget) || iHerd.isEmpty()) continue;
+            database.DBRouter.runDB("DATA", "Preliminary checks herds",
+                    pYear, String.valueOf(iOff));
 
-            database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
-            String iUsername = database.DBRouter.getValue("USERNAME");
+            List<Map<String, Object>> iDbRows = database.DBRouter.getRows();
 
-            if (iUsername != null && !iUsername.isBlank())
+            // Print full result table so you can see exactly what DB returned
+            printDbResultTable("PRELIMINARY CHECKS HERDS offset=" + iOff, iDbRows);
+
+            if (iDbRows == null || iDbRows.isEmpty())
             {
-                iNextHerd     = iHerd;
-                iNextUsername = iUsername.trim();
-                log.info("[PRELIM-RECOVER] INET-validated replacement: " + iLvcDescTarget + " → herd=" + iNextHerd + " | username=" + iNextUsername);
+                log.warning("[PRELIM-RECOVER] BISS_DATA returned 0 rows at offset=" + iOff
+                        + " — no more Pending rows exist for year=" + pYear + ". Stopping.");
                 break;
             }
-            else
+
+            for (Map<String, Object> iRow : iDbRows)
             {
-                log.info("[PRELIM-RECOVER] No INET agent for " + iLvcDescTarget + " herd=" + iHerd + " at offset=" + iOffset + " — skipping.");
+                String iLvc  = Objects.toString(iRow.get("LVC_DESC"),    "").trim();
+                String iHerd = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
+
+                if (!iLvc.equalsIgnoreCase(iLvcDescTarget) || iHerd.isEmpty()) continue;
+
+                log.info("[PRELIM-RECOVER] Checking BISS_INET for " + iLvcDescTarget
+                        + " herd=" + iHerd);
+
+                database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
+                String iUsername = database.DBRouter.getValue("USERNAME");
+
+                log.info("[PRELIM-RECOVER] INET result → herd=" + iHerd
+                        + " | USERNAME=" + (iUsername == null ? "null" : "'" + iUsername + "'"));
+
+                if (iUsername != null && !iUsername.isBlank())
+                {
+                    iNextHerd     = iHerd;
+                    iNextUsername = iUsername.trim();
+                    log.info("[PRELIM-RECOVER] INET-validated replacement: " + iLvcDescTarget
+                            + " → herd=" + iNextHerd + " | username=" + iNextUsername
+                            + " (offset=" + iOff + ")");
+                    break;
+                }
+                else
+                {
+                    log.warning("[PRELIM-RECOVER] No INET agent for " + iLvcDescTarget
+                            + " herd=" + iHerd + " at offset=" + iOff
+                            + " — trying offset=" + (iOff + 1));
+                }
             }
+
+            if (iNextHerd != null) break;  // found a valid herd — stop probing offsets
         }
 
         if (iNextHerd == null)
         {
-            log.warning("[PRELIM-RECOVER] No INET-validated herd found for " + pCheckType + " at offset=" + iOffset + " — stopping recovery.");
+            log.warning("[PRELIM-RECOVER] Exhausted offsets " + iStartOffset + " to "
+                    + (iStartOffset + MAX_OFFSET_TRIES - 1) + " for " + pCheckType
+                    + " — no INET-validated herd found. Stopping recovery.");
             return false;
         }
 
-        // ── Step 4: Login (as new agent or same agent — always login since we logged out) ─────
+        // ── Step 3: Login (always — session was terminated in step 1) ────────────────────────
         log.info("[PRELIM-RECOVER] Agent: " + iCurrentUsername + " → " + iNextUsername);
         performLogin(iNextUsername);
 
-        // ── Step 5: Navigate to My Clients ───────────────────────────────────────────────────
+        // ── Step 4: Navigate to My Clients ───────────────────────────────────────────────────
         navigateToMyClients();
 
-        // ── Step 6: Update Hooks fields ──────────────────────────────────────────────────────
+        // ── Step 5: Update Hooks fields ──────────────────────────────────────────────────────
         setPrelimHerd(pCheckType, iNextHerd, iNextUsername);
         Hooks.RUNTIME_USERNAME = iNextUsername;
 
-        log.info("[PRELIM-RECOVER] Recovery complete | " + pCheckType + " → herd=" + iNextHerd + " | username=" + iNextUsername);
+        log.info("[PRELIM-RECOVER] Recovery complete | " + pCheckType
+                + " → herd=" + iNextHerd + " | username=" + iNextUsername);
         return true;
     }
 
@@ -714,6 +750,82 @@ public class TC_18
             return true;
         }
         catch (Exception e) { return false; }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : printDbResultTable
+    // Description   : Prints the full DB result set to the console as a formatted table.
+    //                 Called after every BISS_DATA query inside recoverWithNewHerd so you can
+    //                 see exactly what was returned (or that nothing was returned) for each offset.
+    //                 Aids diagnosis when the recovery loop exhausts all offsets.
+    // Parameters    : pQueryLabel — label to identify which query this result belongs to
+    //                 pRows       — the result rows from DBRouter.getRows()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date          : 20-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private void printDbResultTable(String pQueryLabel, List<Map<String, Object>> pRows)
+    {
+        if (pRows == null || pRows.isEmpty())
+        {
+            log.info("[DB-RESULT] " + pQueryLabel + " → 0 rows returned");
+            return;
+        }
+
+        StringBuilder iSb = new StringBuilder();
+        iSb.append("\n[DB-RESULT] ").append(pQueryLabel)
+                .append(" → ").append(pRows.size()).append(" row(s):\n");
+
+        // Build column list from first row keys
+        Map<String, Object> iFirstRow = pRows.get(0);
+        String[] iCols = iFirstRow.keySet().toArray(new String[0]);
+
+        // Compute display width per column (capped at 40 chars to keep table readable)
+        int[] iWidths = new int[iCols.length];
+        for (int c = 0; c < iCols.length; c++)
+        {
+            iWidths[c] = iCols[c].length();
+            for (Map<String, Object> iRow : pRows)
+            {
+                String iVal = Objects.toString(iRow.get(iCols[c]), "null");
+                if (iVal.length() > iWidths[c]) iWidths[c] = Math.min(iVal.length(), 40);
+            }
+        }
+
+        // Build separator and header lines
+        StringBuilder iSep = new StringBuilder("  +-");
+        StringBuilder iHdr = new StringBuilder("  | ");
+        for (int c = 0; c < iCols.length; c++)
+        {
+            iSep.append("-".repeat(iWidths[c])).append("-+-");
+            iHdr.append(padRight(iCols[c], iWidths[c])).append(" | ");
+        }
+
+        iSb.append(iSep).append("\n")
+                .append(iHdr).append("\n")
+                .append(iSep).append("\n");
+
+        // Build data rows
+        for (Map<String, Object> iRow : pRows)
+        {
+            StringBuilder iLine = new StringBuilder("  | ");
+            for (int c = 0; c < iCols.length; c++)
+            {
+                String iVal = Objects.toString(iRow.get(iCols[c]), "null");
+                if (iVal.length() > 40) iVal = iVal.substring(0, 37) + "...";
+                iLine.append(padRight(iVal, iWidths[c])).append(" | ");
+            }
+            iSb.append(iLine).append("\n");
+        }
+
+        iSb.append(iSep);
+        log.info(iSb.toString());
+    }
+
+    private String padRight(String s, int n)
+    {
+        if (s == null) s = "";
+        if (s.length() >= n) return s.substring(0, n);
+        return s + " ".repeat(n - s.length());
     }
 
 }
