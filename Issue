@@ -1,164 +1,100 @@
-case "CHROME":
-{
-    ChromeOptions iOptions = new ChromeOptions();
-    iOptions.addArguments("--start-maximized");
-    iOptions.addArguments("--disable-notifications");
-    iOptions.addArguments("--disable-infobars");
-    iOptions.addArguments("--disable-extensions");
-
-    // Set browser-level zoom to 80% via Chrome user profile preferences.
-    // This is the robust approach — sets the actual Chrome zoom (same as
-    // Ctrl+- in browser) rather than CSS zoom which only affects body element.
-    // The value is a double: 0.8 = 80%, 0.9 = 90%, 1.0 = 100%
-    java.util.Map<String, Object> iPrefs = new java.util.HashMap<>();
-    iPrefs.put("profile.default_content_settings.popups", 0);
-    iPrefs.put("profile.default_zoom_level", -0.5733f);
-    iOptions.setExperimentalOption("prefs", iPrefs);
-
-    if (iHeadless)
+   @Then("the agent resolves any overclaim value exceeds EH errors if present")
+    public void theAgentResolvesAnyOverclaimValueExceedsEHErrorsIfPresent()
     {
-        iOptions.addArguments("--headless=new");
-        iOptions.addArguments("--window-size=1920,1080");
-    }
+        log.info("[STEP] Then the agent resolves any overclaim value exceeds EH errors if present");
 
-    System.setProperty("webdriver.chrome.driver","drivers/chromedriver.exe");
-    iDriver = new ChromeDriver(iOptions);
+        WebDriver  iDriver = getDriver();
+        JavascriptExecutor iJs  = (JavascriptExecutor) iDriver;
 
-    break;
-}
----------------
-# Submit → errors may appear → fix them → re-submit
-When the agent submits the Preliminary Checks response
-Then the agent resolves any overclaim value exceeds EH errors if present
-When the agent submits the Preliminary Checks response
-Then the agent confirms the Preliminary Checks submission
-And the Preliminary Checks submission should be confirmed successfully
------------
-// ***************************************************************************************************************************************************************************************
-// Step          : Then the agent resolves any overclaim value exceeds EH errors if present
-// Description   : After clicking Submit, some rows may show "Value exceeds EH" error in the
-//                 claimed area column (lib-biss-input inside cdk-column-claimedArea).
-//                 This happens when the pre-filled claimed value exceeds the row's eligible (ha).
-//
-//                 For every row that has a "Value exceeds EH" error:
-//                   1. Read the eligible (ha) value from cdk-column-eligibleH of that row
-//                   2. Clear the claimed area input and enter (eligible - 0.01)
-//                   3. Fire Angular input + change events so the binding picks up the new value
-//
-//                 If no errors are present the step passes silently — safe to always include.
-//                 After this step the feature file calls Submit again to complete submission.
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date          : 21-04-2026
-// ***************************************************************************************************************************************************************************************
-@Then("the agent resolves any overclaim value exceeds EH errors if present")
-public void theAgentResolvesAnyOverclaimValueExceedsEHErrorsIfPresent()
-{
-    log.info("[STEP] Then the agent resolves any overclaim value exceeds EH errors if present");
+        // All data rows in the overclaim table (tbody scoped — excludes header rows)
+        String iAllDataRowsXpath = "//tbody[contains(@class,'mdc-data-table__content')]" + "//tr[contains(@class,'mdc-data-table__row')]";
 
-    WebDriver          iDriver = getDriver();
-    JavascriptExecutor iJs     = (JavascriptExecutor) iDriver;
+        List<WebElement> iDataRows = iDriver.findElements(By.xpath(iAllDataRowsXpath));
 
-    // All data rows in the overclaim table (tbody scoped — excludes header rows)
-    String iAllDataRowsXpath =
-            "//tbody[contains(@class,'mdc-data-table__content')]"
-          + "//tr[contains(@class,'mdc-data-table__row')]";
-
-    List<WebElement> iDataRows = iDriver.findElements(By.xpath(iAllDataRowsXpath));
-
-    if (iDataRows.isEmpty())
-    {
-        log.info("[OVERCLAIM-FIX] No data rows found in table — nothing to fix.");
-        return;
-    }
-
-    int iFixCount = 0;
-
-    for (int i = 0; i < iDataRows.size(); i++)
-    {
-        WebElement iRow = iDataRows.get(i);
-
-        // ── Check if this row has a "Value exceeds EH" error ─────────────────────────────
-        List<WebElement> iErrors = iRow.findElements(
-                By.xpath(".//mat-error//span[normalize-space()='Value exceeds EH']"));
-
-        if (iErrors.isEmpty())
+        if (iDataRows.isEmpty())
         {
-            log.info("[OVERCLAIM-FIX] Row " + (i + 1) + " — no error. Skipping.");
-            continue;
+            log.info("[OVERCLAIM-FIX] No data rows found in table — nothing to fix.");
+            return;
         }
 
-        log.info("[OVERCLAIM-FIX] Row " + (i + 1) + " — 'Value exceeds EH' detected. Fixing.");
+        int iFixCount = 0;
 
-        // ── Read eligible (ha) from this row ─────────────────────────────────────────────
-        List<WebElement> iEligibleCells = iRow.findElements(
-                By.xpath(".//td[contains(@class,'cdk-column-eligibleH')]"));
-
-        if (iEligibleCells.isEmpty())
+        for (int i = 0; i < iDataRows.size(); i++)
         {
-            log.warning("[OVERCLAIM-FIX] Row " + (i + 1)
-                    + " — eligible (ha) cell not found. Skipping this row.");
-            continue;
+            WebElement iRow = iDataRows.get(i);
+
+            // ── Check if this row has a "Value exceeds EH" error ─────────────────────────────
+            List<WebElement> iErrors = iRow.findElements(By.xpath(".//mat-error//span[normalize-space()='Value exceeds EH']"));
+
+            if (iErrors.isEmpty())
+            {
+                log.info("[OVERCLAIM-FIX] Row " + (i + 1) + " — no error. Skipping.");
+                continue;
+            }
+
+            log.info("[OVERCLAIM-FIX] Row " + (i + 1) + " — 'Value exceeds EH' detected. Fixing.");
+
+            // ── Read eligible (ha) from this row ─────────────────────────────────────────────
+            List<WebElement> iEligibleCells = iRow.findElements(By.xpath(".//td[contains(@class,'cdk-column-eligibleH')]"));
+
+            if (iEligibleCells.isEmpty())
+            {
+                log.warning("[OVERCLAIM-FIX] Row " + (i + 1) + " — eligible (ha) cell not found. Skipping this row.");
+                continue;
+            }
+
+            String iEligibleRaw = iEligibleCells.get(0).getText().trim();
+            double iEligible;
+            try
+            {
+                iEligible = Double.parseDouble(iEligibleRaw.replaceAll("[^0-9.]", ""));
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[OVERCLAIM-FIX] Row " + (i + 1) + " — could not parse eligible value '" + iEligibleRaw + "'. Skipping.");
+                continue;
+            }
+
+            // ── Find the claimed area input inside cdk-column-claimedArea ────────────────────
+            List<WebElement> iInputs = iRow.findElements(By.xpath(".//td[contains(@class,'cdk-column-claimedArea')]"
+                    + "//input[contains(@class,'mat-mdc-input-element')]"));
+
+            if (iInputs.isEmpty())
+            {
+                log.warning("[OVERCLAIM-FIX] Row " + (i + 1)
+                        + " — claimed area input not found. Skipping.");
+                continue;
+            }
+
+            WebElement iInput = iInputs.get(0);
+
+            // ── Compute safe value: eligible - 0.01, rounded to 2 decimal places ─────────────
+            double iSafeValue  = Math.round((iEligible - 0.01) * 100.0) / 100.0;
+            String iSafeString = String.format("%.2f", iSafeValue);
+
+            log.info("[OVERCLAIM-FIX] Row " + (i + 1) + " | eligible=" + iEligible + " | entering=" + iSafeString);
+
+            // ── Clear via JS first (Angular reactive forms ignore Selenium clear alone) ───────
+            iJs.executeScript("arguments[0].value = '';", iInput);
+            iInput.clear();
+            iInput.sendKeys(iSafeString);
+
+            // ── Fire Angular input + change events so the reactive form picks up the value ────
+            iJs.executeScript("arguments[0].dispatchEvent(new Event('input',  {bubbles: true}));" + "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));", iInput);
+
+            iFixCount++;
+            log.info("[OVERCLAIM-FIX] Row " + (i + 1) + " — fixed. Claimed set to " + iSafeString);
+
+            // Re-fetch rows after DOM update to avoid stale element on next iteration
+            iDataRows = iDriver.findElements(By.xpath(iAllDataRowsXpath));
         }
 
-        String iEligibleRaw = iEligibleCells.get(0).getText().trim();
-        double iEligible;
-        try
+        if (iFixCount > 0)
         {
-            iEligible = Double.parseDouble(iEligibleRaw.replaceAll("[^0-9.]", ""));
+            log.info("[OVERCLAIM-FIX] Fixed " + iFixCount + " overclaim row(s). Ready to re-submit.");
         }
-        catch (NumberFormatException e)
+        else
         {
-            log.warning("[OVERCLAIM-FIX] Row " + (i + 1)
-                    + " — could not parse eligible value '" + iEligibleRaw + "'. Skipping.");
-            continue;
+            log.info("[OVERCLAIM-FIX] No overclaim errors found — submission can proceed.");
         }
-
-        // ── Find the claimed area input inside cdk-column-claimedArea ────────────────────
-        List<WebElement> iInputs = iRow.findElements(
-                By.xpath(".//td[contains(@class,'cdk-column-claimedArea')]"
-                       + "//input[contains(@class,'mat-mdc-input-element')]"));
-
-        if (iInputs.isEmpty())
-        {
-            log.warning("[OVERCLAIM-FIX] Row " + (i + 1)
-                    + " — claimed area input not found. Skipping.");
-            continue;
-        }
-
-        WebElement iInput = iInputs.get(0);
-
-        // ── Compute safe value: eligible - 0.01, rounded to 2 decimal places ─────────────
-        double iSafeValue  = Math.round((iEligible - 0.01) * 100.0) / 100.0;
-        String iSafeString = String.format("%.2f", iSafeValue);
-
-        log.info("[OVERCLAIM-FIX] Row " + (i + 1)
-                + " | eligible=" + iEligible + " | entering=" + iSafeString);
-
-        // ── Clear via JS first (Angular reactive forms ignore Selenium clear alone) ───────
-        iJs.executeScript("arguments[0].value = '';", iInput);
-        iInput.clear();
-        iInput.sendKeys(iSafeString);
-
-        // ── Fire Angular input + change events so the reactive form picks up the value ────
-        iJs.executeScript(
-                "arguments[0].dispatchEvent(new Event('input',  {bubbles: true}));"
-              + "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));",
-                iInput);
-
-        iFixCount++;
-        log.info("[OVERCLAIM-FIX] Row " + (i + 1) + " — fixed. Claimed set to " + iSafeString);
-
-        // Re-fetch rows after DOM update to avoid stale element on next iteration
-        iDataRows = iDriver.findElements(By.xpath(iAllDataRowsXpath));
     }
-
-    if (iFixCount > 0)
-    {
-        log.info("[OVERCLAIM-FIX] Fixed " + iFixCount + " overclaim row(s). Ready to re-submit.");
-    }
-    else
-    {
-        log.info("[OVERCLAIM-FIX] No overclaim errors found — submission can proceed.");
-    }
-}
