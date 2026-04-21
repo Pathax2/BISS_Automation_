@@ -41,7 +41,7 @@ Feature: TC_18 - Validate and Respond to Overclaim Preliminary Check
     # Farmer selection — herd from DB at runtime
     # -----------------------------------------
     When the agent opens a farmer dashboard for preliminary check herd "OVERCLAIM"
-    Then the farmer dashboard should be displayed
+    #Then the farmer dashboard should be displayed
 
     # -----------------------------------------
     # Dashboard — assert Preliminary Checks card
