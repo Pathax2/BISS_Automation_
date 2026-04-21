@@ -52,7 +52,7 @@ public class Hooks
             "X1120993","P1261051","E209434X","D1174054","H2621144","B1240361","G1930639",
             "G194082X","B1560048","R1050781","D201078X","M1952021","W1040563","B1150150",
             "B1380562","C129112X","G1221786","T209028X","T1790688","G1280928","G1930167",
-            "Y1070492","Y1791564","R1040514","C1430554","D2450985"
+            "Y1070492","Y1791564","R1040514","C1430554","C1289029","D2450985"
     );
 
     private static void rerunIfBlacklisted()
@@ -250,7 +250,7 @@ public class Hooks
         }
     }
 
-    // ***********************************************************************
+// ***********************************************************************
 // @Before("@preliminary")
 // Description : Resolves one valid herd+username per preliminary check
 //               type (Overclaim, Dual claim, Agricultural Activity) for
@@ -270,40 +270,37 @@ public class Hooks
     @Before("@preliminary")
     public void resolveRuntimePreliminaryHerds(Scenario pScenario)
     {
-        final int    MAX_PRELIM_ATTEMPTS = 10;
-        final String YEAR                = System.getProperty("herd.year", "2026").trim();
+        final int    MAX_ATTEMPTS = 10;
+        final String YEAR         = System.getProperty("herd.year", "2026").trim();
 
-        CommonFunctions.log.info("[PRELIM-HOOK] Resolving preliminary check herds for: " + pScenario.getName());
+        CommonFunctions.log.info("[PRELIM-HOOK] Resolving preliminary herds for: " + pScenario.getName());
 
         boolean iAllResolved = false;
 
-        for (int iOffset = 0; iOffset < MAX_PRELIM_ATTEMPTS; iOffset++)
+        for (int iOffset = 0; iOffset < MAX_ATTEMPTS; iOffset++)
         {
-            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_PRELIM_ATTEMPTS
-                    + " — offset=" + iOffset);
+            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_ATTEMPTS + " — offset=" + iOffset);
 
-            // Step 1: fetch one herd per check type at this offset position
+            // Fetch one herd per check type at this offset from BISS_DATA
             database.DBRouter.runDB("DATA", "Preliminary checks herds", YEAR, String.valueOf(iOffset));
-            List<Map<String, Object>> iRows = database.DBRouter.getRows();
 
+            List<Map<String, Object>> iRows = database.DBRouter.getRows();
             if (iRows == null || iRows.isEmpty())
             {
-                CommonFunctions.log.warning("[PRELIM-HOOK] BISS_DATA returned 0 rows at offset=" + iOffset
-                        + " — no more candidates in DB. Aborting.");
+                CommonFunctions.log.warning("[PRELIM-HOOK] No rows from DB at offset=" + iOffset + ". Stopping.");
                 break;
             }
 
-            // Step 2: reset per-attempt state
-            String iOverclaimHerd       = null;  String iOverclaimUser       = null;
-            String iDualClaimHerd       = null;  String iDualClaimUser       = null;
-            String iAgriActivityHerd    = null;  String iAgriActivityUser    = null;
+            // Reset per-attempt working variables
+            String iOverclaimHerd    = null; String iOverclaimUser    = null;
+            String iDualClaimHerd    = null; String iDualClaimUser    = null;
+            String iAgriActivityHerd = null; String iAgriActivityUser = null;
 
-            // Step 3: resolve USERNAME for each row from BISS_INET
+            // Validate each row against BISS_INET
             for (Map<String, Object> iRow : iRows)
             {
-                String iLvcDesc = Objects.toString(iRow.get("LVC_DESC"), "").trim();
-                String iHerd    = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
-
+                String iLvc  = Objects.toString(iRow.get("LVC_DESC"),    "").trim();
+                String iHerd = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
                 if (iHerd.isEmpty()) continue;
 
                 database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
@@ -311,41 +308,36 @@ public class Hooks
 
                 if (iUsername == null || iUsername.isBlank())
                 {
-                    CommonFunctions.log.warning("[PRELIM-HOOK] No USERNAME in BISS_INET for herd="
-                            + iHerd + " (" + iLvcDesc + ") — will retry with next offset.");
-                    // Don't break — log all misses for visibility, then retry whole offset
+                    CommonFunctions.log.warning("[PRELIM-HOOK] No INET agent for "
+                            + iLvc + " herd=" + iHerd + " — retrying next offset.");
                     continue;
                 }
 
                 iUsername = iUsername.trim();
-                CommonFunctions.log.info("[PRELIM-HOOK] Resolved " + iLvcDesc + " → herd=" + iHerd
-                        + " | username=" + iUsername);
+                CommonFunctions.log.info("[PRELIM-HOOK] DB+INET resolved: "
+                        + iLvc + " → " + iHerd + " / " + iUsername);
 
-                switch (iLvcDesc)
+                switch (iLvc)
                 {
                     case "Overclaim":
-                        iOverclaimHerd  = iHerd; iOverclaimUser  = iUsername; break;
+                        iOverclaimHerd    = iHerd; iOverclaimUser    = iUsername; break;
                     case "Dual claim":
-                        iDualClaimHerd  = iHerd; iDualClaimUser  = iUsername; break;
+                        iDualClaimHerd    = iHerd; iDualClaimUser    = iUsername; break;
                     case "Agricultural Activity":
-                        iAgriActivityHerd  = iHerd; iAgriActivityUser  = iUsername; break;
-                    default:
-                        CommonFunctions.log.warning("[PRELIM-HOOK] Unexpected LVC_DESC value: " + iLvcDesc);
+                        iAgriActivityHerd = iHerd; iAgriActivityUser = iUsername; break;
                 }
             }
 
-            // Step 4: check if all 3 check types are resolved
             if (iOverclaimHerd != null && iDualClaimHerd != null && iAgriActivityHerd != null)
             {
-                // All 3 resolved — commit to static fields
-                OVERCLAIM_HERD       = iOverclaimHerd;    OVERCLAIM_USERNAME    = iOverclaimUser;
-                DUAL_CLAIM_HERD      = iDualClaimHerd;    DUAL_CLAIM_USERNAME   = iDualClaimUser;
-                AGRI_ACTIVITY_HERD   = iAgriActivityHerd; AGRI_ACTIVITY_USERNAME = iAgriActivityUser;
+                OVERCLAIM_HERD         = iOverclaimHerd;    OVERCLAIM_USERNAME    = iOverclaimUser;
+                DUAL_CLAIM_HERD        = iDualClaimHerd;    DUAL_CLAIM_USERNAME   = iDualClaimUser;
+                AGRI_ACTIVITY_HERD     = iAgriActivityHerd; AGRI_ACTIVITY_USERNAME = iAgriActivityUser;
 
-                CommonFunctions.log.info("[PRELIM-HOOK] All 3 preliminary check herds resolved:");
-                CommonFunctions.log.info("[PRELIM-HOOK]   Overclaim         → " + OVERCLAIM_HERD     + " / " + OVERCLAIM_USERNAME);
-                CommonFunctions.log.info("[PRELIM-HOOK]   Dual claim        → " + DUAL_CLAIM_HERD    + " / " + DUAL_CLAIM_USERNAME);
-                CommonFunctions.log.info("[PRELIM-HOOK]   Agri Activity     → " + AGRI_ACTIVITY_HERD + " / " + AGRI_ACTIVITY_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK] All 3 resolved:");
+                CommonFunctions.log.info("[PRELIM-HOOK]  Overclaim         → " + OVERCLAIM_HERD      + " / " + OVERCLAIM_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK]  Dual claim        → " + DUAL_CLAIM_HERD     + " / " + DUAL_CLAIM_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK]  Agri Activity     → " + AGRI_ACTIVITY_HERD  + " / " + AGRI_ACTIVITY_USERNAME);
 
                 iAllResolved = true;
                 break;
@@ -353,21 +345,17 @@ public class Hooks
 
             CommonFunctions.log.warning("[PRELIM-HOOK] Not all 3 resolved at offset=" + iOffset
                     + " — Overclaim=" + (iOverclaimHerd != null ? "✓" : "✗")
-                    + " DualClaim=" + (iDualClaimHerd != null ? "✓" : "✗")
-                    + " AgriActivity=" + (iAgriActivityHerd != null ? "✓" : "✗")
-                    + " — trying offset=" + (iOffset + 1));
+                    + " DualClaim="   + (iDualClaimHerd != null ? "✓" : "✗")
+                    + " AgriAct="     + (iAgriActivityHerd != null ? "✓" : "✗"));
         }
 
         if (!iAllResolved)
         {
             throw new RuntimeException(
                     "[PRELIM-HOOK] Could not resolve all 3 preliminary check herds after "
-                            + MAX_PRELIM_ATTEMPTS + " offset attempts. "
-                            + "Check vwbs_land_validation for LVT_DESC='Preliminary Check' AND LVS_DESC='Pending' "
-                            + "in year " + YEAR + " has sufficient rows with BISS_INET agents.");
+                            + MAX_ATTEMPTS + " attempts for year=" + YEAR);
         }
     }
-
     // ***************************************************************************************************************************************************************************************
     // Method        : fetchPrelimUsername
     // Description   : Queries BISS_INET for the agent login ID for a given herd number.
