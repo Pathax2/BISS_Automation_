@@ -1,100 +1,213 @@
-Feature: TC_11 - BISS_25.3.Sprint_5 TC1 for BISSAGL-21062 BISS iNET - Shift Document Retrieval Logic to document service
+    // ***************************************************************************************************************************************************************************************
+// Step          : Then the agent resolves any overclaim value exceeds EH errors if present
+// Description   : After clicking Submit, rows with claimed area > eligible (ha) show a
+//                 "Value exceeds EH" error inline in the cdk-column-claimedArea cell.
+//
+//                 Three scenarios handled:
+//
+//                   1. No suffix (single parcel e.g. "A1150100017"):
+//                        → 1 row in group → enter the eligible value directly
+//                          claimed = eligible (always ≤ eligible, no overclaim)
+//
+//                   2. Suffix present, split into 2+ (e.g. "A1150100017 A" + "A1150100017 B"):
+//                        → Group all suffix rows by base parcel number
+//                        → Distribute the shared eligible pool proportionally based on
+//                          each row's original claimed value
+//                        → Non-last rows: floor to 2dp (never rounds up over pool)
+//                        → Last row: pool − running total (absorbs rounding remainder)
+//                        → Group total guaranteed = eligible pool exactly
+//
+//                   3. Split into N parts (A/B/C/...):
+//                        → Same proportional logic as case 2, scales to any N
+//
+//                 All locators sourced from ObjectRepository.properties via ObjReader.
+//                 Row-scoped relative XPaths (.//td...) are used via iRow.findElements()
+//                 since iAction always resolves from document root and cannot be scoped
+//                 to a specific parent WebElement.
+//
+//                 If no errors are present the step passes silently.
+//                 Feature file calls Submit again after this step.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date          : 21-04-2026
+// ***************************************************************************************************************************************************************************************
+    @Then("the agent resolves any overclaim value exceeds EH errors if present")
+    public void theAgentResolvesAnyOverclaimValueExceedsEHErrorsIfPresent()
+    {
+        log.info("[STEP] Then the agent resolves any overclaim value exceeds EH errors if present");
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Validates that when a staff user sends multiple correspondence letters to a herd,
-  #   the agent is able to see the latest 5 letters in the Recent Correspondence frame
-  #   on the Agent Dashboard — confirming the document retrieval logic routes correctly
-  #   through the document service.
-  #
-  #   Active Scenarios:
-  #     AT-TC-00 : Agent-side precondition
-  #                Navigates to My Clients, applies the Submitted filter, and selects
-  #                a submitted herd as the test fixture for the main scenario.
-  #
-  #     Main     : Staff sends 5 Free Text Letters via the Query Letters flow,
-  #                then the agent verifies those letters appear in Recent Correspondence
-  #                and can be viewed from the farmer dashboard.
-  #
-  # Notes:
-  #   1. TC_11 has no shared Background — the two scenarios use different login flows
-  #      (agent for AT-TC-00, staff + agent for the main scenario).
-  #   2. The staff user "agr4442" is a fixed test account. Update in TestData.xlsx if needed.
-  #   3. The letter is submitted 5 times in sequence to trigger the volume check in the
-  #      Recent Correspondence frame. Comments mark each repetition for clarity.
-  #   4. The last step verifying letters from the Correspondence tab is currently
-  #      commented pending investigation.
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 26-03-2026
-  # --------------------------------------------------------------------------------------------------------------------
+        WebDriver          iDriver = getDriver();
+        JavascriptExecutor iJs     = (JavascriptExecutor) iDriver;
 
-  #@tmslink=BISSAGL-7010
-  @regression
-  Scenario: AT-TC-00 - Agent selects a submitted herd as the test fixture
-    Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent applies the "Submitted" quick filter
-    And the agent picks a herd from the list
+        // ── All data rows — absolute XPath from ObjectRepository ──────────────────────────
+        List<WebElement> iAllRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iPrelimOverclaimDataRows")));
 
-  @regression
-  Scenario: Shift Document Retrieval Logic to document service
-    Given the staff user is on the staff login page
-    When the staff user logs in with username "agr4442"
-    And the staff user selects the data protection checkbox
-    And the staff user opens the "Basic Income Support for Sustainability" application
-    And the staff user searches for a herd from row 1 with scheme year "2025"
-    And the staff user clicks on the "View" link in the application table at position 1
-    Then the staff user navigates to "Correspondence" in the side navigation bar
-    And the staff user switches to the "Query Letter" tab in Correspondence
-    And the staff user checks for any inspection error
-    # Letter 1
-    And the staff user selects "BISS Free Text Letter" from the "docType" query letter dropdown
-    And the staff user types "Test Heading" in the "Enter letter heading" query letter text area
-    And the staff user types "Test Body" in the "Enter letter body" query letter text area
-    And the staff user clicks the "Preview" button
-    And the staff user clicks the "Submit" button
-    And the staff user confirms by clicking the "Yes, Confirm" button
-    # Letter 2
-    And the staff user selects "BISS Free Text Letter" from the "docType" query letter dropdown
-    And the staff user types "Test Heading" in the "Enter letter heading" query letter text area
-    And the staff user types "Test Body" in the "Enter letter body" query letter text area
-    And the staff user clicks the "Preview" button
-    And the staff user clicks the "Submit" button
-    And the staff user confirms by clicking the "Yes, Confirm" button
-    # Letter 3
-    And the staff user selects "BISS Free Text Letter" from the "docType" query letter dropdown
-    And the staff user types "Test Heading" in the "Enter letter heading" query letter text area
-    And the staff user types "Test Body" in the "Enter letter body" query letter text area
-    And the staff user clicks the "Preview" button
-    And the staff user clicks the "Submit" button
-    And the staff user confirms by clicking the "Yes, Confirm" button
-    # Letter 4
-    And the staff user selects "BISS Free Text Letter" from the "docType" query letter dropdown
-    And the staff user types "Test Heading" in the "Enter letter heading" query letter text area
-    And the staff user types "Test Body" in the "Enter letter body" query letter text area
-    And the staff user clicks the "Preview" button
-    And the staff user clicks the "Submit" button
-    And the staff user confirms by clicking the "Yes, Confirm" button
-    # Letter 5
-    And the staff user selects "BISS Free Text Letter" from the "docType" query letter dropdown
-    And the staff user types "Test Heading" in the "Enter letter heading" query letter text area
-    And the staff user types "Test Body" in the "Enter letter body" query letter text area
-    And the staff user clicks the "Preview" button
-    And the staff user clicks the "Submit" button
-    And the staff user confirms by clicking the "Yes, Confirm" button
+        if (iAllRows.isEmpty())
+        {
+            log.info("[OVERCLAIM-FIX] No data rows found — nothing to fix.");
+            return;
+        }
 
-    Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent can see the "Recent Correspondence" frame on the Agent Dashboard
-    And the agent verifies the latest 5 letters are visible in Recent Correspondence
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    When the agent selects the submitted herd from row 1
-    And the agent clicks on the View Dashboard button
-    Then the agent navigates to the "Correspondence" tab on the Side Navigation bar
-#   And the agent verifies latest 5 letters received by herds
+        // ── Parallel lists — one entry per error row found ────────────────────────────────
+        List<Integer> iErrorRowIndexes   = new java.util.ArrayList<>();
+        List<String>  iBaseParcelNumbers = new java.util.ArrayList<>();
+        List<Double>  iEligibleValues    = new java.util.ArrayList<>();
+        List<Double>  iOriginalClaimed   = new java.util.ArrayList<>();
+
+        for (int i = 0; i < iAllRows.size(); i++)
+        {
+            WebElement iRow = iAllRows.get(i);
+
+            // ── Only process rows that have a "Value exceeds EH" error ───────────────────
+            // Relative XPath scoped to this row — cannot use iAction (root-based only)
+            List<WebElement> iErrors = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimValueExceedsEHError")));
+            if (iErrors.isEmpty()) continue;
+
+            // ── Read parcel number — strip trailing single-letter split suffix ────────────
+            // DOM: <td class="cdk-column-parcelNo"> A1150100017 <span> B </span>
+            // Full getText() = "A1150100017  B"   Base = strip trailing " A" / " B" etc.
+            List<WebElement> iParcelCells = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimParcelNoCell")));
+            if (iParcelCells.isEmpty()) continue;
+
+            String iFullParcel = iParcelCells.get(0).getText().trim();
+            String iBaseParcel = iFullParcel.replaceAll("\\s+[A-Z]$", "").trim();
+
+            // ── Read eligible (ha) — relative XPath scoped to this row ───────────────────
+            List<WebElement> iEligibleCells = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimEligibleCell")));
+            if (iEligibleCells.isEmpty()) continue;
+
+            double iEligible;
+            try
+            {
+                iEligible = Double.parseDouble(iEligibleCells.get(0).getText().trim().replaceAll("[^0-9.]", ""));
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[OVERCLAIM-FIX] Row " + (i + 1) + " — could not parse eligible value. Skipping.");
+                continue;
+            }
+
+            // ── Read pre-filled claimed value from input — relative XPath ─────────────────
+            List<WebElement> iInputs = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimClaimedInput")));
+            if (iInputs.isEmpty()) continue;
+
+            String iClaimedRaw = iInputs.get(0).getAttribute("value");
+            if (iClaimedRaw == null || iClaimedRaw.trim().isEmpty()) iClaimedRaw = "0";
+
+            double iClaimed;
+            try
+            {
+                iClaimed = Double.parseDouble(iClaimedRaw.trim().replaceAll("[^0-9.]", ""));
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[OVERCLAIM-FIX] Row " + (i + 1) + " — could not parse claimed value '" + iClaimedRaw + "'. Skipping.");
+                continue;
+            }
+
+            iErrorRowIndexes.add(i);
+            iBaseParcelNumbers.add(iBaseParcel);
+            iEligibleValues.add(iEligible);
+            iOriginalClaimed.add(iClaimed);
+
+            log.info("[OVERCLAIM-FIX] Error row " + (i + 1) + " | parcel=" + iFullParcel + " | base=" + iBaseParcel + " | eligible=" + iEligible + " | claimed=" + iClaimed);
+        }
+
+        if (iErrorRowIndexes.isEmpty())
+        {
+            log.info("[OVERCLAIM-FIX] No 'Value exceeds EH' errors found — nothing to fix.");
+            return;
+        }
+
+        // ── Group error rows by base parcel number ────────────────────────────────────────
+        java.util.Map<String, List<Integer>> iGroupMap = new java.util.LinkedHashMap<>();
+        for (int g = 0; g < iErrorRowIndexes.size(); g++)
+        {
+            String iKey = iBaseParcelNumbers.get(g);
+            iGroupMap.computeIfAbsent(iKey, k -> new java.util.ArrayList<>()).add(g);
+        }
+
+        // ── Compute assigned value per row ────────────────────────────────────────────────
+        double[] iAssignedValues = new double[iErrorRowIndexes.size()];
+
+        for (Map.Entry<String, List<Integer>> iGroup : iGroupMap.entrySet())
+        {
+            String        iParcel    = iGroup.getKey();
+            List<Integer> iGroupIdxs = iGroup.getValue();
+            double        iPool      = iEligibleValues.get(iGroupIdxs.get(0));
+
+            // ── CASE 1: Single parcel — no suffix, not split ──────────────────────────────
+            // Enter the eligible value directly — claimed = eligible (≤ eligible, no error)
+            if (iGroupIdxs.size() == 1)
+            {
+                iAssignedValues[iGroupIdxs.get(0)] = iPool;
+                log.info("[OVERCLAIM-FIX] Single parcel '" + iParcel + "' | not split | entering eligible=" + iPool);
+                continue;
+            }
+
+            // ── CASE 2 & 3: Split parcel — proportional distribution across N rows ────────
+            double iTotalClaimed = 0.0;
+            for (int g : iGroupIdxs) iTotalClaimed += iOriginalClaimed.get(g);
+
+            log.info("[OVERCLAIM-FIX] Split parcel '" + iParcel + "' | rows=" + iGroupIdxs.size() + " | pool=" + iPool + " | totalClaimed=" + iTotalClaimed);
+
+            // Edge case — all claimed values are 0, distribute pool evenly
+            if (iTotalClaimed == 0.0)
+            {
+                double iEven = Math.floor((iPool / iGroupIdxs.size()) * 100.0) / 100.0;
+                for (int g : iGroupIdxs) iAssignedValues[g] = iEven;
+                log.warning("[OVERCLAIM-FIX] Split parcel '" + iParcel + "' — total claimed is 0, distributing evenly: " + iEven + " each.");
+                continue;
+            }
+
+            // Non-last rows: floor to 2dp — guarantees partial sum never exceeds pool
+            double iRunningTotal = 0.0;
+            for (int gi = 0; gi < iGroupIdxs.size() - 1; gi++)
+            {
+                int    g           = iGroupIdxs.get(gi);
+                double iProportion = iOriginalClaimed.get(g) / iTotalClaimed;
+                double iShare      = Math.floor(iProportion * iPool * 100.0) / 100.0;
+                iAssignedValues[g] = iShare;
+                iRunningTotal     += iShare;
+                log.info("[OVERCLAIM-FIX]   Row " + (iErrorRowIndexes.get(g) + 1) + " | proportion=" + String.format("%.4f", iProportion) + " | share=" + iShare);
+            }
+
+            // Last row absorbs remainder — group total = pool exactly, regardless of N
+            int    iLastG     = iGroupIdxs.get(iGroupIdxs.size() - 1);
+            double iLastShare = Math.round((iPool - iRunningTotal) * 100.0) / 100.0;
+            iAssignedValues[iLastG] = iLastShare;
+            log.info("[OVERCLAIM-FIX]   Row " + (iErrorRowIndexes.get(iLastG) + 1) + " | last row remainder=" + iLastShare + " | group total=" + String.format("%.2f", iRunningTotal + iLastShare));
+        }
+
+        // ── Write computed values into the DOM ────────────────────────────────────────────
+        // Re-fetch all rows fresh to avoid stale element references after Angular re-render
+        iAllRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iPrelimOverclaimDataRows")));
+
+        for (int g = 0; g < iErrorRowIndexes.size(); g++)
+        {
+            int        iRowIndex    = iErrorRowIndexes.get(g);
+            String     iValueString = String.format("%.2f", iAssignedValues[g]);
+            WebElement iRow         = iAllRows.get(iRowIndex);
+
+            // Relative XPath scoped to this row — cannot use iAction (root-based only)
+            WebElement iInput = iRow.findElement(By.xpath(ObjReader.getLocator("iPrelimClaimedInput")));
+
+            // Step 1: Clear via JS — Angular reactive forms ignore Selenium clear alone
+            iJs.executeScript("arguments[0].value = '';", iInput);
+            iInput.clear();
+
+            // Step 2: Type the computed value
+            iInput.sendKeys(iValueString);
+
+            // Step 3: Fire Angular input + change events so reactive binding picks up value
+            iJs.executeScript("arguments[0].dispatchEvent(new Event('input',  {bubbles: true}));" + "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));", iInput);
+
+            log.info("[OVERCLAIM-FIX] Written " + iValueString + " → row " + (iRowIndex + 1) + " (parcel=" + iBaseParcelNumbers.get(g) + ")");
+        }
+
+        log.info("[OVERCLAIM-FIX] All overclaim errors resolved. Ready to re-submit.");
+    }
+
+Do you remember how we handled this above issue ? 
+Now for No Agricultural Activity Checks Prelim step we've to handle dropdown it also occures post clicking on submit button 
+<mat-expansion-panel _ngcontent-ng-c2434405154="" class="mat-expansion-panel prelim-margin-bottom48 ng-tns-c857250080-33 ng-star-inserted mat-expanded mat-expansion-panel-spacing"><mat-expansion-panel-header _ngcontent-ng-c2434405154="" role="button" class="mat-expansion-panel-header mat-focus-indicator ng-tns-c2622717266-34 ng-tns-c857250080-33 mat-expansion-toggle-indicator-after ng-star-inserted mat-expanded" id="mat-expansion-panel-header-2" tabindex="0" aria-controls="cdk-accordion-child-2" aria-expanded="true" aria-disabled="false" style=""><span class="mat-content ng-tns-c2622717266-34"><mat-panel-title _ngcontent-ng-c2434405154="" class="mat-expansion-panel-header-title ng-tns-c2622717266-34"><span _ngcontent-ng-c2434405154=""><!----><mat-icon _ngcontent-ng-c2434405154="" role="img" aria-hidden="false" aria-label="red check mark for prelim checks" class="mat-icon notranslate red material-icon material-icons mat-ligature-font mat-icon-no-color ng-star-inserted" data-mat-icon-type="font"> error</mat-icon><!----></span><span _ngcontent-ng-c2434405154="" class="prelim-heading">No Agricultural Activity Checks </span><span _ngcontent-ng-c2434405154="" class="ng-star-inserted">&nbsp;(1)</span><!----></mat-panel-title></span><span class="mat-expansion-indicator ng-tns-c2622717266-34 ng-trigger ng-trigger-indicatorRotate ng-star-inserted" style="transform: rotate(180deg);"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" aria-hidden="true" focusable="false" class="ng-tns-c2622717266-34"><path d="M480-345 240-585l56-56 184 184 184-184 56 56-240 240Z" class="ng-tns-c2622717266-34"></path></svg></span><!----></mat-expansion-panel-header><div role="region" class="mat-expansion-panel-content ng-tns-c857250080-33 ng-trigger ng-trigger-bodyExpansion" id="cdk-accordion-child-2" aria-labelledby="mat-expansion-panel-header-2" style=""><div class="mat-expansion-panel-body ng-tns-c857250080-33"><biss-response-agactivity-table _ngcontent-ng-c2434405154="" _nghost-ng-c2179881240="" class="ng-tns-c857250080-33"><div _ngcontent-ng-c2179881240="" class="pt-1"><mat-card _ngcontent-ng-c2179881240="" class="mat-mdc-card mdc-card ng-star-inserted" style=""><mat-card-content _ngcontent-ng-c2179881240="" class="mat-mdc-card-content table-container"><div _ngcontent-ng-c2179881240="" class="table-container"><table _ngcontent-ng-c2179881240="" mat-table="" multitemplatedatarows="" class="mat-mdc-table mdc-data-table__table cdk-table biss-table ng-invalid ng-star-inserted ng-touched ng-dirty" role="table"><!----><thead role="rowgroup" class="ng-star-inserted"><tr _ngcontent-ng-c2179881240="" role="row" mat-header-row="" class="mat-mdc-header-row mdc-data-table__header-row cdk-header-row ng-star-inserted"><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell text-right cdk-column-status mat-column-status ng-star-inserted mat-mdc-table-sticky mat-mdc-table-sticky-border-elem-top" style="top: 0px; z-index: 100;"></th><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell custom-cell cdk-column-townLand mat-column-townLand ng-star-inserted mat-mdc-table-sticky mat-mdc-table-sticky-border-elem-top" style="top: 0px; z-index: 100;"> Townland</th><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell text-left cdk-column-parcelNo mat-column-parcelNo ng-star-inserted mat-mdc-table-sticky mat-mdc-table-sticky-border-elem-top" style="top: 0px; z-index: 100;"> Parcel no./<br _ngcontent-ng-c2179881240="">Plot ref. </th><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell text-left cdk-column-parcelUse mat-column-parcelUse ng-star-inserted mat-mdc-table-sticky mat-mdc-table-sticky-border-elem-top" style="top: 0px; z-index: 100;"> Parcel use </th><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell text-right cdk-column-eligibleArea mat-column-eligibleArea ng-star-inserted mat-mdc-table-sticky mat-mdc-table-sticky-border-elem-top" style="top: 0px; z-index: 100;"> Eligible<br _ngcontent-ng-c2179881240="">(ha) </th><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell text-right cdk-column-claimedArea mat-column-claimedArea ng-star-inserted mat-mdc-table-sticky mat-mdc-table-sticky-border-elem-top" style="top: 0px; z-index: 100;"> Claimed <br _ngcontent-ng-c2179881240="">area (ha) </th><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell text-left cdk-column-otherAgActivity mat-column-otherAgActivity ng-star-inserted mat-mdc-table-sticky mat-mdc-table-sticky-border-elem-top" style="top: 0px; z-index: 100;"> Other agricultural <br _ngcontent-ng-c2179881240="">activity </th><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell text-left accept-reduction cdk-column-changeAgActivity mat-column-changeAgActivity ng-star-inserted mat-mdc-table-sticky mat-mdc-table-sticky-border-elem-top" style="top: 0px; z-index: 100;"> Change agricultural <br _ngcontent-ng-c2179881240="">activity?</th><!----></tr><tr _ngcontent-ng-c2179881240="" role="row" mat-header-row="" class="mat-mdc-header-row mdc-data-table__header-row cdk-header-row ng-star-inserted"><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell cdk-column-emptyRowPartial mat-column-emptyRowPartial ng-star-inserted" colspan="7"></th><th _ngcontent-ng-c2179881240="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell cdk-column-emptyRowInput mat-column-emptyRowInput ng-star-inserted" colspan="1"><mat-radio-group _ngcontent-ng-c2179881240="" role="radiogroup" formcontrolname="rejectAcceptAll" class="mat-mdc-radio-group reduction-radio-group action ng-untouched ng-pristine ng-valid"><mat-radio-button _ngcontent-ng-c2179881240="" class="mat-mdc-radio-button mat-accent mat-mdc-radio-checked" id="mat-radio-2"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-radio"><div class="mat-mdc-radio-touch-target"></div><input type="radio" class="mdc-radio__native-control" id="mat-radio-2-input" name="mat-radio-group-0" value="ACCEPTED" tabindex="0"><div class="mdc-radio__background"><div class="mdc-radio__outer-circle"></div><div class="mdc-radio__inner-circle"></div></div><div mat-ripple="" class="mat-ripple mat-radio-ripple mat-mdc-focus-indicator"><div class="mat-ripple-element mat-radio-persistent-ripple"></div></div></div><label class="mdc-label" for="mat-radio-2-input"> Yes, change all </label></div></mat-radio-button><mat-radio-button _ngcontent-ng-c2179881240="" class="mat-mdc-radio-button mat-accent" id="mat-radio-3"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-radio"><div class="mat-mdc-radio-touch-target"></div><input type="radio" class="mdc-radio__native-control" id="mat-radio-3-input" name="mat-radio-group-0" value="REJECTED" tabindex="-1"><div class="mdc-radio__background"><div class="mdc-radio__outer-circle"></div><div class="mdc-radio__inner-circle"></div></div><div mat-ripple="" class="mat-ripple mat-radio-ripple mat-mdc-focus-indicator"><div class="mat-ripple-element mat-radio-persistent-ripple"></div></div></div><label class="mdc-label" for="mat-radio-3-input"> Reject all </label></div></mat-radio-button></mat-radio-group></th><!----></tr><!----></thead><tbody role="rowgroup" class="mdc-data-table__content ng-star-inserted"><tr _ngcontent-ng-c2179881240="" role="row" mat-row="" class="mat-mdc-row mdc-data-table__row cdk-row ng-star-inserted"><td _ngcontent-ng-c2179881240="" mat-cell="" title="status" class="mat-mdc-cell mdc-data-table__cell cdk-cell text-right cdk-column-status mat-column-status ng-star-inserted" role="cell"><span _ngcontent-ng-c2179881240="" class="ng-star-inserted"><span _ngcontent-ng-c2179881240="" class="ng-star-inserted"><mat-icon _ngcontent-ng-c2179881240="" role="img" aria-hidden="false" aria-label="red check mark for prelim checks" class="mat-icon notranslate red material-icon material-icons mat-ligature-font mat-icon-no-color ng-star-inserted" data-mat-icon-type="font"> error</mat-icon><!----><!----></span><!----></span><!----></td><td _ngcontent-ng-c2179881240="" mat-cell="" title="Townland" class="mat-mdc-cell mdc-data-table__cell cdk-cell custom-cell cdk-column-townLand mat-column-townLand ng-star-inserted" role="cell"> Ticosker </td><td _ngcontent-ng-c2179881240="" mat-cell="" title="Parcel No" class="mat-mdc-cell mdc-data-table__cell cdk-cell text-left cdk-column-parcelNo mat-column-parcelNo ng-star-inserted" role="cell"> B1022500057 <!----></td><td _ngcontent-ng-c2179881240="" mat-cell="" title="Parcel Use" class="mat-mdc-cell mdc-data-table__cell cdk-cell text-left cdk-column-parcelUse mat-column-parcelUse ng-star-inserted" role="cell"> Riparian Buffer Zone - Grassland </td><td _ngcontent-ng-c2179881240="" mat-cell="" title="Eligible area" class="mat-mdc-cell mdc-data-table__cell cdk-cell text-right cdk-column-eligibleArea mat-column-eligibleArea ng-star-inserted" role="cell"><span _ngcontent-ng-c2179881240=""> 0.92 </span></td><td _ngcontent-ng-c2179881240="" mat-cell="" title="Claimed Area" class="mat-mdc-cell mdc-data-table__cell cdk-cell text-right cdk-column-claimedArea mat-column-claimedArea ng-star-inserted" role="cell"><span _ngcontent-ng-c2179881240=""> 0.92 </span></td><td _ngcontent-ng-c2179881240="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell text-left cdk-column-otherAgActivity mat-column-otherAgActivity ng-star-inserted" role="cell" title=""><!----><!----><span _ngcontent-ng-c2179881240="" class="ng-star-inserted" style=""><span _ngcontent-ng-c2179881240="" class="ng-star-inserted"><span _ngcontent-ng-c2179881240="" class="ng-star-inserted"><mat-form-field _ngcontent-ng-c2179881240="" appearance="outline" class="mat-mdc-form-field ng-tns-c508571215-36 mat-mdc-form-field-type-mat-select mat-form-field-appearance-outline mat-primary ng-invalid ng-star-inserted mat-form-field-invalid ng-touched ng-dirty"><!----><div class="mat-mdc-text-field-wrapper mdc-text-field ng-tns-c508571215-36 mdc-text-field--outlined mdc-text-field--no-label mdc-text-field--invalid"><!----><div class="mat-mdc-form-field-flex ng-tns-c508571215-36"><div matformfieldnotchedoutline="" class="mdc-notched-outline ng-tns-c508571215-36 mdc-notched-outline--no-label ng-star-inserted"><div class="mat-mdc-notch-piece mdc-notched-outline__leading"></div><div class="mat-mdc-notch-piece mdc-notched-outline__notch"><!----><!----><!----></div><div class="mat-mdc-notch-piece mdc-notched-outline__trailing"></div></div><!----><!----><!----><div class="mat-mdc-form-field-infix ng-tns-c508571215-36"><!----><mat-select _ngcontent-ng-c2179881240="" role="combobox" aria-haspopup="listbox" placeholder="Select an option" class="mat-mdc-select black-arrow-no-border ng-tns-c1711764913-37 ng-tns-c508571215-36 mat-mdc-select-required mat-mdc-select-empty ng-invalid ng-star-inserted mat-mdc-select-invalid ng-touched ng-dirty" aria-labelledby="mat-select-value-3" id="mat-select-2" tabindex="0" aria-expanded="false" aria-required="true" aria-disabled="false" aria-invalid="true"><div cdk-overlay-origin="" class="mat-mdc-select-trigger ng-tns-c1711764913-37"><div class="mat-mdc-select-value ng-tns-c1711764913-37" id="mat-select-value-3"><span class="mat-mdc-select-placeholder mat-mdc-select-min-line ng-tns-c1711764913-37 ng-star-inserted">Select an option</span><!----><!----></div><div class="mat-mdc-select-arrow-wrapper ng-tns-c1711764913-37"><div class="mat-mdc-select-arrow ng-tns-c1711764913-37"><svg viewBox="0 0 24 24" width="24px" height="24px" focusable="false" aria-hidden="true" class="ng-tns-c1711764913-37"><path d="M7 10l5 5 5-5z" class="ng-tns-c1711764913-37"></path></svg></div></div></div><!----></mat-select></div><!----><!----></div><!----></div><div class="mat-mdc-form-field-subscript-wrapper mat-mdc-form-field-bottom-align ng-tns-c508571215-36"><!----><div class="mat-mdc-form-field-hint-wrapper ng-tns-c508571215-36 ng-trigger ng-trigger-transitionMessages ng-star-inserted" style="opacity: 1; transform: translateY(0%);"><!----><div class="mat-mdc-form-field-hint-spacer ng-tns-c508571215-36"></div></div><!----></div></mat-form-field></span><!----></span><!----></span><!----></td><td _ngcontent-ng-c2179881240="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell text-left cdk-column-changeAgActivity mat-column-changeAgActivity ng-star-inserted" role="cell"><mat-radio-group _ngcontent-ng-c2179881240="" role="radiogroup" class="mat-mdc-radio-group reduction-radio-group ng-touched ng-dirty ng-valid"><mat-radio-button _ngcontent-ng-c2179881240="" class="mat-mdc-radio-button mat-accent mat-mdc-radio-checked" id="mat-radio-5"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-radio"><div class="mat-mdc-radio-touch-target"></div><input type="radio" class="mdc-radio__native-control" id="mat-radio-5-input" name="mat-radio-group-3" value="ACCEPTED" tabindex="0"><div class="mdc-radio__background"><div class="mdc-radio__outer-circle"></div><div class="mdc-radio__inner-circle"></div></div><div mat-ripple="" class="mat-ripple mat-radio-ripple mat-mdc-focus-indicator"><div class="mat-ripple-element mat-radio-persistent-ripple"></div></div></div><label class="mdc-label" for="mat-radio-5-input" style=""> Yes, change </label></div></mat-radio-button><mat-radio-button _ngcontent-ng-c2179881240="" class="mat-mdc-radio-button mat-accent" id="mat-radio-6"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-radio"><div class="mat-mdc-radio-touch-target"></div><input type="radio" class="mdc-radio__native-control" id="mat-radio-6-input" name="mat-radio-group-3" value="REJECTED" tabindex="-1"><div class="mdc-radio__background"><div class="mdc-radio__outer-circle"></div><div class="mdc-radio__inner-circle"></div></div><div mat-ripple="" class="mat-ripple mat-radio-ripple mat-mdc-focus-indicator"><div class="mat-ripple-element mat-radio-persistent-ripple"></div></div></div><label class="mdc-label" for="mat-radio-6-input"> Reject </label></div></mat-radio-button></mat-radio-group></td><!----></tr><!----><!----></tbody><tfoot role="rowgroup" class="ng-star-inserted mat-mdc-table-sticky" style="display: none; bottom: 0px; z-index: 10;"><!----></tfoot><!----><!----></table><!----><!----><!----></div></mat-card-content></mat-card><!----><!----></div></biss-response-agactivity-table><!----></div></div></mat-expansion-panel>
