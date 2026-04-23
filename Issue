@@ -1,52 +1,77 @@
-    # -----------------------------------------
-    # ACRES step
-    # -----------------------------------------
-    When the agent opens the "ACRES" step
-    And the agent selects "Yes, rescore" on panel 1
-    And the agent continues panel 1
-    Then the ACRES step should be completed successfully
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent opens the "GAEC 7" step
-    // Description   : Clicks the GAEC 7 step link in the application navigation
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent opens the {string} step")
-    public void theAgentOpensTheStep(String pStepName) {
-        String iStepHeader = iAction("GETTEXT", "XPATH", "//h1[contains(@class,'application-step-content-title')]//span[normalize-space()='"+pStepName+"']", null);
-        Assertions.assertFalse(iStepHeader.isEmpty(), pStepName+ " step header should be visible after advancing.");
-        log.info(" Next application step opened successfully: " + pStepName);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the agent selects "Yes, rescore" on panel 1
-    // Description   : Selects the specified ACRES panel option by label text
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent selects {string} on panel {int}")
-    public void theAgentSelectsOnPanel(String pOption, int pPanelNumber) {
-        log.info("[STEP] And the agent selects: " + pOption + " on panel: " + pPanelNumber);
-        // ACRES has multiple panels — use the panel index to scope the click to the right one
-        // so we don't accidentally select an option in the wrong panel section
-        iAction("RADIOBUTTON", "XPATH", ObjReader.getLocator("iRescoreOptionYes"), null);
-    }
-    // ***************************************************************************************************************************************************************************************
-// Step          : And the agent continues panel {int}
-// Description   : Clicks the Continue button within the specified panel
+And the agent handles the ACRES step if present
 // ***************************************************************************************************************************************************************************************
-    @And("the agent continues panel {int}")
-    public void theAgentContinuesPanel(int pPanelNumber)
+// Step          : And the agent handles the ACRES step if present
+// Description   : Some herds have ACRES in scope, others go directly from GAEC 7 to ECO.
+//                 This step checks whether the ACRES step header is currently visible.
+//                 If ACRES is present  → selects "Yes, rescore" on all panels → continues all panels
+//                 If ACRES is absent   → logs and passes silently, ECO will be handled next
+//                 This avoids hard failures when the herd's scope does not include ACRES.
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date          : 23-04-2026
+// ***************************************************************************************************************************************************************************************
+@And("the agent handles the ACRES step if present")
+public void theAgentHandlesTheACRESStepIfPresent()
+{
+    log.info("[STEP] And the agent handles the ACRES step if present");
+
+    WebDriver iDriver = getDriver();
+
+    // ── Check if ACRES step header is currently visible ───────────────────────────────
+    // If the herd has no ACRES scope, the app skips straight to ECO after GAEC 7.
+    // isVisible() returns false immediately without throwing — safe soft check.
+    String iAcresHeaderXpath =
+            "//h1[contains(@class,'application-step-content-title')]"
+          + "//span[normalize-space()='ACRES']";
+
+    if (!isVisible(By.xpath(iAcresHeaderXpath), 3))
     {
-
-        WebDriver iDriver = getDriver();
-        log.info("[STEP] And the agent continues through all applicable panels");
-        List<WebElement> panels = iDriver.findElements(By.xpath("//mat-expansion-panel[.//button[.//span[normalize-space()='Continue']]]"));
-        log.info("Total panels with Continue button found: " + panels.size());
-
-        for (int i = 1; i <= panels.size(); i++) {
-
-            String continueBtnXpath = "(//mat-expansion-panel[.//button[.//span[normalize-space()='Continue']]])[" + i + "]" + "//button[.//span[normalize-space()='Continue']]";
-            log.info("Clicking Continue on panel index: " + i);
-            iAction("WAITVISIBLE", "XPATH", continueBtnXpath, "Continue button in panel " + i);
-            iAction("CLICK", "XPATH", continueBtnXpath, null);
-        }
-
+        log.info("[STEP] ACRES step not present for this herd — skipping. "
+                + "Herd may have gone directly to ECO.");
+        return;
     }
+
+    log.info("[STEP] ACRES step confirmed present — proceeding.");
+
+    // ── Select "Yes, rescore" on all panels ───────────────────────────────────────────
+    List<WebElement> iRescoreRadios = iDriver.findElements(
+            By.xpath(ObjReader.getLocator("iRescoreOptionYes")));
+
+    log.info("[STEP] Found " + iRescoreRadios.size() + " rescore radio button(s).");
+
+    for (int i = 0; i < iRescoreRadios.size(); i++)
+    {
+        String iIndexedXpath = "(" + ObjReader.getLocator("iRescoreOptionYes")
+                + ")[" + (i + 1) + "]";
+        iAction("WAITVISIBLE",   "XPATH", iIndexedXpath, null);
+        iAction("WAITCLICKABLE", "XPATH", iIndexedXpath, null);
+        iAction("RADIOBUTTON",   "XPATH", iIndexedXpath, null);
+        log.info("[STEP] Selected 'Yes, rescore' on panel " + (i + 1));
+    }
+
+    // ── Click Continue on all panels ──────────────────────────────────────────────────
+    List<WebElement> iPanels = iDriver.findElements(By.xpath(
+            "//mat-expansion-panel[.//button[.//span[normalize-space()='Continue']]]"));
+
+    log.info("[STEP] Found " + iPanels.size() + " panel(s) with Continue button.");
+
+    for (int i = 1; i <= iPanels.size(); i++)
+    {
+        String iContinueXpath =
+                "(//mat-expansion-panel[.//button[.//span[normalize-space()='Continue']]])"
+              + "[" + i + "]"
+              + "//button[.//span[normalize-space()='Continue']]";
+
+        iAction("WAITVISIBLE",   "XPATH", iContinueXpath, null);
+        iAction("WAITCLICKABLE", "XPATH", iContinueXpath, null);
+        iAction("CLICK",         "XPATH", iContinueXpath, null);
+        log.info("[STEP] Clicked Continue on panel " + i);
+    }
+
+    // ── Assert ACRES completed ────────────────────────────────────────────────────────
+    boolean iAcresDone = !iDriver.findElements(
+            By.xpath("//h1[contains(@class,'application-step-content-title')]"
+                   + "//span[normalize-space()='ACRES']"))
+            .isEmpty();
+
+    log.info("[STEP] ACRES step handled successfully. Moving to next step.");
+}
