@@ -1,139 +1,52 @@
-# ── Preliminary Checks — Agricultural Activity dropdown fix ─────────────────
-iPrelimAgriActivityDataRows  = //biss-response-agactivity-table//tbody[contains(@class,'mdc-data-table__content')]//tr[contains(@class,'mdc-data-table__row')]
-iPrelimAgriActivityDropdown  = .//td[contains(@class,'cdk-column-otherAgActivity')]//mat-select
-iPrelimCdkOverlayFirstOption = //div[@role='listbox' and contains(@class,'mdc-menu-surface--open')]//mat-option[1]
+    # -----------------------------------------
+    # ACRES step
+    # -----------------------------------------
+    When the agent opens the "ACRES" step
+    And the agent selects "Yes, rescore" on panel 1
+    And the agent continues panel 1
+    Then the ACRES step should be completed successfully
 
-```
+    // ***************************************************************************************************************************************************************************************
+    // Step          : When the agent opens the "GAEC 7" step
+    // Description   : Clicks the GAEC 7 step link in the application navigation
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent opens the {string} step")
+    public void theAgentOpensTheStep(String pStepName) {
+        String iStepHeader = iAction("GETTEXT", "XPATH", "//h1[contains(@class,'application-step-content-title')]//span[normalize-space()='"+pStepName+"']", null);
+        Assertions.assertFalse(iStepHeader.isEmpty(), pStepName+ " step header should be visible after advancing.");
+        log.info(" Next application step opened successfully: " + pStepName);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : And the agent selects "Yes, rescore" on panel 1
+    // Description   : Selects the specified ACRES panel option by label text
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent selects {string} on panel {int}")
+    public void theAgentSelectsOnPanel(String pOption, int pPanelNumber) {
+        log.info("[STEP] And the agent selects: " + pOption + " on panel: " + pPanelNumber);
+        // ACRES has multiple panels — use the panel index to scope the click to the right one
+        // so we don't accidentally select an option in the wrong panel section
+        iAction("RADIOBUTTON", "XPATH", ObjReader.getLocator("iRescoreOptionYes"), null);
+    }
+    // ***************************************************************************************************************************************************************************************
+// Step          : And the agent continues panel {int}
+// Description   : Clicks the Continue button within the specified panel
 // ***************************************************************************************************************************************************************************************
-// Step          : Then the agent resolves any agricultural activity dropdown errors if present
-// Description   : After clicking Submit on the Preliminary Checks page, rows in the
-//                 No Agricultural Activity panel that have "Yes, change" selected show a
-//                 mandatory mat-select dropdown in cdk-column-otherAgActivity.
-//                 If the dropdown was not pre-filled, Angular marks it ng-invalid /
-//                 aria-invalid="true" and blocks submission.
-//
-//                 For every data row in biss-response-agactivity-table:
-//                   1. Check if the mat-select in cdk-column-otherAgActivity is
-//                      empty / invalid (aria-invalid="true" or mat-mdc-select-empty class)
-//                   2. If invalid → click the mat-select to open the CDK overlay panel
-//                   3. Wait for the overlay to appear
-//                   4. Click the FIRST mat-option in the panel
-//                   5. If not invalid → skip silently
-//
-//                 Step is safe to always include — if no invalid dropdowns are present
-//                 it passes silently without affecting the submission flow.
-//
-//                 Locators used:
-//                   iPrelimAgriActivityDataRows  — all data rows in agri activity table
-//                   iPrelimAgriActivityDropdown  — mat-select inside otherAgActivity cell
-//                   iPrelimCdkOverlayFirstOption — first mat-option in CDK overlay panel
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date          : 22-04-2026
-// ***************************************************************************************************************************************************************************************
-@Then("the agent resolves any agricultural activity dropdown errors if present")
-public void theAgentResolvesAnyAgriculturalActivityDropdownErrorsIfPresent()
-{
-    log.info("[STEP] Then the agent resolves any agricultural activity dropdown errors if present");
-
-    WebDriver iDriver = getDriver();
-
-    // ── All data rows scoped to biss-response-agactivity-table ────────────────────────
-    // Using absolute XPath from ObjectRepository — scoped to the agri activity component
-    // so we never accidentally touch the Overclaim or Dual Claim table rows
-    List<WebElement> iAllRows = iDriver.findElements(
-            By.xpath(ObjReader.getLocator("iPrelimAgriActivityDataRows")));
-
-    if (iAllRows.isEmpty())
+    @And("the agent continues panel {int}")
+    public void theAgentContinuesPanel(int pPanelNumber)
     {
-        log.info("[AGRI-FIX] No Agricultural Activity rows found — nothing to fix.");
-        return;
-    }
 
-    int iFixCount = 0;
+        WebDriver iDriver = getDriver();
+        log.info("[STEP] And the agent continues through all applicable panels");
+        List<WebElement> panels = iDriver.findElements(By.xpath("//mat-expansion-panel[.//button[.//span[normalize-space()='Continue']]]"));
+        log.info("Total panels with Continue button found: " + panels.size());
 
-    for (int i = 0; i < iAllRows.size(); i++)
-    {
-        WebElement iRow = iAllRows.get(i);
+        for (int i = 1; i <= panels.size(); i++) {
 
-        // ── Find the mat-select inside cdk-column-otherAgActivity for this row ─────────
-        // Relative XPath scoped to this row — cannot use iAction (root-based only)
-        List<WebElement> iDropdowns = iRow.findElements(
-                By.xpath(ObjReader.getLocator("iPrelimAgriActivityDropdown")));
-
-        if (iDropdowns.isEmpty())
-        {
-            log.info("[AGRI-FIX] Row " + (i + 1) + " — no dropdown present. Skipping.");
-            continue;
+            String continueBtnXpath = "(//mat-expansion-panel[.//button[.//span[normalize-space()='Continue']]])[" + i + "]" + "//button[.//span[normalize-space()='Continue']]";
+            log.info("Clicking Continue on panel index: " + i);
+            iAction("WAITVISIBLE", "XPATH", continueBtnXpath, "Continue button in panel " + i);
+            iAction("CLICK", "XPATH", continueBtnXpath, null);
         }
 
-        WebElement iDropdown = iDropdowns.get(0);
-
-        // ── Check if dropdown is invalid / empty ──────────────────────────────────────
-        // Angular marks it aria-invalid="true" when the required field has no selection.
-        // Also check for mat-mdc-select-empty class as a belt-and-braces guard.
-        String iAriaInvalid = iDropdown.getAttribute("aria-invalid");
-        String iClasses     = iDropdown.getAttribute("class");
-
-        boolean iIsInvalid = "true".equalsIgnoreCase(iAriaInvalid)
-                || (iClasses != null && iClasses.contains("mat-mdc-select-empty"));
-
-        if (!iIsInvalid)
-        {
-            log.info("[AGRI-FIX] Row " + (i + 1)
-                    + " — dropdown already has a value. Skipping.");
-            continue;
-        }
-
-        log.info("[AGRI-FIX] Row " + (i + 1)
-                + " — dropdown is empty/invalid. Selecting first option.");
-
-        // ── Click the mat-select trigger to open the CDK overlay panel ─────────────────
-        // Use JavaScript click — Angular mat-select triggers can be intercepted by overlays
-        ((JavascriptExecutor) iDriver).executeScript("arguments[0].click();", iDropdown);
-
-        // ── Wait for the CDK overlay panel to appear ──────────────────────────────────
-        // The panel is appended to the body as a CDK overlay — not inside the table row
-        try
-        {
-            new org.openqa.selenium.support.ui.WebDriverWait(iDriver, java.time.Duration.ofSeconds(5))
-                    .until(org.openqa.selenium.support.ui.ExpectedConditions
-                            .visibilityOfElementLocated(
-                                    By.xpath(ObjReader.getLocator("iPrelimCdkOverlayFirstOption"))));
-        }
-        catch (Exception e)
-        {
-            log.warning("[AGRI-FIX] Row " + (i + 1)
-                    + " — CDK overlay did not appear after clicking dropdown. Skipping. "
-                    + e.getMessage());
-            continue;
-        }
-
-        // ── Click the first mat-option from the overlay panel ─────────────────────────
-        // Absolute XPath from ObjectRepository — panel is in body overlay, not in row
-        WebElement iFirstOption = iDriver.findElement(
-                By.xpath(ObjReader.getLocator("iPrelimCdkOverlayFirstOption")));
-
-        String iOptionText = iFirstOption.getText().trim();
-        iFirstOption.click();
-
-        iFixCount++;
-        log.info("[AGRI-FIX] Row " + (i + 1)
-                + " — selected first option: '" + iOptionText + "'");
-
-        // Re-fetch rows after Angular re-renders to avoid stale element on next iteration
-        iAllRows = iDriver.findElements(
-                By.xpath(ObjReader.getLocator("iPrelimAgriActivityDataRows")));
     }
-
-    if (iFixCount > 0)
-    {
-        log.info("[AGRI-FIX] Fixed " + iFixCount
-                + " agricultural activity dropdown(s). Ready to re-submit.");
-    }
-    else
-    {
-        log.info("[AGRI-FIX] No invalid dropdowns found — submission can proceed.");
-    }
-}
-```
