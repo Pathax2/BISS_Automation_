@@ -44,7 +44,13 @@ private static final String iDefaultOutputPath = System.getProperty(
 // ***************************************************************************************************************************************************************************************
 public static void generate()
 {
-    generate(iDefaultOutputPath);
+    // Inject timestamp into the filename so each run produces a unique file.
+    // e.g. BISS_Execution_Report_2026-04-24_09-10-12.html
+    String iTimestamp = java.time.LocalDateTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+    String iTimestampedPath = iDefaultOutputPath
+            .replace(".html", "_" + iTimestamp + ".html");
+    generate(iTimestampedPath);
 }
 
 // ***************************************************************************************************************************************************************************************
@@ -111,6 +117,7 @@ public static void generate(String pOutputPath)
     iHtml.append("    <span class=\"meta-pill\">").append(esc(ReportManager.getEnvironment())).append("</span>\n");
     iHtml.append("    <span class=\"meta-pill\">").append(esc(ReportManager.getBrowser())).append("</span>\n");
     iHtml.append("    <span class=\"meta-pill\">Build ").append(esc(ReportManager.getBuildNumber())).append("</span>\n");
+    iHtml.append("    <button class=\"pdf-export-btn\" onclick=\"exportToPDF()\" title=\"Export report as PDF\">&#8203;&#x2913; Export PDF</button>\n");
     iHtml.append("  </div>\n");
     iHtml.append("</header>\n");
 
@@ -220,7 +227,8 @@ public static void generate(String pOutputPath)
         {
             iHtml.append("      <div class=\"detail-screenshot\">\n");
             iHtml.append("        <span class=\"screenshot-label\">&#128247; Screenshot</span>\n");
-            iHtml.append("        <a href=\"").append(esc(r.iScreenshotPath)).append("\" target=\"_blank\" class=\"screenshot-link\">").append(esc(r.iScreenshotPath)).append("</a>\n");
+            String iRelShot = relativizePath(r.iScreenshotPath, pOutputPath);
+            iHtml.append("        <a href=\"").append(esc(iRelShot)).append("\" target=\"_blank\" class=\"screenshot-link\">").append(esc(r.iScreenshotPath)).append("</a>\n");
             iHtml.append("      </div>\n");
         }
 
@@ -278,7 +286,8 @@ public static void generate(String pOutputPath)
                     {
                         iHtml.append("                <div class=\"step-log-section\">\n");
                         iHtml.append("                  <div class=\"step-log-label\">&#128247; Screenshot</div>\n");
-                        iHtml.append("                  <a href=\"").append(esc(step.iScreenshotPath)).append("\" target=\"_blank\" class=\"screenshot-link\">").append(esc(step.iScreenshotPath)).append("</a>\n");
+                        String iRelStepShot = relativizePath(step.iScreenshotPath, pOutputPath);
+                        iHtml.append("                  <a href=\"").append(esc(iRelStepShot)).append("\" target=\"_blank\" class=\"screenshot-link\">").append(esc(step.iScreenshotPath)).append("</a>\n");
                         iHtml.append("                </div>\n");
                     }
 
@@ -305,6 +314,14 @@ public static void generate(String pOutputPath)
     // --- FOOTER ---
     iHtml.append("<footer class=\"report-footer\">\n");
     iHtml.append("  <span>BISS Automation Framework</span>\n");
+    // Word document link — only rendered if a doc path was registered
+    String iWordPath = ReportManager.getWordDocPath();
+    if (!iWordPath.isEmpty())
+    {
+        String iRelWord = relativizePath(iWordPath, pOutputPath);
+        iHtml.append("  <span class=\"footer-dot\">&middot;</span>\n");
+        iHtml.append("  <a href=\"").append(esc(iRelWord)).append("\" class=\"footer-word-link\" title=\"Open Word Report\">&#128196; Word Report</a>\n");
+    }
     iHtml.append("  <span class=\"footer-dot\">&middot;</span>\n");
     iHtml.append("  <span>Generated ").append(esc(ReportManager.getSuiteEndTime())).append("</span>\n");
     iHtml.append("  <span class=\"footer-dot\">&middot;</span>\n");
@@ -320,6 +337,31 @@ public static void generate(String pOutputPath)
     iHtml.append(buildJS(iPass, iFail, iError, iPassSteps, iFailSteps, iSkipSteps, iResults));
     iHtml.append("</script>\n");
 
+    iHtml.append("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js\"></script>\n");
+    iHtml.append("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js\"></script>\n");
+    iHtml.append("<script>\n");
+    iHtml.append("function exportToPDF() {\n");
+    iHtml.append("  var btn = document.querySelector('.pdf-export-btn');\n");
+    iHtml.append("  btn.textContent = 'Generating...'; btn.disabled = true;\n");
+    iHtml.append("  var shell = document.querySelector('.report-shell');\n");
+    iHtml.append("  html2canvas(shell, {\n");
+    iHtml.append("    scale: 2, useCORS: true, backgroundColor: '#0D1117', logging: false,\n");
+    iHtml.append("    windowWidth: shell.scrollWidth, windowHeight: shell.scrollHeight\n");
+    iHtml.append("  }).then(function(canvas) {\n");
+    iHtml.append("    var imgData = canvas.toDataURL('image/png');\n");
+    iHtml.append("    var pdf = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'px', format: [canvas.width/2, canvas.height/2] });\n");
+    iHtml.append("    pdf.addImage(imgData, 'PNG', 0, 0, canvas.width/2, canvas.height/2);\n");
+    iHtml.append("    var fn = 'BISS_Report_' + new Date().toISOString().slice(0,10) + '.pdf';\n");
+    iHtml.append("    pdf.save(fn);\n");
+    iHtml.append("    btn.textContent = '\u2713 Exported'; btn.disabled = false;\n");
+    iHtml.append("    setTimeout(function(){ btn.textContent = '\u2913 Export PDF'; }, 3000);\n");
+    iHtml.append("  }).catch(function(err) {\n");
+    iHtml.append("    console.error('PDF export failed:', err);\n");
+    iHtml.append("    btn.textContent = 'Export failed'; btn.disabled = false;\n");
+    iHtml.append("    setTimeout(function(){ btn.textContent = '\u2913 Export PDF'; }, 3000);\n");
+    iHtml.append("  });\n");
+    iHtml.append("}\n");
+    iHtml.append("</script>\n");
     iHtml.append("</body>\n</html>\n");
 
     // --- WRITE FILE ---
@@ -386,7 +428,11 @@ private static String buildCSS()
     c.append(".top-bar-divider { width: 1px; height: 24px; background: var(--border-primary); }\n");
     c.append(".top-bar-label { font-size: 0.93rem; color: var(--text-secondary); font-weight: 500; letter-spacing: 0.02em; }\n");
     c.append(".top-bar-right { display: flex; gap: 8px; }\n");
-    c.append(".meta-pill { font-size: 0.78rem; font-weight: 600; padding: 5px 14px; border-radius: 100px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-primary); letter-spacing: 0.03em; text-transform: uppercase; }\n\n");
+    c.append(".meta-pill { font-size: 0.78rem; font-weight: 600; padding: 5px 14px; border-radius: 100px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-primary); letter-spacing: 0.03em; text-transform: uppercase; }\n");
+    c.append(".pdf-export-btn { font-size: 0.78rem; font-weight: 700; padding: 6px 18px; border-radius: 100px; background: #10B981; color: #fff; border: none; cursor: pointer; letter-spacing: 0.03em; text-transform: uppercase; transition: opacity 0.2s; align-self: center; }\n");
+    c.append(".pdf-export-btn:hover { opacity: 0.85; }\n");
+    c.append(".pdf-export-btn:active { opacity: 0.7; }\n");
+    c.append("@media print { .pdf-export-btn { display: none; } }\n\n");
 
     // --- META RIBBON ---
     c.append(".meta-ribbon { display: flex; flex-wrap: wrap; gap: 24px; padding: 16px 24px; background: var(--bg-card); border: 1px solid var(--border-primary); border-radius: var(--radius-lg); margin-bottom: 24px; }\n");
@@ -523,7 +569,9 @@ private static String buildCSS()
 
     // --- FOOTER ---
     c.append(".report-footer { margin-top: 32px; padding: 16px 0; border-top: 1px solid var(--border-primary); display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 0.78rem; color: var(--text-tertiary); }\n");
-    c.append(".footer-dot { color: var(--border-primary); }\n\n");
+    c.append(".footer-dot { color: var(--border-primary); }\n");
+    c.append(".footer-word-link { color: var(--accent-blue); text-decoration: none; font-weight: 600; }\n");
+    c.append(".footer-word-link:hover { text-decoration: underline; }\n\n");
 
     // --- ANIMATIONS ---
     c.append("@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }\n");
@@ -766,6 +814,31 @@ private static String escJS(String pText)
             .replace("\"", "\\\"")
             .replace("\n", "\\n")
             .replace("\r", "");
+}
+
+// ***********************************************************************
+// Function Name : relativizePath
+// Description   : Converts an absolute screenshot path to a path relative
+//                 to the HTML report file so browser <a href> works when
+//                 the report is opened as a local file:// URL.
+//                 Falls back to the original path if relativization fails.
+// ***********************************************************************
+private static String relativizePath(String pAbsPath, String pHtmlOutputPath)
+{
+    if (pAbsPath == null || pAbsPath.isBlank()) return "";
+    try
+    {
+        java.nio.file.Path iHtmlDir  = java.nio.file.Paths.get(pHtmlOutputPath)
+                .toAbsolutePath().getParent();
+        java.nio.file.Path iTarget   = java.nio.file.Paths.get(pAbsPath).toAbsolutePath();
+        String iRelative = iHtmlDir.relativize(iTarget).toString()
+                .replace(java.io.File.separatorChar, '/');
+        return iRelative;
+    }
+    catch (Exception e)
+    {
+        return pAbsPath; // fallback — better a broken link than a crash
+    }
 }
 
 private static void writeFile(String pPath, String pContent)
