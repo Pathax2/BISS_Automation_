@@ -1,19 +1,23 @@
-SELECT ap_ri.app_herd_no
-FROM vwbs_application ap_ri
-WHERE ap_ri.app_mde_code = 1
-AND ap_ri.app_year = 2026
-AND ap_ri.app_herd_no LIKE 'A%'
-AND EXISTS (
-    SELECT 1 FROM tdbs_application_land x
-    WHERE x.apl_year        = ap_ri.app_year
-    AND   x.apl_app_id      = ap_ri.app_id
-    AND   x.apl_deleted_ind = 'N'
+SELECT hbcus.bcus_bus_id AS HERDNO,
+       COUNT(DISTINCT ui.uri_username) AS AGENT_COUNT,
+       MIN(ui.uri_username) AS FIRST_AGENT,
+       MAX(ui.uri_username) AS LAST_AGENT,
+       LISTAGG(ui.uri_username, ', ')
+           WITHIN GROUP (ORDER BY ui.uri_username) AS ALL_AGENTS
+FROM tdco_customer_asscs ca,
+     tdco_business_customers abcus,
+     tdco_business_customers hbcus,
+     tdcr_user_info ui
+WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date
+AND ca.ca_cac_code     = 194
+AND ca.ca_bcus_id_from = abcus.bcus_id
+AND ca.ca_bcus_id_to   = hbcus.bcus_id
+AND ui.uri_ccs_bus_id  = abcus.bcus_bus_id
+AND hbcus.bcus_bus_id IN (
+    'A101001X','A1010070','A1010096','A1010100','A1010312',
+    'A1010452','A1010479','A1010525','A1010584','A1010592',
+    'A1010720','A1010746','A1010797','A1011041','A1011050'
 )
-AND NOT EXISTS (
-    SELECT 1 FROM vwbs_application app
-    WHERE app.app_year     = ap_ri.app_year
-    AND   app.app_herd_no  = ap_ri.app_herd_no
-    AND   app.app_mde_code IN (3, 4, 6, 8)
-)
-AND ROWNUM <= 15
-ORDER BY ap_ri.app_herd_no;
+GROUP BY hbcus.bcus_bus_id
+HAVING COUNT(DISTINCT ui.uri_username) = 1
+ORDER BY hbcus.bcus_bus_id;
