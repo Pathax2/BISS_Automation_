@@ -1,260 +1,58 @@
-// ===================================================================================================================================
-// FILE          : performMatSelect_improved.java
-// DESCRIPTION   : Drop-in replacement for performMatSelect() in CommonFunctions.java
-//
-//                 PROBLEM FOUND IN DOM ANALYSIS (TC_003):
-//                 The BISS application uses TWO types of mat-select:
-//
-//                   Type A — Standard mat-select (ownershipStatus, organicStatus, page-size)
-//                     Panel contains only mat-option elements
-//                     Current code handles this correctly
-//
-//                   Type B — Searchable mat-select (county, townland, plotUse)
-//                     Wrapped in <lib-biss-select-search> + <ngx-mat-select-search>
-//                     Panel contains a DISABLED mat-option as row 0 with a live search <input>
-//                     class: "contains-mat-select-search mdc-list-item--disabled"
-//                     Current code fails because:
-//                       - getText() on the search row returns "" — loop passes it silently
-//                       - BUT the search input FILTERS the options list dynamically
-//                       - Without typing into the search input, long lists may not show the target
-//                       - After Angular filters, the visible options change — the old loop
-//                         may have already committed to a stale options list
-//
-//                 IMPROVEMENTS IN THIS VERSION:
-//                   1. Detects whether the panel is searchable (ngx-mat-select-search present)
-//                   2. If searchable — types into the search input to filter, then selects
-//                   3. Skips the disabled search row when iterating mat-options
-//                   4. Adds StaleElementReferenceException retry inside the option loop
-//                   5. Adds explicit wait after typing for Angular to filter the list
-//                   6. Panel close wait wrapped in try-catch (panel may close before wait fires)
-//                   7. Better error messages — logs all visible option texts on failure
-//
-// HOW TO INTEGRATE:
-//   Replace the existing performMatSelect() method in CommonFunctions.java with this version.
-//   No other changes needed — performList() already calls performMatSelect() correctly.
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 24-03-2026
-// ===================================================================================================================================
+AMS round 1 (2026) Farmer Dashboard (pre submit)test only
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : performMatSelect
-    // Description   : Selects an option from an Angular Material <mat-select> component.
-    //                 Handles both standard mat-select and searchable mat-select
-    //                 (lib-biss-select-search + ngx-mat-select-search) automatically.
-    //
-    //                 Detection:
-    //                   Checks whether the open panel contains a disabled mat-option with
-    //                   class "contains-mat-select-search". If yes — searchable mode.
-    //                   If no — standard mode (existing behaviour).
-    //
-    //                 Standard mat-select flow:
-    //                   1. Click trigger → open panel
-    //                   2. Wait for mat-option elements
-    //                   3. Match by text / index
-    //                   4. Click option → wait for panel to close
-    //
-    //                 Searchable mat-select flow:
-    //                   1. Click trigger → open panel
-    //                   2. Detect search input (ngx-mat-select-search)
-    //                   3. Type value into search input → Angular filters the list
-    //                   4. Wait for optionListItem options to appear
-    //                   5. Match first option whose text matches target
-    //                   6. Click option → wait for panel to close
-    //
-    //                 Value prefix support (same for both modes):
-    //                   VISIBLETEXT:value  → match by visible option text (default)
-    //                   VALUE:value        → treated as VISIBLETEXT for mat-select
-    //                   INDEX:n            → select by 0-based index (skips search row)
-    //                   plain text         → treated as VISIBLETEXT
-    //
-    // Parameters    : pDriver  (WebDriver)     - current thread driver
-    //                 pWait    (WebDriverWait) - current thread wait
-    //                 pElement (WebElement)    - the mat-select trigger element
-    //                 pValue   (String)        - selection strategy + value
-    // ***************************************************************************************************************************************************************************************
-    private static void performMatSelect(WebDriver pDriver, WebDriverWait pWait,
-                                         WebElement pElement, String pValue)
-    {
-        // ── Step 1 : Open the panel ───────────────────────────────────────────────────────────
-        try
-        {
-            String iIsExpanded = pElement.getAttribute("aria-expanded");
-            if ("true".equalsIgnoreCase(iIsExpanded))
-            {
-                log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel already expanded — skipping trigger click.");
-            }
-            else
-            {
-                pElement.click();
-            }
-        }
-        catch (ElementClickInterceptedException iEx)
-        {
-            log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | Click intercepted — retrying with JS click.");
-            ((JavascriptExecutor) pDriver).executeScript("arguments[0].click();", pElement);
-        }
 
-        // ── Step 2 : Wait for the overlay panel ──────────────────────────────────────────────
-        By iPanelBy = By.cssSelector(
-                "div[role='listbox'].mat-mdc-select-panel, " +
-                "div[role='listbox'].mdc-menu-surface--open, " +
-                "div[role='listbox']");
+Key details
+Description
 
-        WebElement iPanel = pWait.until(ExpectedConditions.visibilityOfElementLocated(iPanelBy));
-        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel opened.");
+Farmer dashboard AMS findings panel to be displayed to all those with Red findings Round 1
+Is not shown for anyone with no findings
+Pre-submit, those with Red findings see findings, count and Respond to findings button
+For partnerships - only PP can see Respond to findings
 
-        // ── Step 3 : Detect if this is a searchable panel ────────────────────────────────────
-        // ngx-mat-select-search renders a disabled mat-option with class "contains-mat-select-search"
-        // as the very first item in the panel
-        boolean iIsSearchable = !iPanel.findElements(
-                By.cssSelector("mat-option.contains-mat-select-search")).isEmpty();
+(note - change to message from last year - new date)
 
-        if (iIsSearchable)
-        {
-            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Searchable panel detected (ngx-mat-select-search).");
-        }
+ 
 
-        // ── Step 4 : Resolve value and strategy ──────────────────────────────────────────────
-        String iUpperValue = pValue.toUpperCase();
+Post submit scenarios - (test only) in Jira BISSAGL-X
 
-        if (iUpperValue.startsWith("INDEX:"))
-        {
-            // ── INDEX selection ───────────────────────────────────────────────────────────────
-            // For searchable panels, index skips the disabled search row (row 0)
-            int iIndex = Integer.parseInt(pValue.substring("INDEX:".length()).trim());
+Steps to Reproduce / Requirement Steps
 
-            // Use optionListItem class to exclude the disabled search row
-            By iOptionBy = iIsSearchable
-                    ? By.cssSelector("mat-option.optionListItem")
-                    : By.cssSelector("mat-option:not(.contains-mat-select-search)");
 
-            java.util.List<WebElement> iOptions = pWait.until(iWebDriver ->
-            {
-                java.util.List<WebElement> iOpts = iPanel.findElements(iOptionBy);
-                return iOpts.size() > iIndex ? iOpts : null;
-            });
+Scenario1 : Given I am logged on as a farmer/agent to BISS (pre-submit)
+And if I have any Red notifications from AMS
+And I see panel
+With header AMS findings
+And underneath I see AMS status
+And I see a red triangle symbol showing my Red notifications, with the label “AMS findings”
+And I see a label marked Response required with a red symbol to the right
+And I see Amount and the number of red notifications I have
+And I see Respond to findings button (green)
+And when I press it it will take me to the AMS screen
+And I will see a message in this panel –" You have until 8 July 2026 to respond to your AMS notifications"
 
-            WebElement iTarget = iOptions.get(iIndex);
-            scrollIntoView(pDriver, iTarget);
-            highlightElement(pDriver, iTarget);
-            iTarget.click();
+Scenario2: Given I am logged on as a farmer/agent to BISS
+And if I dont have any Red notifications from AMS
+I will not see the AMS findings panel displayed on the Farmer Dashboard
 
-            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by INDEX: " + iIndex);
-        }
-        else
-        {
-            // ── VISIBLETEXT / VALUE / plain text ──────────────────────────────────────────────
-            String iTargetText;
+Scenario3 : Given I am logged on as a farmer in a partnership and I am the primary partner
+And if I have any Red notifications from AMS
+And I see panel
+With header AMS findings
+And underneath I see AMS status
+And I see a red triangle symbol showing my Red notifications, with the label “AMS findings”
+And I see a label marked Response required with a red symbol to the right
+And I see Amount and the number of red notifications I have
+And I see Respond to findings button (green)
+And when I press it it will take me to the AMS screen
+And I will see a message in this panel –" You have until 8 July 2026 to respond to your AMS notifications"
 
-            if (iUpperValue.startsWith("VISIBLETEXT:"))
-            {
-                iTargetText = pValue.substring("VISIBLETEXT:".length()).trim();
-            }
-            else if (iUpperValue.startsWith("VALUE:"))
-            {
-                iTargetText = pValue.substring("VALUE:".length()).trim();
-                log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | VALUE: prefix treated as VISIBLETEXT: '" + iTargetText + "'");
-            }
-            else
-            {
-                iTargetText = pValue.trim();
-            }
-
-            final String iFinalTarget = iTargetText;
-
-            if (iIsSearchable)
-            {
-                // ── Searchable mode : type into search input to filter ────────────────────────
-                // Find the visible search input inside the disabled search mat-option
-                By iSearchInputBy = By.cssSelector(
-                        "mat-option.contains-mat-select-search input.mat-select-search-input:not(.mat-select-search-hidden)");
-
-                WebElement iSearchInput = pWait.until(
-                        ExpectedConditions.visibilityOfElementLocated(iSearchInputBy));
-
-                // Clear existing text and type the filter value
-                iSearchInput.clear();
-                iSearchInput.sendKeys(iFinalTarget);
-
-                log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Typed into search input: '" + iFinalTarget + "'");
-
-                // Wait for Angular to filter the options list
-                // optionListItem is only present on actual selectable options (not the search row)
-                By iFilteredOptionBy = By.cssSelector("mat-option.optionListItem");
-
-                pWait.until(iWebDriver ->
-                        !iPanel.findElements(iFilteredOptionBy).isEmpty());
-            }
-
-            // ── Find and click matching option ────────────────────────────────────────────────
-            // For searchable: look at optionListItem options only
-            // For standard:   exclude the disabled search row just in case
-            By iOptionSelector = iIsSearchable
-                    ? By.cssSelector("mat-option.optionListItem")
-                    : By.cssSelector("mat-option:not(.contains-mat-select-search)");
-
-            WebElement iTargetOption = pWait.until(iWebDriver ->
-            {
-                java.util.List<WebElement> iOptions = iPanel.findElements(iOptionSelector);
-
-                for (WebElement iOption : iOptions)
-                {
-                    try
-                    {
-                        String iText = iOption.getText().trim();
-
-                        if (iText.equalsIgnoreCase(iFinalTarget))
-                        {
-                            return iOption;
-                        }
-                    }
-                    catch (org.openqa.selenium.StaleElementReferenceException iStale)
-                    {
-                        // Option list refreshed due to Angular filtering — retry on next poll
-                        return null;
-                    }
-                }
-                return null;
-            });
-
-            if (iTargetOption == null)
-            {
-                // Log all visible option texts to help diagnose mismatches
-                StringBuilder iAvailableOptions = new StringBuilder();
-                try
-                {
-                    iPanel.findElements(By.cssSelector("mat-option.optionListItem, mat-option:not(.contains-mat-select-search)"))
-                            .forEach(iOpt -> iAvailableOptions.append("'").append(iOpt.getText().trim()).append("' | "));
-                }
-                catch (Exception ignored) {}
-
-                pressEscape(pDriver);
-
-                throw new RuntimeException(
-                    "MAT-SELECT | Option not found: '" + iFinalTarget + "'\n" +
-                    "Available options: " + iAvailableOptions + "\n" +
-                    "If this is a searchable dropdown — verify the text matches exactly after filtering.");
-            }
-
-            scrollIntoView(pDriver, iTargetOption);
-            highlightElement(pDriver, iTargetOption);
-            iTargetOption.click();
-
-            log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selected by text: '" + iFinalTarget + "'");
-        }
-
-        // ── Step 5 : Wait for panel to close ─────────────────────────────────────────────────
-        // Wrapped in try-catch — panel may close before the invisibility wait initialises
-        try
-        {
-            pWait.until(ExpectedConditions.invisibilityOfElementLocated(
-                    By.cssSelector("div[role='listbox'].mdc-menu-surface--open")));
-        }
-        catch (Exception ignored)
-        {
-            // Panel already closed — continue
-        }
-
-        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Selection complete.");
-    }
+Scenario4 : Given I am logged on as a farmer in a partnership and I am not the primary partner
+And if I have any Red notifications from AMS
+And I see panel
+With header AMS (Area Monitoring System) findings
+And underneath I see AMS status
+And I see a red triangle symbol showing my Red notifications, with the label “AMS findings”
+And I see a label marked Response required with a red symbol to the right
+And I see Amount and the number of red notifications I have
+And I dont see the Respond to findings button (green)
+Then I will see a message in this panel –"The Primary Partner has until 8 July 2026 to respond to your AMS notifications"
