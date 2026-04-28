@@ -1,58 +1,448 @@
-AMS round 1 (2026) Farmer Dashboard (pre submit)test only
+# AMS Round 1 (2026) — Farmer Dashboard AMS Findings Panel
 
+## Jira Test Cases | Pre-Submit | Test Only
 
-Key details
-Description
+-----
 
-Farmer dashboard AMS findings panel to be displayed to all those with Red findings Round 1
-Is not shown for anyone with no findings
-Pre-submit, those with Red findings see findings, count and Respond to findings button
-For partnerships - only PP can see Respond to findings
+## 📋 Overview
 
-(note - change to message from last year - new date)
+**Feature:** AMS Findings Panel — Farmer Dashboard
+**Round:** Round 1 — 2026
+**Environment:** CENTEST
+**Application:** Basic Income Support for Sustainability (BISS)
+**Scope:** Pre-Submit only (Not Started or Draft)
+**Test Type:** Test only (not regression)
+**Created by:** Aniket Pathare | aniket.pathare@government.ie
+**Date:** 28-Apr-2026
+**Post-Submit Scenarios:** Separate ticket — BISSAGL-X
 
- 
+**Context:**
+The AMS (Area Monitoring System) uses satellite imagery to monitor parcels declared under BISS.
+When a potential non-compliance is found (e.g. Artificial Surface, crop mismatch, Agricultural
+Activity), a Red finding is generated for that herd. These findings appear on the Farmer Dashboard
+as an AMS Findings panel, prompting the farmer or agent to respond before 8 July 2026.
 
-Post submit scenarios - (test only) in Jira BISSAGL-X
+**Important — Date Message Changed from Last Year:**
+The deadline message has been updated for 2026. All test cases must verify the panel shows
+the new 2026 date and NOT the previous year’s deadline.
 
-Steps to Reproduce / Requirement Steps
+- Individual / Primary Partner: **“You have until 8 July 2026 to respond to your AMS notifications”**
+- Non-Primary Partner: **“The Primary Partner has until 8 July 2026 to respond to your AMS notifications”**
 
+-----
 
-Scenario1 : Given I am logged on as a farmer/agent to BISS (pre-submit)
-And if I have any Red notifications from AMS
-And I see panel
-With header AMS findings
-And underneath I see AMS status
-And I see a red triangle symbol showing my Red notifications, with the label “AMS findings”
-And I see a label marked Response required with a red symbol to the right
-And I see Amount and the number of red notifications I have
-And I see Respond to findings button (green)
-And when I press it it will take me to the AMS screen
-And I will see a message in this panel –" You have until 8 July 2026 to respond to your AMS notifications"
+## 🗃️ Test Data — SQL Queries
 
-Scenario2: Given I am logged on as a farmer/agent to BISS
-And if I dont have any Red notifications from AMS
-I will not see the AMS findings panel displayed on the Farmer Dashboard
+> All queries sourced from the BISS test data reference document.
+> Update scheme_year / app_year to 2026 before running.
+> BISS_DATA queries: run on CENTEST_BISS_DATA.
+> BISS_INET query: run on CENTEST_BISS_INET.
 
-Scenario3 : Given I am logged on as a farmer in a partnership and I am the primary partner
-And if I have any Red notifications from AMS
-And I see panel
-With header AMS findings
-And underneath I see AMS status
-And I see a red triangle symbol showing my Red notifications, with the label “AMS findings”
-And I see a label marked Response required with a red symbol to the right
-And I see Amount and the number of red notifications I have
-And I see Respond to findings button (green)
-And when I press it it will take me to the AMS screen
-And I will see a message in this panel –" You have until 8 July 2026 to respond to your AMS notifications"
+-----
 
-Scenario4 : Given I am logged on as a farmer in a partnership and I am not the primary partner
-And if I have any Red notifications from AMS
-And I see panel
-With header AMS (Area Monitoring System) findings
-And underneath I see AMS status
-And I see a red triangle symbol showing my Red notifications, with the label “AMS findings”
-And I see a label marked Response required with a red symbol to the right
-And I see Amount and the number of red notifications I have
-And I dont see the Respond to findings button (green)
-Then I will see a message in this panel –"The Primary Partner has until 8 July 2026 to respond to your AMS notifications"
+### Query 1 — Individual Herd with AMS Findings + Pre-Submit + Active Registration
+
+**Sources:** Q70 (VWBS_AMS_NOTIFIED_HERD) + Q87 (app_mde_code pre-submit) + Q93 (active registration)
+**Used for:** TC-AMS-01 and TC-AMS-02
+
+**Note:** Q70 alone is not sufficient — it returns herds regardless of application status including
+Submitted herds. Q87 adds the pre-submit filter (app_mde_code IN 1,2,3). Q93 adds the active
+herd registration check (bcus_bus_end_date > SYSDATE). All three must be combined.
+
+```sql
+SELECT ams.herd_no,
+       ams.scheme_year,
+       a.app_mde_code,
+       a.mde_desc        AS app_status,
+       bbd.bcus_bus_end_date
+FROM VWBS_AMS_NOTIFIED_HERD ams
+JOIN vwbs_application a
+    ON  a.app_herd_no  = ams.herd_no
+    AND a.app_year     = ams.scheme_year
+    AND a.app_mde_code IN (1, 2, 3)
+JOIN vwco_biss_business_details bbd
+    ON  bbd.bcus_bus_id    = ams.herd_no
+    AND bbd.bcus_role_code = 100
+    AND bbd.bcus_bus_end_date > SYSDATE
+WHERE ams.scheme_year = 2026
+AND   ams.expired     = 0
+AND   ROWNUM <= 10
+ORDER BY ams.herd_no;
+```
+
+-----
+
+### Query 2 — Herds with BOTH AMS and Preliminary Check Findings Active
+
+**Source:** Q74 (vwbs_land_validation, HAVING COUNT DISTINCT lvt_abbrev > 1)
+**Used for:** TC-AMS-01 enriched test data — herd with multiple finding types
+
+```sql
+-- lvs_abbrev NOT IN ('E','V','W') = active/pending findings only
+-- E=Error, V=Validated, W=Withdrawn excluded
+-- HAVING COUNT > 1 = herd has both AMS and PC findings
+SELECT lvl_year,
+       lvl_herd_no,
+       lvl_lnu_id,
+       lvl_commonage_id,
+       COUNT(DISTINCT lvt_abbrev) AS count_finding_types
+FROM vwbs_land_validation
+WHERE lvl_year   = 2026
+AND   lvs_abbrev NOT IN ('E', 'V', 'W')
+GROUP BY lvl_year, lvl_herd_no, lvl_lnu_id, lvl_commonage_id
+HAVING COUNT(DISTINCT lvt_abbrev) > 1
+ORDER BY lvl_herd_no;
+```
+
+-----
+
+### Query 3 — Herds with AMS Agricultural Activity Error and No Admin Inspection
+
+**Source:** Q75 (vwbs_error_land, ers_abbrev=‘A’, ety_code=2028)
+**Used for:** TC-AMS-01 — herd with specifically AA type AMS finding
+
+```sql
+-- ers_abbrev = 'A'  → AMS error type
+-- ety_code   = 2028 → Agricultural Activity Error code
+-- fn_CheckAdminInsp = 'N' → no completed admin inspection yet
+SELECT app_herd_no,
+       aph_herd_no,
+       parcel_id
+FROM vwbs_error_land
+WHERE eor_year   = 2026
+AND   ers_abbrev = 'A'
+AND   ety_code   = 2028
+AND   pkbs_inspection.fn_CheckAdminInsp(app_id, 'C') = 'N'
+ORDER BY app_herd_no;
+```
+
+-----
+
+### Query 4 — AMS Crop Mismatch Herds
+
+**Source:** Q79 (vweo_ams_inspected_land)
+**Used for:** TC-AMS-01 — herd with AMS crop mismatch finding type
+
+```sql
+-- Shows AMS crop mismatch between declared crop and AMS satellite inspection result
+-- Replace herd number with result from Query 1
+SELECT apl.app_year,
+       apl.app_herd_no           AS applicant_herd_no,
+       apl.parcel_id             AS parcel,
+       apl.crp_desc              AS application_crop,
+       ams.crop_found_eos        AS ams_crop_found,
+       ams.inspection_date       AS ams_inspection_date
+FROM vwbs_application_land apl
+LEFT JOIN vweo_ams_inspected_land ams
+    ON  apl.apl_lnu_id  = ams.lnu_id
+    AND apl.app_herd_no = ams.inspected_herd
+    AND apl.app_year    = ams.scheme_year
+WHERE apl.app_year        = 2026
+AND   apl.mde_abbrev      = 'I'
+AND   apl.apl_deleted_ind = 'N'
+AND   apl.app_herd_no     = '<HERD_NUMBER_FROM_QUERY_1>'
+GROUP BY apl.app_year, apl.app_id, apl.aph_id, apl.apl_id,
+         ams.inspection_date, apl.app_herd_no, apl.parcel_id,
+         apl.crp_desc, ams.crop_found_eos;
+```
+
+-----
+
+### Query 5 — Partnership Herd with AMS Findings + Pre-Submit + Active Registration
+
+**Sources:** Q70 + Q87 + Q93 scoped to app_applicant_type = ‘P’
+**Used for:** TC-AMS-03 and TC-AMS-04
+
+```sql
+SELECT ams.herd_no,
+       ams.scheme_year,
+       a.app_mde_code,
+       a.mde_desc              AS app_status,
+       a.app_applicant_type
+FROM VWBS_AMS_NOTIFIED_HERD ams
+JOIN vwbs_application a
+    ON  a.app_herd_no        = ams.herd_no
+    AND a.app_year           = ams.scheme_year
+    AND a.app_mde_code       IN (1, 2, 3)
+    AND a.app_applicant_type = 'P'
+JOIN vwco_biss_business_details bbd
+    ON  bbd.bcus_bus_id    = ams.herd_no
+    AND bbd.bcus_role_code = 100
+    AND bbd.bcus_bus_end_date > SYSDATE
+WHERE ams.scheme_year = 2026
+AND   ams.expired     = 0
+AND   ROWNUM <= 5
+ORDER BY ams.herd_no;
+```
+
+-----
+
+### Query 6 — Get Agent Login for Herd (BISS_INET — Single Agent Only)
+
+**Used for:** All test cases
+
+```sql
+-- Run on CENTEST_BISS_INET
+-- HAVING COUNT = 1 returns only herds with exactly one unambiguous active agent
+-- If 0 rows returned, pick next herd from Query 1 or Query 5
+SELECT hbcus.bcus_bus_id        AS HERDNO,
+       MIN(ui.uri_username)      AS USERNAME
+  FROM tdco_customer_asscs ca,
+       tdco_business_customers abcus,
+       tdco_business_customers hbcus,
+       tdcr_user_info ui
+ WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date
+   AND ca.ca_cac_code     = 194
+   AND ca.ca_bcus_id_from = abcus.bcus_id
+   AND ca.ca_bcus_id_to   = hbcus.bcus_id
+   AND ui.uri_ccs_bus_id  = abcus.bcus_bus_id
+   AND hbcus.bcus_bus_id  = '<HERD_NUMBER_HERE>'
+ GROUP BY hbcus.bcus_bus_id
+HAVING COUNT(DISTINCT ui.uri_username) = 1;
+```
+
+-----
+
+## 🧪 Test Cases
+
+-----
+
+### TC-AMS-01 — Individual Farmer/Agent with Red AMS Findings Sees Panel on Dashboard (Pre-Submit)
+
+**Jira ID:** BISSAGL-X
+**Priority:** High
+**Type:** Functional
+**Component:** Farmer Dashboard
+**Round:** Round 1 — 2026
+**Labels:** AMS, FarmerDashboard, Round1, PreSubmit, Individual, TestOnly
+
+**Description:**
+Verifies that when an individual farmer or their agent logs into BISS pre-submit and their herd
+has Red AMS findings from Round 1, the AMS Findings panel is displayed on the Farmer Dashboard
+with all required elements. The panel must show the correct header “AMS findings”, the AMS
+status section, a red triangle warning icon labelled “AMS findings”, a “Response required” label
+with a red symbol, the count of red notifications, and a green “Respond to findings” button.
+Clicking the button must navigate to the AMS screen. The panel must also display the updated
+2026 message: “You have until 8 July 2026 to respond to your AMS notifications” — this message
+has been changed from last year and must be verified against the new date.
+
+**Test Data:**
+
+- Run **Query 1** to find herd with AMS findings + pre-submit + active registration
+- Optionally use **Query 2** for herd with both AMS and PC findings
+- Optionally use **Query 3** for herd with specifically AA type AMS error
+- Run **Query 6** (BISS_INET) to get agent login
+
+**Preconditions:**
+
+- Herd has at least 1 Red AMS finding in Round 1 (Query 1 result)
+- Application is Pre-Submit — Not Started (app_mde_code=1) or Draft (app_mde_code=3)
+- Herd registration is active — bcus_bus_end_date > SYSDATE
+- Agent login resolved via Query 6
+
+**Test Steps:**
+
+|# |Action                                          |Expected Result                                                                    |
+|--|------------------------------------------------|-----------------------------------------------------------------------------------|
+|1 |Navigate to BISS login page                     |Login page displayed                                                               |
+|2 |Log in with agent username, password and OTP    |Successfully authenticated                                                         |
+|3 |Click on Basic Income Support for Sustainability|BISS Home page displayed                                                           |
+|4 |Navigate to My Clients via left menu            |My Clients page displayed                                                          |
+|5 |Search for herd number from Query 1             |Herd appears in results with Not Started or Draft status                           |
+|6 |Click herd to open Farmer Dashboard             |Farmer Dashboard displayed                                                         |
+|7 |Locate AMS Findings panel on dashboard          |Panel is **visible** on Farmer Dashboard                                           |
+|8 |Verify panel header                             |Header reads exactly **“AMS findings”**                                            |
+|9 |Verify AMS status section                       |AMS status section displayed underneath header                                     |
+|10|Verify red triangle icon                        |Red triangle (⚠) icon visible with label **“AMS findings”**                        |
+|11|Verify Response Required label                  |**“Response required”** label displayed with red symbol to the right               |
+|12|Verify notification count                       |**“Amount”** label with correct number of Red notifications matching Query 1 result|
+|13|Verify Respond to findings button               |Green **“Respond to findings”** button is visible                                  |
+|14|Click Respond to findings button                |Navigates to the AMS screen                                                        |
+|15|Navigate back to Farmer Dashboard               |Dashboard displayed                                                                |
+|16|Verify deadline message                         |Panel shows: **“You have until 8 July 2026 to respond to your AMS notifications”** |
+|17|Confirm date is updated from last year          |Message does NOT show last year’s deadline date                                    |
+
+**Pass Criteria:**
+
+- AMS Findings panel visible ✓
+- Header, icon, label, count, button all present and correctly labelled ✓
+- Button navigates to AMS screen ✓
+- Count matches DB result ✓
+- Message reads 8 July 2026 — updated from last year ✓
+
+-----
+
+### TC-AMS-02 — Farmer/Agent with No Red AMS Findings Does Not See Panel on Dashboard
+
+**Jira ID:** BISSAGL-X
+**Priority:** High
+**Type:** Functional
+**Component:** Farmer Dashboard
+**Round:** Round 1 — 2026
+**Labels:** AMS, FarmerDashboard, Round1, PreSubmit, NoFindings, TestOnly
+
+**Description:**
+Verifies that when a farmer or agent logs into BISS and their herd has NO Red AMS findings from
+Round 1, the AMS Findings panel is completely absent from the Farmer Dashboard. This confirms
+the panel is conditionally rendered — it only appears when active AMS findings exist for the
+herd. No panel elements should be visible: no header, no red triangle, no Response Required
+label, no notification count, and no Respond to findings button. This is a core behaviour check
+that ensures the panel does not appear by default for all herds.
+
+**Test Data:**
+
+- Run **Query 1** and find a herd that does NOT appear in VWBS_AMS_NOTIFIED_HERD for 2026
+- Alternative: use a herd where Query 1 returns 0 rows (no AMS findings)
+- Run **Query 6** (BISS_INET) to get agent login
+
+**Preconditions:**
+
+- Herd has zero Red AMS findings in Round 1
+- Application is Pre-Submit
+- Agent login resolved via Query 6
+
+**Test Steps:**
+
+|# |Action                                                             |Expected Result                        |
+|--|-------------------------------------------------------------------|---------------------------------------|
+|1 |Navigate to BISS login page                                        |Login page displayed                   |
+|2 |Log in with agent credentials and OTP for herd with no AMS findings|Successfully authenticated             |
+|3 |Click on Basic Income Support for Sustainability                   |BISS Home page displayed               |
+|4 |Navigate to My Clients via left menu                               |My Clients page displayed              |
+|5 |Search for herd with no AMS findings                               |Herd appears in results                |
+|6 |Click herd to open Farmer Dashboard                                |Farmer Dashboard displayed             |
+|7 |Check Farmer Dashboard for AMS Findings panel                      |**AMS Findings panel is NOT displayed**|
+|8 |Verify no red triangle icon anywhere on dashboard                  |No red triangle (⚠) visible            |
+|9 |Verify no Response Required label                                  |No “Response required” label visible   |
+|10|Verify no Respond to findings button                               |No “Respond to findings” button visible|
+
+**Pass Criteria:**
+
+- AMS Findings panel completely absent from dashboard ✓
+- No AMS-related UI elements visible anywhere on dashboard ✓
+
+-----
+
+### TC-AMS-03 — Primary Partner in Partnership with Red AMS Findings Sees Full Panel with Respond Button
+
+**Jira ID:** BISSAGL-X
+**Priority:** High
+**Type:** Functional
+**Component:** Farmer Dashboard
+**Round:** Round 1 — 2026
+**Labels:** AMS, FarmerDashboard, Round1, PreSubmit, Partnership, PrimaryPartner, TestOnly
+
+**Description:**
+Verifies that when the Primary Partner (PP) of a partnership herd logs into BISS pre-submit and
+the partnership has Red AMS findings from Round 1, the AMS Findings panel is displayed on the
+Farmer Dashboard with all elements including the green Respond to findings button. Only the
+Primary Partner has authority to respond to AMS findings on behalf of the partnership — this
+test confirms the PP sees the full actionable panel. All panel elements must match Scenario 1
+(same header “AMS findings”, same icon, same label, same count, same button behaviour).
+The deadline message must read “You have until 8 July 2026 to respond to your AMS notifications”
+— updated from last year. This test uses the same panel specification as TC-AMS-01 but scoped
+to a partnership herd logged in as the Primary Partner specifically.
+
+**Test Data:**
+
+- Run **Query 5** to find a partnership herd with AMS findings + pre-submit + active
+- Run **Query 6** (BISS_INET) to get the Primary Partner agent login for the herd
+
+**Preconditions:**
+
+- Partnership herd has at least 1 Red AMS finding in Round 1 (Query 5 result)
+- Application is Pre-Submit — Not Started or Draft
+- Herd registration is active — bcus_bus_end_date > SYSDATE
+- Logged in user is the **Primary Partner (PP)** of the partnership
+
+**Test Steps:**
+
+|# |Action                                                  |Expected Result                                                      |
+|--|--------------------------------------------------------|---------------------------------------------------------------------|
+|1 |Navigate to BISS login page                             |Login page displayed                                                 |
+|2 |Log in as Primary Partner agent with credentials and OTP|Successfully authenticated as PP                                     |
+|3 |Click on Basic Income Support for Sustainability        |BISS Home page displayed                                             |
+|4 |Navigate to My Clients via left menu                    |My Clients page displayed                                            |
+|5 |Search for partnership herd number from Query 5         |Herd appears in results                                              |
+|6 |Click herd to open Farmer Dashboard                     |Farmer Dashboard displayed                                           |
+|7 |Locate AMS Findings panel                               |Panel is **visible** on dashboard                                    |
+|8 |Verify panel header                                     |Header reads exactly **“AMS findings”**                              |
+|9 |Verify AMS status section                               |AMS status section displayed underneath header                       |
+|10|Verify red triangle icon                                |Red triangle (⚠) icon with label **“AMS findings”**                  |
+|11|Verify Response Required label                          |**“Response required”** with red symbol to the right                 |
+|12|Verify notification count                               |**“Amount”** label with correct count from Query 5                   |
+|13|Verify Respond to findings button is present            |Green **“Respond to findings”** button is **visible**                |
+|14|Click Respond to findings button                        |Navigates to AMS screen                                              |
+|15|Navigate back to Farmer Dashboard                       |Dashboard displayed                                                  |
+|16|Verify deadline message                                 |**“You have until 8 July 2026 to respond to your AMS notifications”**|
+|17|Confirm date updated from last year                     |Message does NOT show last year’s deadline                           |
+
+**Pass Criteria:**
+
+- PP sees full AMS panel with all elements ✓
+- Respond to findings button visible and navigates to AMS screen ✓
+- Count matches DB result ✓
+- Message reads 8 July 2026 — updated from last year ✓
+
+-----
+
+### TC-AMS-04 — Non-Primary Partner in Partnership with Red AMS Findings Sees Panel WITHOUT Respond Button
+
+**Jira ID:** BISSAGL-X
+**Priority:** High
+**Type:** Functional
+**Component:** Farmer Dashboard
+**Round:** Round 1 — 2026
+**Labels:** AMS, FarmerDashboard, Round1, PreSubmit, Partnership, NonPrimaryPartner, TestOnly
+
+**Description:**
+Verifies that when a Non-Primary Partner (non-PP) of a partnership herd logs into BISS and the
+partnership has Red AMS findings from Round 1, the AMS Findings panel IS displayed on the
+Farmer Dashboard — but WITHOUT the Respond to findings button. Non-Primary Partners can view
+the AMS panel and see the finding count, but they cannot respond — only the Primary Partner has
+that authority. The panel header for non-PP reads “AMS (Area Monitoring System) findings” in
+full form — different from the shorter “AMS findings” shown to individual farmers and the
+Primary Partner. The deadline message must also be different: “The Primary Partner has until
+8 July 2026 to respond to your AMS notifications” — referencing the PP’s responsibility.
+This test uses the same partnership herd as TC-AMS-03 but logged in as a non-PP partner.
+
+**Test Data:**
+
+- Use the **same partnership herd** as TC-AMS-03 (from Query 5)
+- Run **Query 6** (BISS_INET) to get the Non-Primary Partner agent login for the same herd
+- Note: The non-PP is a different partner in the partnership — not the primary herd holder
+
+**Preconditions:**
+
+- Same partnership herd as TC-AMS-03 with at least 1 Red AMS finding
+- Application is Pre-Submit
+- Logged in user is **NOT the Primary Partner** of the partnership
+
+**Test Steps:**
+
+|# |Action                                                      |Expected Result                                                                               |
+|--|------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+|1 |Navigate to BISS login page                                 |Login page displayed                                                                          |
+|2 |Log in as Non-Primary Partner agent with credentials and OTP|Successfully authenticated as non-PP                                                          |
+|3 |Click on Basic Income Support for Sustainability            |BISS Home page displayed                                                                      |
+|4 |Navigate to My Clients via left menu                        |My Clients page displayed                                                                     |
+|5 |Search for same partnership herd as TC-AMS-03               |Herd appears in results                                                                       |
+|6 |Click herd to open Farmer Dashboard                         |Farmer Dashboard displayed                                                                    |
+|7 |Locate AMS Findings panel                                   |Panel is **visible** on dashboard                                                             |
+|8 |Verify panel header                                         |Header reads **“AMS (Area Monitoring System) findings”** — full form, different from TC-AMS-03|
+|9 |Verify AMS status section                                   |AMS status section displayed underneath header                                                |
+|10|Verify red triangle icon                                    |Red triangle (⚠) with label **“AMS findings”**                                                |
+|11|Verify Response Required label                              |**“Response required”** with red symbol to the right                                          |
+|12|Verify notification count                                   |**“Amount”** label with correct count                                                         |
+|13|Verify Respond to findings button is ABSENT                 |Green **“Respond to findings”** button is **NOT visible**                                     |
+|14|Verify no alternative way to respond                        |No other button or link to submit AMS response visible                                        |
+|15|Verify deadline message                                     |**“The Primary Partner has until 8 July 2026 to respond to your AMS notifications”**          |
+|16|Confirm date updated from last year                         |Message does NOT show last year’s deadline                                                    |
+
+**Pass Criteria:**
+
+- Non-PP sees AMS panel in read-only state ✓
+- Respond to findings button completely absent ✓
+- Panel header reads full form “AMS (Area Monitoring System) findings” ✓
+- Message references Primary Partner responsibility ✓
+- Message reads 8 July 2026 — updated from last year ✓
