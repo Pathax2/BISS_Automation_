@@ -1,261 +1,118 @@
-# ================================================================================
-TC_01 - ACCEPT FINDINGS AND TICK THE EH CHANGE CHECKBOX
-
-SQL QUERIES - EXECUTE IN ORDER
-
-– STEP 1: Find a herd with Red AMS R1 Artificial Surface notification
-– Purpose: Get your test herd and parcel number
-SELECT *
-FROM VWBS_AMS_NOTIFIED_HERD
-WHERE amn_year = 2026
-AND amn_round = 1
-AND amn_notification_type = ‘Artificial Surface’
-AND ROWNUM <= 10
-ORDER BY amn_herd_no;
-
-– STEP 2: Confirm herd is pre-submit (DO NOT SUBMIT)
-– Purpose: Ensure mde_code is 1, 2 or 3 before testing
-– Replace :herd_no with value from Step 1
-SELECT app_herd_no, app_mde_code, app_year
-FROM vwbs_application_herd
-WHERE app_mde_code IN (1, 2, 3)
-AND app_year = 2026
-AND app_herd_no = :herd_no;
-
-– STEP 3: Confirm herd business is active
-– Purpose: Ensure herd is not closed or expired
-– Replace :herd_no with value from Step 1
-SELECT bcus_bus_id, bcus_bus_end_date
-FROM vwco_biss_business_details
-WHERE bcus_bus_end_date > SYSDATE
-AND bcus_bus_id = :herd_no;
-
-– STEP 4 (POST-CONDITION): Confirm response was persisted after successful save
-– Purpose: Positive check - must return a row after TC_01 save
-– Replace :herd_no and :parcel_no with values from Step 1
-SELECT *
-FROM vwbs_ams_response
-WHERE lvl_submit_id IS NOT NULL
-AND amr_year = 2026
-AND amr_herd_no = :herd_no
-AND amr_parcel_no = :parcel_no;
+# Defect Report — AMS R1 Respond to Findings: Subdivided Parcel Option Incorrectly Present
 
 -----
 
-## TEST STEPS - COPY FROM HEADER LINE FOR JIRA XRAY CLIPBOARD IMPORT
+## Defect Summary
 
-Action	Data	Expected Result
-Log in and navigate to Farmer Dashboard. If Agent: select AMS from Agent Tools and select a client.	Valid Advisor / Farmer / Agent credentials. AMS-notified herd from SQL Step 1.	Farmer Dashboard loads with AMS panel visible.
-Click Respond to Findings.	-	AMS response screen opens. Red banner: “Actions and/or failure to take action in response to AMS Notifications may impact all area based scheme payments. Please respond below.”
-Verify Quick Filter options are present.	-	Filters visible: View All, Action Required.
-Verify all column headers are present.	-	Columns present: Red/Green icon (no header), Townland, Parcel/Plot No./Plot Ref., AMS Status, AMS Findings, Accept/Reject Findings?, Claimed Area (ha), Parcel Use, Actions (view map icon).
-Verify parcel list content and AMS legend.	-	Only Red R1 parcels listed. AMS Findings column shows Artificial Surface. Red symbol on each row. AMS Legend bottom-left shows Red Non Compliant. View map icon on each row.
-Select the parcel confirmed via SQL Step 1 and click Select.	Parcel no. from SQL Step 1.	Side drawer opens. Edit Parcel bolded at top. Townland and Parcel No. shown. Red symbol with message “Missing mandatory information”. Navigation arrows visible at top of side drawer.
-Click the Accept radio button under “Do you accept/reject findings?”	-	Accept selected. EH value displayed in side drawer.
-Tick the Request change to EH checkbox.	-	Note input field appears below the checkbox.
-Click Save without entering a note.	-	Note field enters error state. Edit Map button remains disabled.
-Enter a note in the note field.	Any free text.	Note accepted. Edit Map button becomes enabled.
-Click Edit Map.	-	Redirected to iSmart map. AMS Feature of Interest visible if Pre-live environment.
-Click Draw, select Draft Exclusion, draw over the artificial surface area, click Confirm.	Area covering the artificial surface parcel from SQL Step 1.	Exclusion drawn and confirmed on map.
-Enter exclusion label and free text note, then click Confirm Changes.	Label text, note text.	Changes confirmed on map.
-Click Return to Land Details.	-	Redirected to AMS response screen. Side drawer reopens. Yellow warning: “Please ensure any exclusions drawn are reflected in your claimed area.”
-Amend claimed area if required. Verify icons present.	Updated area value if applicable.	Claimed area is editable. Delete icon visible. No scissors or subdivide icon present (subdivide not permitted R1).
-Click Save Changes.	-	Green toast: “You have successfully updated details for Parcel No X.”
-Close side drawer.	-	Side drawer closes. Parcel row icon changes from red to green.
-POST-CONDITION: Execute SQL Step 4 from the query block above.	herd_no and parcel_no from SQL Step 1.	POSITIVE CHECK - Row returned in vwbs_ams_response confirming response record was persisted.
+**Title:** AMS R1 — Subdivided Parcel Option Incorrectly Displayed Under Accept/Reject Findings When Selecting Accept
 
-———————
-
-# ================================================================================
-TC_02 - ACCEPT FINDINGS AND DO NOT TICK THE EH CHANGE CHECKBOX
-
-SQL QUERIES - EXECUTE IN ORDER
-
-– STEP 1: Find a herd with Red AMS R1 Artificial Surface notification
-– Purpose: Get your test herd and parcel number
-SELECT *
-FROM VWBS_AMS_NOTIFIED_HERD
-WHERE amn_year = 2026
-AND amn_round = 1
-AND amn_notification_type = ‘Artificial Surface’
-AND ROWNUM <= 10
-ORDER BY amn_herd_no;
-
-– STEP 2: Confirm herd is pre-submit (DO NOT SUBMIT)
-– Purpose: Ensure mde_code is 1, 2 or 3 before testing
-– Replace :herd_no with value from Step 1
-SELECT app_herd_no, app_mde_code, app_year
-FROM vwbs_application_herd
-WHERE app_mde_code IN (1, 2, 3)
-AND app_year = 2026
-AND app_herd_no = :herd_no;
-
-– STEP 3: Confirm herd business is active
-– Purpose: Ensure herd is not closed or expired
-– Replace :herd_no with value from Step 1
-SELECT bcus_bus_id, bcus_bus_end_date
-FROM vwco_biss_business_details
-WHERE bcus_bus_end_date > SYSDATE
-AND bcus_bus_id = :herd_no;
-
-– STEP 4 (POST-CONDITION): Confirm response was NOT persisted after yellow warning save
-– Purpose: Negative check - must return NO rows
-– Replace :herd_no and :parcel_no with values from Step 1
-SELECT *
-FROM vwbs_ams_response
-WHERE lvl_submit_id IS NOT NULL
-AND amr_year = 2026
-AND amr_herd_no = :herd_no
-AND amr_parcel_no = :parcel_no;
+**Jira ID:** BISSAGL-X
+**Severity:** Medium
+**Priority:** High
+**Type:** Defect
+**Component:** AMS — Respond to Findings — Accept/Reject
+**Environment:** CENTEST
+**Round:** Round 1 — 2026
+**Application:** Basic Income Support for Sustainability (BISS)
+**Reported by:** Aniket Pathare | aniket.pathare@government.ie
+**Date:** 28-Apr-2026
 
 -----
 
-## TEST STEPS - COPY FROM HEADER LINE FOR JIRA XRAY CLIPBOARD IMPORT
+## Description
 
-Action	Data	Expected Result
-Log in and navigate to Farmer Dashboard. If Agent: select AMS from Agent Tools and select a client.	Valid Advisor / Farmer / Agent credentials. AMS-notified herd from SQL Step 1.	Farmer Dashboard loads with AMS panel visible.
-Click Respond to Findings.	-	AMS response screen opens. Only Red R1 parcels listed. AMS Findings column shows Artificial Surface. Red symbol on each parcel. View map icon on each row.
-Select the parcel confirmed via SQL Step 1 and click Select.	Parcel no. from SQL Step 1.	Side drawer opens. Red symbol with message “Missing mandatory information” displayed.
-Click the Accept radio button under “Do you accept/reject findings?”	-	Accept selected. EH value displayed.
-Do NOT tick the Request change to EH checkbox.	-	No note input field appears. Edit Map button remains disabled. Claimed area field is greyed out and not editable.
-Click Save Changes.	-	Yellow warning displayed: “You have not edited your map, please edit your map to create a valid response.”
-Close side drawer.	-	Side drawer closes.
-POST-CONDITION: Execute SQL Step 4 from the query block above.	herd_no and parcel_no from SQL Step 1.	NEGATIVE CHECK - No rows returned. Response was NOT persisted - yellow warning save correctly blocked persistence.
-
-———————
-
-# ================================================================================
-TC_03 - ACCEPT FINDINGS, TICK EH, ENTER NOTE, DO NOT CLICK EDIT MAP
-
-SQL QUERIES - EXECUTE IN ORDER
-
-– STEP 1: Find a herd with Red AMS R1 Artificial Surface notification
-– Purpose: Get your test herd and parcel number
-SELECT *
-FROM VWBS_AMS_NOTIFIED_HERD
-WHERE amn_year = 2026
-AND amn_round = 1
-AND amn_notification_type = ‘Artificial Surface’
-AND ROWNUM <= 10
-ORDER BY amn_herd_no;
-
-– STEP 2: Confirm herd is pre-submit (DO NOT SUBMIT)
-– Purpose: Ensure mde_code is 1, 2 or 3 before testing
-– Replace :herd_no with value from Step 1
-SELECT app_herd_no, app_mde_code, app_year
-FROM vwbs_application_herd
-WHERE app_mde_code IN (1, 2, 3)
-AND app_year = 2026
-AND app_herd_no = :herd_no;
-
-– STEP 3: Confirm herd business is active
-– Purpose: Ensure herd is not closed or expired
-– Replace :herd_no with value from Step 1
-SELECT bcus_bus_id, bcus_bus_end_date
-FROM vwco_biss_business_details
-WHERE bcus_bus_end_date > SYSDATE
-AND bcus_bus_id = :herd_no;
-
-– STEP 4 (POST-CONDITION): Confirm response was NOT persisted after yellow warning save
-– Purpose: Negative check - must return NO rows
-– Replace :herd_no and :parcel_no with values from Step 1
-SELECT *
-FROM vwbs_ams_response
-WHERE lvl_submit_id IS NOT NULL
-AND amr_year = 2026
-AND amr_herd_no = :herd_no
-AND amr_parcel_no = :parcel_no;
+When a user logged in under an AMS Round 1 profile navigates to the AMS tab in My Clients,
+searches for a herd or parcel, clicks View, then proceeds to respond to AMS findings via the
+Respond to Findings button on the Farmer Dashboard, searches for the parcel, and under the
+Accept / Reject Findings section clicks the Select Option dropdown and selects **Accept** —
+the **Subdivided Parcel** option is incorrectly displayed. This option should not be present
+at any point in the AMS Round 1 respond to findings flow. Its presence is unintended and
+constitutes a display defect for AMS R1 profile users.
 
 -----
 
-## TEST STEPS - COPY FROM HEADER LINE FOR JIRA XRAY CLIPBOARD IMPORT
+## Steps to Reproduce
 
-Action	Data	Expected Result
-Log in and navigate to Farmer Dashboard. If Agent: select AMS from Agent Tools and select a client.	Valid Advisor / Farmer / Agent credentials. AMS-notified herd from SQL Step 1.	Farmer Dashboard loads with AMS panel visible.
-Click Respond to Findings.	-	AMS response screen opens. Only Red R1 parcels listed. AMS Findings column shows Artificial Surface. Red symbol on each parcel. View map icon on each row.
-Select the parcel confirmed via SQL Step 1 and click Select.	Parcel no. from SQL Step 1.	Side drawer opens. Red symbol with message “Missing mandatory information” displayed.
-Verify Accept is selected under “Do you accept/reject findings?”	-	Accept radio button selected. EH value visible.
-Tick the Request change to EH checkbox.	-	Note input field appears.
-Click Save without entering a note.	-	Note field enters error state. Edit Map button remains disabled.
-Enter a note in the note field.	Any free text.	Edit Map button becomes enabled.
-Do NOT click Edit Map. Click Save Changes.	-	Yellow warning displayed: “You have not edited your map, please edit your map to create a valid response.”
-Verify side drawer behaviour post-save.	-	Side drawer closes. User returned to AMS response screen.
-POST-CONDITION: Execute SQL Step 4 from the query block above.	herd_no and parcel_no from SQL Step 1.	NEGATIVE CHECK - No rows returned. Response was NOT persisted - enabling Edit Map without clicking it is insufficient for a valid response.
-
-———————
-
-# ================================================================================
-TC_04 - ACCEPT, TICK EH, GO TO MAP, MAKE NO EDITS, RETURN
-
-SQL QUERIES - EXECUTE IN ORDER
-
-– STEP 1: Find a herd with Red AMS R1 Artificial Surface notification
-– Purpose: Get your test herd and parcel number
-SELECT *
-FROM VWBS_AMS_NOTIFIED_HERD
-WHERE amn_year = 2026
-AND amn_round = 1
-AND amn_notification_type = ‘Artificial Surface’
-AND ROWNUM <= 10
-ORDER BY amn_herd_no;
-
-– STEP 2: Confirm herd is pre-submit (DO NOT SUBMIT)
-– Purpose: Ensure mde_code is 1, 2 or 3 before testing
-– Replace :herd_no with value from Step 1
-SELECT app_herd_no, app_mde_code, app_year
-FROM vwbs_application_herd
-WHERE app_mde_code IN (1, 2, 3)
-AND app_year = 2026
-AND app_herd_no = :herd_no;
-
-– STEP 3: Confirm herd business is active
-– Purpose: Ensure herd is not closed or expired
-– Replace :herd_no with value from Step 1
-SELECT bcus_bus_id, bcus_bus_end_date
-FROM vwco_biss_business_details
-WHERE bcus_bus_end_date > SYSDATE
-AND bcus_bus_id = :herd_no;
-
-– STEP 4: Confirm no crop mismatch exists on the parcel
-– Purpose: TC_04 specific - ensures map navigation is not blocked
-– Replace :herd_no with value from Step 1
-SELECT *
-FROM vweo_ams_inspected_land
-WHERE ail_year = 2026
-AND ail_herd_no = :herd_no;
-
-– STEP 5: Confirm parcel is a valid AMS inspection record
-– Purpose: TC_04 specific - validates correct parcel type before map navigation
-– Replace :herd_no with value from Step 1
-SELECT *
-FROM vwbs_inspection
-WHERE int_abbrev = ‘A’
-AND int_year = 2026
-AND int_herd_no = :herd_no;
-
-– STEP 6 (POST-CONDITION): Confirm response was NOT persisted after yellow warning save
-– Purpose: Negative check - must return NO rows
-– Replace :herd_no and :parcel_no with values from Step 1
-SELECT *
-FROM vwbs_ams_response
-WHERE lvl_submit_id IS NOT NULL
-AND amr_year = 2026
-AND amr_herd_no = :herd_no
-AND amr_parcel_no = :parcel_no;
+1. Log in to BISS on CENTEST using an AMS Round 1 profile agent account
+   *(Use SQL Query below to find a herd with Round 1 AMS findings)*
+1. Navigate to **My Clients** via the left menu
+1. Click on the **AMS** tab on the My Clients page
+1. In the AMS tab search field, enter the **parcel number or herd number**
+1. Click **Search** — one row should be returned in the results
+1. Click **View** on that row
+1. User lands on the **Farmer Dashboard**
+1. Click the **Respond to Findings** button on the AMS Findings panel
+1. On the AMS response screen, search for the **parcel number**
+1. Locate the parcel row under the **Accept / Reject Findings** section
+1. Click the **Select Option** dropdown on the parcel row
+1. Select **Accept** from the dropdown options
+1. Observe the options displayed after selecting Accept
 
 -----
 
-## TEST STEPS - COPY FROM HEADER LINE FOR JIRA XRAY CLIPBOARD IMPORT
+## Actual Result
 
-Action	Data	Expected Result
-Log in and navigate to Farmer Dashboard. If Agent: select AMS from Agent Tools and select a client.	Valid Advisor / Farmer / Agent credentials. AMS-notified herd from SQL Step 1. Parcel validated via SQL Steps 4 and 5.	Farmer Dashboard loads with AMS panel visible.
-Click Respond to Findings.	-	AMS response screen opens. Red banner: “Actions and/or failure to take action in response to AMS Notifications may impact all area based scheme payments. Please respond below.” Only Red R1 parcels listed. AMS Findings shows Artificial Surface. Red symbol on each parcel. View map icon on each row.
-Select the parcel confirmed via SQL Steps 1 and 5 and click Select.	Parcel no. from SQL Step 1 validated via SQL Step 5.	Side drawer opens. Red symbol with message “Missing mandatory information” shown. Navigation arrows visible at top of side drawer.
-Click the Accept radio button under “Do you accept/reject findings?”	-	Accept selected. EH value displayed.
-Tick the Request change to EH checkbox.	-	Note input field appears.
-Enter a note in the note field.	Any free text.	Edit Map button becomes enabled.
-Click Edit Map.	-	Redirected to iSmart map. Parcel visible with no crop mismatch flag (confirmed via SQL Step 4).
-Make NO drawings or edits on the map. Click Return to Land Details.	-	Redirected back to AMS response screen. Side drawer reopens. Yellow warning displayed: “You have not edited your map, please edit your map to create a valid response.”
-Click Save Changes.	-	Yellow warning persists: “You have not edited your map, please edit your map to create a valid response.”
-Close side drawer.	-	Side drawer closes.
-POST-CONDITION: Execute SQL Step 6 from the query block above.	herd_no and parcel_no from SQL Step 1.	NEGATIVE CHECK - No rows returned. Response was NOT persisted - visiting the map without an edit must not create a valid response.
+After selecting **Accept** under the Accept / Reject Findings section, the **Subdivided Parcel**
+option is incorrectly displayed. This option should not be available to AMS R1 profile users
+at any point in the respond to findings flow.
+
+-----
+
+## Expected Result
+
+The **Subdivided Parcel** option should **NOT** be present in the AMS Round 1 respond to
+findings flow after selecting Accept under Accept / Reject Findings. Only options relevant
+to responding to an AMS Round 1 finding should be displayed at this stage.
+
+-----
+
+## Impact
+
+- AMS R1 profile users are exposed to the Subdivided Parcel option during the respond to
+  findings flow — a feature that is out of scope for this profile and this round
+- A user could incorrectly trigger a sub-division action on a parcel during an AMS response
+- Sub-division actioned incorrectly could affect parcel eligibility calculations and
+  introduce data integrity issues in the BISS application for the affected herd
+- Violates expected access control for AMS R1 profile users in the respond to findings flow
+
+-----
+
+## Test Data
+
+```sql
+-- Find herd with AMS Round 1 findings (CENTEST_BISS_DATA)
+-- Query 70 from reference document
+SELECT *
+FROM VWBS_AMS_NOTIFIED_HERD
+WHERE scheme_year = 2026
+AND   expired     = 0
+AND   ROWNUM <= 5
+ORDER BY herd_no;
+```
+
+```sql
+-- Get agent login for herd (CENTEST_BISS_INET)
+SELECT hbcus.bcus_bus_id   AS HERDNO,
+       MIN(ui.uri_username) AS USERNAME
+  FROM tdco_customer_asscs ca,
+       tdco_business_customers abcus,
+       tdco_business_customers hbcus,
+       tdcr_user_info ui
+ WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date
+   AND ca.ca_cac_code     = 194
+   AND ca.ca_bcus_id_from = abcus.bcus_id
+   AND ca.ca_bcus_id_to   = hbcus.bcus_id
+   AND ui.uri_ccs_bus_id  = abcus.bcus_bus_id
+   AND hbcus.bcus_bus_id  = '<HERD_NUMBER_FROM_ABOVE>'
+ GROUP BY hbcus.bcus_bus_id
+HAVING COUNT(DISTINCT ui.uri_username) = 1;
+```
+
+-----
+
+## Additional Notes
+
+- Reproducible consistently for any herd with Round 1 AMS findings via the above flow
+- The Subdivided Parcel option may be valid in other BISS flows (e.g. standard Land Details
+  edit) but must be suppressed in the AMS R1 Respond to Findings flow
+- Screenshots to be attached separately
