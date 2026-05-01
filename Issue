@@ -1,96 +1,106 @@
 # ========================================
-TC-AMS-DELETE-01
+BUG REPORT
 
 SUMMARY
-AMS R1 - Successfully Delete a Parcel as AMS Response
+AMS R1 2026 - Undo Delete of Parcel is Not Working on AMS Respond to Findings Screen
 
-DESCRIPTION
-Verifies the complete delete parcel journey for an Advisor/Agent or Farmer responding to an AMS Round 1 Red finding. The test covers the full flow from login through to selecting a parcel for deletion via the bin symbol in the side drawer. It verifies the delete confirmation popup message inside the side drawer, the warning message about impact on other area based scheme payments, saving the deletion, the strikethrough styling on the deleted parcel row, the blank status, the green toast confirmation, and the yellow warning banner that appears at the top of the AMS response screen after deletion. No changes from last year functionality - test only.
+COMPONENT
+AMS - Respond to Findings - Delete / Recover Parcel
 
-STEPS
+ENVIRONMENT
+CENTEST
 
-Action	Data	Expected Result
-If Agent: Log in to BISS with agent credentials and OTP. If Farmer: Log in with farmer credentials and OTP	Agent username and password from INET query. OTP/PIN	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select the client herd. If Farmer: Navigate to Farmer Dashboard directly	Herd number from VWBS_AMS_NOTIFIED_HERD query where scheme_year=2026 and expired=0	Farmer Dashboard displayed with AMS Findings panel visible
-Click Respond to Findings button on the AMS Findings panel		AMS Respond to Findings screen displayed
-Verify the parcels listed in the findings table		Only Round 1 Red parcels are displayed in the list
-Verify the AMS findings column content		AMS findings column is populated with Artificial Surface for the relevant parcels
-Verify the red symbol on each parcel row		Each parcel with a pending response shows a red symbol indicating response required
-Verify the Action column on each parcel row		A View Map icon is present at the end of each parcel row
-Click on a Red parcel row to open the side drawer	Parcel number from vwbs_error_land query where eor_year=2026 and ers_abbrev=A and ety_code=2028	Side drawer opens for the selected parcel
-Verify the delete option is visible in the side drawer		Bin symbol/delete option is visible in the side drawer
-Click the delete bin symbol		Delete confirmation popup appears inside the side drawer
-Verify the delete confirmation popup message		Message reads: You have requested to delete this parcel from your BISS application. This may affect payment on other Area based schemes. Please undo if this was done in error
-Confirm the deletion - do not cancel		Delete confirmed
-Click Save Changes		Green toast message displayed: You have successfully marked parcel X for deletion
-Verify the parcel row styling after deletion		Strikethrough is applied to the deleted parcel row to indicate it is deleted
-Verify the status of the deleted parcel		Status of the parcel row is blank
-Verify the yellow warning banner at the top of the AMS response screen		Yellow warning message displayed: You have decided to delete a parcel. This may affect your payments
+ROUND
+Round 1 - 2026
+
+SEVERITY
+High
+
+PRIORITY
+High
+
+LABELS
+AMS, RespondToFindings, DeleteParcel, UndoDelete, Round1, Bug
 
 # ========================================
-TC-AMS-DELETE-02
-
-SUMMARY
-AMS R1 - Successfully Undo the Delete of a Parcel
-
 DESCRIPTION
-Verifies that a previously deleted parcel can be recovered via the Undo/Recover option in the AMS Respond to Findings screen. The test covers selecting the strikethrough parcel row, pressing Recover, verifying the yellow warning banner disappears, confirming the parcel reverts to its original values with no response selected, saving changes, and confirming the strikethrough is removed from the parcel row. No changes from last year functionality - test only.
 
-STEPS
-
-Action	Data	Expected Result
-If Agent: Log in to BISS with agent credentials and OTP. If Farmer: Log in with farmer credentials and OTP	Same herd and agent login as TC-AMS-DELETE-01	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select the client herd. If Farmer: Navigate to Farmer Dashboard directly	Same herd as TC-AMS-DELETE-01	Farmer Dashboard displayed with AMS Findings panel visible
-Click Respond to Findings button on the AMS Findings panel		AMS Respond to Findings screen displayed
-Verify the yellow warning banner is present at top of screen		Yellow warning message visible: You have decided to delete a parcel. This may affect your payments
-Locate the parcel row that has a strikethrough indicating it is marked for deletion	Same parcel as TC-AMS-DELETE-01	Parcel row with strikethrough visible in the list
-Verify the Recover option is visible on the deleted parcel row		Recover option is displayed on the strikethrough parcel row
-Click Recover on the deleted parcel row		Side drawer opens for the parcel
-Verify the yellow warning banner is now gone		Yellow warning message You have decided to delete a parcel. This may affect your payments is no longer displayed
-Verify the parcel values in the side drawer		Parcel shows original values with no response selected
-Click Save Changes		Changes saved successfully
-Verify the parcel row after saving		Strikethrough is removed from the parcel row - parcel restored to original state
+When a user (Advisor/Agent or Farmer) has marked a parcel for deletion on the AMS Respond to Findings screen, the Undo/Recover option to reverse that deletion is not working as expected. After a parcel has been successfully marked for deletion (strikethrough visible, yellow warning banner present, green toast confirmed), the user attempts to recover the parcel by selecting the Recover option on the deleted parcel row. The undo/recover action fails - the parcel is not restored to its original state. This is a regression against last year’s functionality where undo delete worked correctly.
 
 # ========================================
-TC-AMS-DELETE-03
+STEPS TO REPRODUCE
 
-SUMMARY
-AMS R1 - Change Response from Accept to Reject After Saving (Pre-Submit)
+Step 1
+Log in to BISS on CENTEST as an Agent or Farmer with an AMS Round 1 profile
+Use SQL: select * from VWBS_AMS_NOTIFIED_HERD where scheme_year = 2026 and expired = 0 and rownum <= 5 order by herd_no
+Get agent login from BISS_INET: SELECT hbcus.bcus_bus_id AS HERDNO, MIN(ui.uri_username) AS USERNAME FROM tdco_customer_asscs ca, tdco_business_customers abcus, tdco_business_customers hbcus, tdcr_user_info ui WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date AND ca.ca_cac_code = 194 AND ca.ca_bcus_id_from = abcus.bcus_id AND ca.ca_bcus_id_to = hbcus.bcus_id AND ui.uri_ccs_bus_id = abcus.bcus_bus_id AND hbcus.bcus_bus_id = ‘<HERD_NUMBER>’ GROUP BY hbcus.bcus_bus_id HAVING COUNT(DISTINCT ui.uri_username) = 1
 
-DESCRIPTION
-Verifies that a user who has previously accepted an AMS finding on a parcel and drawn the map can go back and change their response from Accept to Reject before submitting. The test covers reopening the side drawer for the accepted parcel, selecting Reject, choosing a reject reason, saving, and verifying that a call to LPIS occurs to delete any map that was previously drawn as part of the Accept response. This is a pre-submit change of mind scenario. No changes from last year functionality - test only.
+Step 2
+If Agent: Navigate to Agent Tools and select AMS then select the client herd to go to Farmer Dashboard
+If Farmer: Navigate to Farmer Dashboard directly
 
-STEPS
+Step 3
+Click Respond to Findings button on the AMS Findings panel
 
-Action	Data	Expected Result
-If Agent: Log in to BISS with agent credentials and OTP. If Farmer: Log in with farmer credentials and OTP	Same herd and agent login as TC-AMS-DELETE-01	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select the client herd. If Farmer: Navigate to Farmer Dashboard directly	Same herd as TC-AMS-DELETE-01	Farmer Dashboard displayed with AMS Findings panel visible
-Click Respond to Findings button on the AMS Findings panel		AMS Respond to Findings screen displayed
-Verify the parcel that was previously accepted is visible in the list	Parcel X that was accepted and had a map drawn	Parcel X is visible in the findings list showing accepted response
-Click on parcel X to open the side drawer		Side drawer opens for parcel X
-Verify the current response is Accept in the side drawer		Accept is shown as the current selected response for this parcel
-Select Reject		Reject option selected - overriding the previous Accept response
-Verify the reject reason prompt		Message displayed: Give a reason why you reject Area Monitoring findings?
-Select a reject reason from the list - for example Crop is as claimed		Reject reason selected
-Click Save Changes		Changes saved - call to LPIS occurs to delete any map previously drawn for the Accept response
-Verify the LPIS map drawn during Accept response is deleted		Map drawn during Accept response is removed as a result of changing to Reject
+Step 4
+Locate a Red parcel in the findings list and click on it to open the side drawer
+
+Step 5
+Click the bin/delete symbol in the side drawer
+
+Step 6
+Confirm the deletion in the popup - verify the message reads:
+“You have requested to delete this parcel from your BISS application. This may affect payment on other Area based schemes. Please undo if this was done in error”
+
+Step 7
+Click Save Changes
+Verify green toast: You have successfully marked parcel X for deletion
+Verify strikethrough on the parcel row
+Verify yellow warning banner: You have decided to delete a parcel. This may affect your payments
+
+Step 8
+Locate the parcel row that has a strikethrough indicating it is marked for deletion
+
+Step 9
+Click the Recover option on the deleted parcel row
+
+Step 10
+Click Save Changes
+
+Step 11
+Observe the parcel row and the AMS response screen
 
 # ========================================
-TC-AMS-DELETE-04
+ACTUAL RESULT
 
-SUMMARY
-AMS R1 - Uncheck Request Change of EH Reverts Claimed Area to Original Value
+The Undo/Recover action does not work correctly. The parcel is not restored to its original state after clicking Recover and saving. The strikethrough remains on the parcel row and/or the yellow warning banner persists and/or the parcel values do not revert to their original state.
 
-DESCRIPTION
-Verifies that when a user has previously accepted an AMS finding, changed the claimed area, and checked the Request Change of EH checkbox before saving - if they subsequently return to that parcel and uncheck the Request Change of EH checkbox, the claimed area is automatically reverted to its original value. This is a change of mind scenario for EH box behaviour. No changes from last year functionality - test only.
+# ========================================
+EXPECTED RESULT
 
-STEPS
+After clicking Recover on the deleted parcel row and saving changes the following should occur:
 
-Action	Data	Expected Result
-If Agent: Log in to BISS with agent credentials and OTP. If Farmer: Log in with farmer credentials and OTP	Same herd and agent login as TC-AMS-DELETE-01	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select the client herd. If Farmer: Navigate to Farmer Dashboard directly	Same herd as TC-AMS-DELETE-01	Farmer Dashboard displayed with AMS Findings panel visible
-Click Respond to Findings button on the AMS Findings panel		AMS Respond to Findings screen displayed
-Click on parcel X that was previously accepted with a changed claimed area and EH box checked	Parcel X that had claimed area changed and Request Change of EH checked	Side drawer opens showing parcel X with Accept selected, changed claimed area value, and Request Change of EH checkbox ticked
-Note the current claimed area value shown in the side drawer		Current claimed area value recorded for comparison
-Uncheck the Request Change of EH checkbox		Request Change of EH checkbox is unchecked
-Verify the claimed area field after unchecking EH		Claimed area is automatically reverted to its original value - the changed claimed area is discarded
+1. The yellow warning banner “You have decided to delete a parcel. This may affect your payments” should be removed from the top of the AMS response screen
+1. The strikethrough should be removed from the parcel row
+1. The parcel should revert to its original values with no response selected
+1. The side drawer should reflect the original parcel state - no deletion applied
+1. This behaviour was working correctly in the previous year - this is a regression
+
+# ========================================
+TEST DATA
+
+BISS_DATA - Find herd with AMS Round 1 findings:
+select * from VWBS_AMS_NOTIFIED_HERD where scheme_year = 2026 and expired = 0 and rownum <= 5 order by herd_no;
+
+BISS_DATA - Find parcel with AMS Artificial Surface finding:
+SELECT app_herd_no, aph_herd_no, parcel_id FROM vwbs_error_land WHERE eor_year = 2026 AND ers_abbrev = ‘A’ AND ety_code = 2028 AND pkbs_inspection.fn_CheckAdminInsp(app_id,‘C’) = ‘N’ ORDER BY app_herd_no;
+
+BISS_INET - Get agent login for herd:
+SELECT hbcus.bcus_bus_id AS HERDNO, MIN(ui.uri_username) AS USERNAME FROM tdco_customer_asscs ca, tdco_business_customers abcus, tdco_business_customers hbcus, tdcr_user_info ui WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date AND ca.ca_cac_code = 194 AND ca.ca_bcus_id_from = abcus.bcus_id AND ca.ca_bcus_id_to = hbcus.bcus_id AND ui.uri_ccs_bus_id = abcus.bcus_bus_id AND hbcus.bcus_bus_id = ‘<HERD_NUMBER>’ GROUP BY hbcus.bcus_bus_id HAVING COUNT(DISTINCT ui.uri_username) = 1;
+
+# ========================================
+ADDITIONAL NOTES
+
+- This functionality was working correctly in the previous year - this is a regression
+- Screenshots to be attached separately
+- Reproducible consistently for any herd with Round 1 AMS findings via the above steps
