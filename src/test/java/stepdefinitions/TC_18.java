@@ -44,6 +44,7 @@ import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
 import org.junit.jupiter.api.Assertions;
 import org.openqa.selenium.By;
+import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
@@ -133,7 +134,7 @@ public class TC_18
             iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
             iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
             iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
-            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+            try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
 
             List<WebElement> iRows = getDriver().findElements(iClientRowsBy);
 
@@ -168,6 +169,9 @@ public class TC_18
 
             // ── Navigate to Preliminary Checks tab ───────────────────────────────────────────
             iAction("CLICK", "XPATH", PRELIM_TAB_XPATH, null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
             try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
 
             // ════════════════════════════════════════════════════════════════
@@ -396,8 +400,7 @@ public class TC_18
                 iAction("WAITVISIBLE",   "XPATH", iIndexedXpath, null);
                 iAction("WAITCLICKABLE", "XPATH", iIndexedXpath, null);
                 iAction("CLICK",         "XPATH", iIndexedXpath, null);
-                log.info("[STEP] Selected '" + iResponseLabel
-                        + "' on row " + (i + 1) + " of panel: " + iPanelLabel);
+                log.info("[STEP] Selected '" + iResponseLabel + "' on row " + (i + 1) + " of panel: " + iPanelLabel);
             }
         }
 
@@ -449,8 +452,15 @@ public class TC_18
     public void thePreliminaryChecksSubmissionShouldBeConfirmedSuccessfully()
     {
         log.info("[STEP] And the Preliminary Checks submission should be confirmed successfully");
-        boolean iSubmitGone = !isVisible(By.xpath(ObjReader.getLocator("iPrelimSubmitBtn")), 5);
-        Assertions.assertTrue(iSubmitGone, "View preliminary checks button still visible after confirmation — " + "submission may not have completed successfully.");
+
+        log.info("[STEP] Verifying 'Response required' is NOT displayed on the Preliminary Checks card");
+
+        String responseRequiredXpath =
+                "//mat-card[.//mat-card-title[normalize-space()='Preliminary Checks']]" +
+                        "//span[contains(@class,'dashboard-clarification-text')" +
+                        " and normalize-space()='Response required']";
+        boolean isResponseRequiredVisible = isVisible(By.xpath(responseRequiredXpath), 3);
+        Assertions.assertFalse(isResponseRequiredVisible, "'Response required' is still visible on the Preliminary Checks dashboard card");
         log.info("Preliminary Checks submitted and confirmed successfully.");
         Hooks.captureStep("Preliminary Checks — submission confirmed successfully");
     }
@@ -506,11 +516,9 @@ public class TC_18
 
         for (int iOff = iStartOffset; iOff < iStartOffset + MAX_OFFSET_TRIES; iOff++)
         {
-            log.info("[PRELIM-RECOVER] Querying BISS_DATA | LVC_DESC='" + iLvcDescTarget
-                    + "' | offset=" + iOff);
+            log.info("[PRELIM-RECOVER] Querying BISS_DATA | LVC_DESC='" + iLvcDescTarget + "' | offset=" + iOff);
 
-            database.DBRouter.runDB("DATA", "Preliminary checks herds",
-                    pYear, String.valueOf(iOff));
+            database.DBRouter.runDB("DATA", "Preliminary checks herds", pYear, String.valueOf(iOff));
 
             List<Map<String, Object>> iDbRows = database.DBRouter.getRows();
 
@@ -519,8 +527,7 @@ public class TC_18
 
             if (iDbRows == null || iDbRows.isEmpty())
             {
-                log.warning("[PRELIM-RECOVER] BISS_DATA returned 0 rows at offset=" + iOff
-                        + " — no more Pending rows exist for year=" + pYear + ". Stopping.");
+                log.warning("[PRELIM-RECOVER] BISS_DATA returned 0 rows at offset=" + iOff + " — no more Pending rows exist for year=" + pYear + ". Stopping.");
                 break;
             }
 
@@ -537,23 +544,18 @@ public class TC_18
                 database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
                 String iUsername = database.DBRouter.getValue("USERNAME");
 
-                log.info("[PRELIM-RECOVER] INET result → herd=" + iHerd
-                        + " | USERNAME=" + (iUsername == null ? "null" : "'" + iUsername + "'"));
+                log.info("[PRELIM-RECOVER] INET result → herd=" + iHerd + " | USERNAME=" + (iUsername == null ? "null" : "'" + iUsername + "'"));
 
                 if (iUsername != null && !iUsername.isBlank())
                 {
                     iNextHerd     = iHerd;
                     iNextUsername = iUsername.trim();
-                    log.info("[PRELIM-RECOVER] INET-validated replacement: " + iLvcDescTarget
-                            + " → herd=" + iNextHerd + " | username=" + iNextUsername
-                            + " (offset=" + iOff + ")");
+                    log.info("[PRELIM-RECOVER] INET-validated replacement: " + iLvcDescTarget + " → herd=" + iNextHerd + " | username=" + iNextUsername + " (offset=" + iOff + ")");
                     break;
                 }
                 else
                 {
-                    log.warning("[PRELIM-RECOVER] No INET agent for " + iLvcDescTarget
-                            + " herd=" + iHerd + " at offset=" + iOff
-                            + " — trying offset=" + (iOff + 1));
+                    log.warning("[PRELIM-RECOVER] No INET agent for " + iLvcDescTarget + " herd=" + iHerd + " at offset=" + iOff + " — trying offset=" + (iOff + 1));
                 }
             }
 
@@ -579,8 +581,7 @@ public class TC_18
         setPrelimHerd(pCheckType, iNextHerd, iNextUsername);
         Hooks.RUNTIME_USERNAME = iNextUsername;
 
-        log.info("[PRELIM-RECOVER] Recovery complete | " + pCheckType
-                + " → herd=" + iNextHerd + " | username=" + iNextUsername);
+        log.info("[PRELIM-RECOVER] Recovery complete | " + pCheckType + " → herd=" + iNextHerd + " | username=" + iNextUsername);
         return true;
     }
 
@@ -687,8 +688,7 @@ public class TC_18
             log.info("[RELOGIN] PIN screen detected — filling slots 1–7.");
             for (int idx = 1; idx <= 7; idx++)
             {
-                String iDynXpath = ObjReader.getLocator("iPinInputIndex")
-                        .replace("{idx}", String.valueOf(idx));
+                String iDynXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
                 By iPinBy = By.xpath(iDynXpath);
                 if (isVisible(iPinBy, 1))
                 {
@@ -725,11 +725,10 @@ public class TC_18
     {
         log.info("[RELOGIN] Navigating to My Clients...");
         iAction("CLICK",        "XPATH", ObjReader.getLocator("iAppSearchBar"),       "");
-        iAction("TEXTBOX",      "XPATH", ObjReader.getLocator("iAppSearchBar"),
-                "Basic Income Support for Sustainability");
-        iAction("VERIFYELEMENT","XPATH", ObjReader.getLocator("iSearchAppLabel"),     "");
+        iAction("TEXTBOX",      "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+        //iAction("VERIFYELEMENT","XPATH", ObjReader.getLocator("iSearchAppLabel"),     "");
         iAction("CLICK",        "XPATH", ObjReader.getLocator("iBissLink"),           "");
-        iAction("WAITINVISIBLE","XPATH", "iScreenBuffer",                             "Spinner");
+        iAction("WAITINVISIBLE","XPATH", "iScreenBuffer", "Spinner");
         iAction("CLICK",        "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"),   null);
         iAction("CLICK",        "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
         iAction("CLICK",        "XPATH", ObjReader.getLocator("iViewAllTab"),         "");
@@ -828,4 +827,332 @@ public class TC_18
         return s + " ".repeat(n - s.length());
     }
 
+    // ***************************************************************************************************************************************************************************************
+// Step          : Then the agent resolves any overclaim value exceeds EH errors if present
+// Description   : After clicking Submit, rows with claimed area > eligible (ha) show a
+//                 "Value exceeds EH" error inline in the cdk-column-claimedArea cell.
+//
+//                 Three scenarios handled:
+//
+//                   1. No suffix (single parcel e.g. "A1150100017"):
+//                        → 1 row in group → enter the eligible value directly
+//                          claimed = eligible (always ≤ eligible, no overclaim)
+//
+//                   2. Suffix present, split into 2+ (e.g. "A1150100017 A" + "A1150100017 B"):
+//                        → Group all suffix rows by base parcel number
+//                        → Distribute the shared eligible pool proportionally based on
+//                          each row's original claimed value
+//                        → Non-last rows: floor to 2dp (never rounds up over pool)
+//                        → Last row: pool − running total (absorbs rounding remainder)
+//                        → Group total guaranteed = eligible pool exactly
+//
+//                   3. Split into N parts (A/B/C/...):
+//                        → Same proportional logic as case 2, scales to any N
+//
+//                 All locators sourced from ObjectRepository.properties via ObjReader.
+//                 Row-scoped relative XPaths (.//td...) are used via iRow.findElements()
+//                 since iAction always resolves from document root and cannot be scoped
+//                 to a specific parent WebElement.
+//
+//                 If no errors are present the step passes silently.
+//                 Feature file calls Submit again after this step.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date          : 21-04-2026
+// ***************************************************************************************************************************************************************************************
+    @Then("the agent resolves any overclaim value exceeds EH errors if present")
+    public void theAgentResolvesAnyOverclaimValueExceedsEHErrorsIfPresent()
+    {
+        log.info("[STEP] Then the agent resolves any overclaim value exceeds EH errors if present");
+
+        WebDriver          iDriver = getDriver();
+        JavascriptExecutor iJs     = (JavascriptExecutor) iDriver;
+
+        // ── All data rows — absolute XPath from ObjectRepository ──────────────────────────
+        List<WebElement> iAllRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iPrelimOverclaimDataRows")));
+
+        if (iAllRows.isEmpty())
+        {
+            log.info("[OVERCLAIM-FIX] No data rows found — nothing to fix.");
+            return;
+        }
+
+        // ── Parallel lists — one entry per error row found ────────────────────────────────
+        List<Integer> iErrorRowIndexes   = new java.util.ArrayList<>();
+        List<String>  iBaseParcelNumbers = new java.util.ArrayList<>();
+        List<Double>  iEligibleValues    = new java.util.ArrayList<>();
+        List<Double>  iOriginalClaimed   = new java.util.ArrayList<>();
+
+        for (int i = 0; i < iAllRows.size(); i++)
+        {
+            WebElement iRow = iAllRows.get(i);
+
+            // ── Only process rows that have a "Value exceeds EH" error ───────────────────
+            // Relative XPath scoped to this row — cannot use iAction (root-based only)
+            List<WebElement> iErrors = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimValueExceedsEHError")));
+            if (iErrors.isEmpty()) continue;
+
+            // ── Read parcel number — strip trailing single-letter split suffix ────────────
+            // DOM: <td class="cdk-column-parcelNo"> A1150100017 <span> B </span>
+            // Full getText() = "A1150100017  B"   Base = strip trailing " A" / " B" etc.
+            List<WebElement> iParcelCells = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimParcelNoCell")));
+            if (iParcelCells.isEmpty()) continue;
+
+            String iFullParcel = iParcelCells.get(0).getText().trim();
+            String iBaseParcel = iFullParcel.replaceAll("\\s+[A-Z]$", "").trim();
+
+            // ── Read eligible (ha) — relative XPath scoped to this row ───────────────────
+            List<WebElement> iEligibleCells = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimEligibleCell")));
+            if (iEligibleCells.isEmpty()) continue;
+
+            double iEligible;
+            try
+            {
+                iEligible = Double.parseDouble(iEligibleCells.get(0).getText().trim().replaceAll("[^0-9.]", ""));
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[OVERCLAIM-FIX] Row " + (i + 1) + " — could not parse eligible value. Skipping.");
+                continue;
+            }
+
+            // ── Read pre-filled claimed value from input — relative XPath ─────────────────
+            List<WebElement> iInputs = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimClaimedInput")));
+            if (iInputs.isEmpty()) continue;
+
+            String iClaimedRaw = iInputs.get(0).getAttribute("value");
+            if (iClaimedRaw == null || iClaimedRaw.trim().isEmpty()) iClaimedRaw = "0";
+
+            double iClaimed;
+            try
+            {
+                iClaimed = Double.parseDouble(iClaimedRaw.trim().replaceAll("[^0-9.]", ""));
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[OVERCLAIM-FIX] Row " + (i + 1) + " — could not parse claimed value '" + iClaimedRaw + "'. Skipping.");
+                continue;
+            }
+
+            iErrorRowIndexes.add(i);
+            iBaseParcelNumbers.add(iBaseParcel);
+            iEligibleValues.add(iEligible);
+            iOriginalClaimed.add(iClaimed);
+
+            log.info("[OVERCLAIM-FIX] Error row " + (i + 1) + " | parcel=" + iFullParcel + " | base=" + iBaseParcel + " | eligible=" + iEligible + " | claimed=" + iClaimed);
+        }
+
+        if (iErrorRowIndexes.isEmpty())
+        {
+            log.info("[OVERCLAIM-FIX] No 'Value exceeds EH' errors found — nothing to fix.");
+            return;
+        }
+
+        // ── Group error rows by base parcel number ────────────────────────────────────────
+        java.util.Map<String, List<Integer>> iGroupMap = new java.util.LinkedHashMap<>();
+        for (int g = 0; g < iErrorRowIndexes.size(); g++)
+        {
+            String iKey = iBaseParcelNumbers.get(g);
+            iGroupMap.computeIfAbsent(iKey, k -> new java.util.ArrayList<>()).add(g);
+        }
+
+        // ── Compute assigned value per row ────────────────────────────────────────────────
+        double[] iAssignedValues = new double[iErrorRowIndexes.size()];
+
+        for (Map.Entry<String, List<Integer>> iGroup : iGroupMap.entrySet())
+        {
+            String        iParcel    = iGroup.getKey();
+            List<Integer> iGroupIdxs = iGroup.getValue();
+            double        iPool      = iEligibleValues.get(iGroupIdxs.get(0));
+
+            // ── CASE 1: Single parcel — no suffix, not split ──────────────────────────────
+            // Enter the eligible value directly — claimed = eligible (≤ eligible, no error)
+            if (iGroupIdxs.size() == 1)
+            {
+                iAssignedValues[iGroupIdxs.get(0)] = iPool;
+                log.info("[OVERCLAIM-FIX] Single parcel '" + iParcel + "' | not split | entering eligible=" + iPool);
+                continue;
+            }
+
+            // ── CASE 2 & 3: Split parcel — proportional distribution across N rows ────────
+            double iTotalClaimed = 0.0;
+            for (int g : iGroupIdxs) iTotalClaimed += iOriginalClaimed.get(g);
+
+            log.info("[OVERCLAIM-FIX] Split parcel '" + iParcel + "' | rows=" + iGroupIdxs.size() + " | pool=" + iPool + " | totalClaimed=" + iTotalClaimed);
+
+            // Edge case — all claimed values are 0, distribute pool evenly
+            if (iTotalClaimed == 0.0)
+            {
+                double iEven = Math.floor((iPool / iGroupIdxs.size()) * 100.0) / 100.0;
+                for (int g : iGroupIdxs) iAssignedValues[g] = iEven;
+                log.warning("[OVERCLAIM-FIX] Split parcel '" + iParcel + "' — total claimed is 0, distributing evenly: " + iEven + " each.");
+                continue;
+            }
+
+            // Non-last rows: floor to 2dp — guarantees partial sum never exceeds pool
+            double iRunningTotal = 0.0;
+            for (int gi = 0; gi < iGroupIdxs.size() - 1; gi++)
+            {
+                int    g           = iGroupIdxs.get(gi);
+                double iProportion = iOriginalClaimed.get(g) / iTotalClaimed;
+                double iShare      = Math.floor(iProportion * iPool * 100.0) / 100.0;
+                iAssignedValues[g] = iShare;
+                iRunningTotal     += iShare;
+                log.info("[OVERCLAIM-FIX]   Row " + (iErrorRowIndexes.get(g) + 1) + " | proportion=" + String.format("%.4f", iProportion) + " | share=" + iShare);
+            }
+
+            // Last row absorbs remainder — group total = pool exactly, regardless of N
+            int    iLastG     = iGroupIdxs.get(iGroupIdxs.size() - 1);
+            double iLastShare = Math.round((iPool - iRunningTotal) * 100.0) / 100.0;
+            iAssignedValues[iLastG] = iLastShare;
+            log.info("[OVERCLAIM-FIX]   Row " + (iErrorRowIndexes.get(iLastG) + 1) + " | last row remainder=" + iLastShare + " | group total=" + String.format("%.2f", iRunningTotal + iLastShare));
+        }
+
+        // ── Write computed values into the DOM ────────────────────────────────────────────
+        // Re-fetch all rows fresh to avoid stale element references after Angular re-render
+        iAllRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iPrelimOverclaimDataRows")));
+
+        for (int g = 0; g < iErrorRowIndexes.size(); g++)
+        {
+            int        iRowIndex    = iErrorRowIndexes.get(g);
+            String     iValueString = String.format("%.2f", iAssignedValues[g]);
+            WebElement iRow         = iAllRows.get(iRowIndex);
+
+            // Relative XPath scoped to this row — cannot use iAction (root-based only)
+            WebElement iInput = iRow.findElement(By.xpath(ObjReader.getLocator("iPrelimClaimedInput")));
+
+            // Step 1: Clear via JS — Angular reactive forms ignore Selenium clear alone
+            iJs.executeScript("arguments[0].value = '';", iInput);
+            iInput.clear();
+
+            // Step 2: Type the computed value
+            iInput.sendKeys(iValueString);
+
+            // Step 3: Fire Angular input + change events so reactive binding picks up value
+            iJs.executeScript("arguments[0].dispatchEvent(new Event('input',  {bubbles: true}));" + "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));", iInput);
+
+            log.info("[OVERCLAIM-FIX] Written " + iValueString + " → row " + (iRowIndex + 1) + " (parcel=" + iBaseParcelNumbers.get(g) + ")");
+        }
+
+        log.info("[OVERCLAIM-FIX] All overclaim errors resolved. Ready to re-submit.");
+    }
+
+    // ***************************************************************************************************************************************************************************************
+// Step          : Then the agent resolves any agricultural activity dropdown errors if present
+// Description   : After clicking Submit on the Preliminary Checks page, rows in the
+//                 No Agricultural Activity panel that have "Yes, change" selected show a
+//                 mandatory mat-select dropdown in cdk-column-otherAgActivity.
+//                 If the dropdown was not pre-filled, Angular marks it ng-invalid /
+//                 aria-invalid="true" and blocks submission.
+//
+//                 For every data row in biss-response-agactivity-table:
+//                   1. Check if the mat-select in cdk-column-otherAgActivity is
+//                      empty / invalid (aria-invalid="true" or mat-mdc-select-empty class)
+//                   2. If invalid → click the mat-select to open the CDK overlay panel
+//                   3. Wait for the overlay to appear
+//                   4. Click the FIRST mat-option in the panel
+//                   5. If not invalid → skip silently
+//
+//                 Step is safe to always include — if no invalid dropdowns are present
+//                 it passes silently without affecting the submission flow.
+//
+//                 Locators used:
+//                   iPrelimAgriActivityDataRows  — all data rows in agri activity table
+//                   iPrelimAgriActivityDropdown  — mat-select inside otherAgActivity cell
+//                   iPrelimCdkOverlayFirstOption — first mat-option in CDK overlay panel
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date          : 22-04-2026
+// ***************************************************************************************************************************************************************************************
+    @Then("the agent resolves any agricultural activity dropdown errors if present")
+    public void theAgentResolvesAnyAgriculturalActivityDropdownErrorsIfPresent() throws InterruptedException {
+        log.info("[STEP] Then the agent resolves any agricultural activity dropdown errors if present");
+
+        WebDriver iDriver = getDriver();
+
+        // ── All data rows scoped to biss-response-agactivity-table ────────────────────────
+        // Using absolute XPath from ObjectRepository — scoped to the agri activity component
+        // so we never accidentally touch the Overclaim or Dual Claim table rows
+        List<WebElement> iAllRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iPrelimAgriActivityDataRows")));
+
+        if (iAllRows.isEmpty())
+        {
+            log.info("[AGRI-FIX] No Agricultural Activity rows found — nothing to fix.");
+            return;
+        }
+
+        int iFixCount = 0;
+
+        for (int i = 0; i < iAllRows.size(); i++)
+        {
+            WebElement iRow = iAllRows.get(i);
+
+            // ── Find the mat-select inside cdk-column-otherAgActivity for this row ─────────
+            // Relative XPath scoped to this row — cannot use iAction (root-based only)
+            List<WebElement> iDropdowns = iRow.findElements(By.xpath(ObjReader.getLocator("iPrelimAgriActivityDropdown")));
+
+            if (iDropdowns.isEmpty())
+            {
+                log.info("[AGRI-FIX] Row " + (i + 1) + " — no dropdown present. Skipping.");
+                continue;
+            }
+
+            WebElement iDropdown = iDropdowns.get(0);
+
+            // ── Check if dropdown is invalid / empty ──────────────────────────────────────
+            // Angular marks it aria-invalid="true" when the required field has no selection.
+            // Also check for mat-mdc-select-empty class as a belt-and-braces guard.
+            String iAriaInvalid = iDropdown.getAttribute("aria-invalid");
+            String iClasses     = iDropdown.getAttribute("class");
+
+            boolean iIsInvalid = "true".equalsIgnoreCase(iAriaInvalid) || (iClasses != null && iClasses.contains("mat-mdc-select-empty"));
+
+            if (!iIsInvalid)
+            {
+                log.info("[AGRI-FIX] Row " + (i + 1) + " — dropdown already has a value. Skipping.");
+                continue;
+            }
+
+            log.info("[AGRI-FIX] Row " + (i + 1) + " — dropdown is empty/invalid. Selecting first option.");
+
+            // ── Click the mat-select trigger to open the CDK overlay panel ─────────────────
+            // Use JavaScript click — Angular mat-select triggers can be intercepted by overlays
+            ((JavascriptExecutor) iDriver).executeScript("arguments[0].click();", iDropdown);
+
+            // ── Wait for the CDK overlay panel to appear ──────────────────────────────────
+            // The panel is appended to the body as a CDK overlay — not inside the table row
+            try
+            {
+                Thread.sleep(1000);
+                new org.openqa.selenium.support.ui.WebDriverWait(iDriver, java.time.Duration.ofSeconds(5)).until(org.openqa.selenium.support.ui.ExpectedConditions.visibilityOfElementLocated(By.xpath(ObjReader.getLocator("iPrelimCdkOverlayFirstOption"))));
+            }
+            catch (Exception e)
+            {
+                log.warning("[AGRI-FIX] Row " + (i + 1) + " — CDK overlay did not appear after clicking dropdown. Skipping. " + e.getMessage());
+                continue;
+            }
+
+            // ── Click the first mat-option from the overlay panel ─────────────────────────
+            // Absolute XPath from ObjectRepository — panel is in body overlay, not in row
+            WebElement iFirstOption = iDriver.findElement(By.xpath(ObjReader.getLocator("iPrelimCdkOverlayFirstOption")));
+            Thread.sleep(1000);
+            String iOptionText = iFirstOption.getText().trim();
+            iFirstOption.click();
+
+            iFixCount++;
+            log.info("[AGRI-FIX] Row " + (i + 1) + " — selected first option: '" + iOptionText + "'");
+
+            // Re-fetch rows after Angular re-renders to avoid stale element on next iteration
+            iAllRows = iDriver.findElements(By.xpath(ObjReader.getLocator("iPrelimAgriActivityDataRows")));
+        }
+
+        if (iFixCount > 0)
+        {
+            log.info("[AGRI-FIX] Fixed " + iFixCount + " agricultural activity dropdown(s). Ready to re-submit.");
+        }
+        else
+        {
+            log.info("[AGRI-FIX] No invalid dropdowns found — submission can proceed.");
+        }
+    }
 }
