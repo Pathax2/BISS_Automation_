@@ -20,10 +20,10 @@ import java.util.Set;
 public class Hooks
 {
     public static XWPFDocument iDocument    = null;
-    public static String       iDocPath     = "";
-    public static String       iTestCaseID  = "";
-    public static String       iEnvironment = "";
-    public static String       iUrl         = "";
+    public static String       iDocPath     = null;
+    public static String       iTestCaseID  = null;
+    public static String       iEnvironment = null;
+    public static String       iUrl         = null;
 
     private static final StringBuilder iAccumulatedErrors  = new StringBuilder();
     private static String              iLastScreenshotPath = "";
@@ -51,8 +51,8 @@ public class Hooks
             "R1230577","C2280025","C1281036","Q1060377","M1391623","M1701886","D1160614",
             "X1120993","P1261051","E209434X","D1174054","H2621144","B1240361","G1930639",
             "G194082X","B1560048","R1050781","D201078X","M1952021","W1040563","B1150150",
-            "B1380562","C129112X","G1221786","T209028X","T1790688","G1280928","G1930167",
-            "Y1070492","Y1791564","R1040514","C1430554","C1289029","D2450985"
+            "B1380562","C129112X","G1221786","T209028X","A1030615","T1790688","G1280928","G1930167",
+            "Y1070492","Y1791564","R1040514","C1430554","C1289029","B1014078","D2450985"
     );
 
     private static void rerunIfBlacklisted()
@@ -62,11 +62,9 @@ public class Hooks
         while (RUNTIME_HERD != null && BLACKLISTED_HERDS.contains(RUNTIME_HERD) && retries < 50)
         {
             retries++;
-            CommonFunctions.log.warning("[HOOKS] Blacklisted herd detected: " + RUNTIME_HERD + " — re-fetching (attempt " + retries + ")");
+            CommonFunctions.log.warning("=========================================================[HOOKS] Blacklisted herd detected: " + RUNTIME_HERD + " — re-fetching (attempt " + retries + ")");
 
-            database.DBRouter.runDB("DATA", "List of herds with no errors at all",
-                    String.valueOf(java.time.Year.now().getValue()),
-                    String.valueOf(10 + retries)
+            database.DBRouter.runDB("DATA", "List of herds with no errors at all", String.valueOf(java.time.Year.now().getValue()), String.valueOf(10 + retries)
             );
 
             List<Map<String, Object>> rows = database.DBRouter.getRows();
@@ -91,14 +89,13 @@ public class Hooks
         }
 
         if (BLACKLISTED_HERDS.contains(RUNTIME_HERD)) {
-            throw new RuntimeException("[HOOKS] Could not resolve a non-blacklisted herd after "
-                    + retries + " retries. Last herd=" + RUNTIME_HERD);
+            throw new RuntimeException("====================================================[HOOKS] Could not resolve a non-blacklisted herd after " + retries + " retries. Last herd=" + RUNTIME_HERD);
         }
     }
 
     // =================================================================================================
-    // BEFORE ALL — runs once before any scenario in the test run
-    // =================================================================================================
+// BEFORE ALL — runs once before any scenario in the test run
+// =================================================================================================
     @BeforeAll
     public static void beforeAllExecution()
     {
@@ -171,9 +168,7 @@ public class Hooks
                     }
                     java.util.Collections.shuffle(candidates, new java.util.Random(System.nanoTime()));
 
-                    CommonFunctions.log.info("[BOOT] Attempt " + attempt + "/" + maxAttempts +
-                            " — trying " + candidates.size() + " randomized candidate(s) from DATA (year=" +
-                            herdYear + ", limit=" + limit + ")");
+                    CommonFunctions.log.info("[BOOT] Attempt " + attempt + "/" + maxAttempts + " — trying " + candidates.size() + " randomized candidate(s) from DATA (year=" + herdYear + ", limit=" + limit + ")");
 
                     int idx = 0;
                     for (String candidate : candidates) {
@@ -197,8 +192,7 @@ public class Hooks
                     }
 
                     if (!found) {
-                        CommonFunctions.log.warning("[BOOT] No mapped USERNAME found in attempt " + attempt +
-                                ". Re-running DATA query to get a fresh set of " + limit + " candidates...");
+                        CommonFunctions.log.warning("[BOOT] No mapped USERNAME found in attempt " + attempt + ". Re-running DATA query to get a fresh set of " + limit + " candidates...");
                     }
                 }
 
@@ -206,12 +200,10 @@ public class Hooks
                     if (!unameFromSheet.isBlank()) {
                         RUNTIME_USERNAME = unameFromSheet;
                         RUNTIME_HERD     = (RUNTIME_HERD == null || RUNTIME_HERD.isBlank()) ? herdFromSheet : RUNTIME_HERD;
-                        CommonFunctions.log.warning("[BOOT] Falling back to Username from sheet: " + RUNTIME_USERNAME +
-                                " | Herd=" + RUNTIME_HERD);
+                        CommonFunctions.log.warning("[BOOT] Falling back to Username from sheet: " + RUNTIME_USERNAME + " | Herd=" + RUNTIME_HERD);
                         rerunIfBlacklisted();
                     } else {
-                        throw new RuntimeException("Runtime DB (INET) returned no USERNAME after " + herdRetry +
-                                " attempt(s). Try -Dherd.limit=10 or set -DusernameOverride=... for this run.");
+                        throw new RuntimeException("Runtime DB (INET) returned no USERNAME after " + herdRetry + " attempt(s). Try -Dherd.limit=10 or set -DusernameOverride=... for this run.");
                     }
                 }
             }
@@ -226,7 +218,7 @@ public class Hooks
                 int dataRowIdx = iTestDataExcel.findRow(iTestDataSheetName, "TestCase_ID", iTestCaseID);
                 if (dataRowIdx != -1) {
                     iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
-                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "Username",   RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
+                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "Username", RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
                     CommonFunctions.log.info("[BOOT→Excel] Data updated: HerdNumber=" + RUNTIME_HERD + ", Username=" + RUNTIME_USERNAME);
                 } else {
                     CommonFunctions.log.warning("[BOOT→Excel] Row not found for TestCase_ID=" + iTestCaseID + " (skipped write-back)");
@@ -242,35 +234,54 @@ public class Hooks
             iDocument = (XWPFDocument) iReportObjects[0];
             iDocPath  = String.valueOf(iReportObjects[1]);
 
+            // ── Publish Word doc path to ReportManager so HtmlReportGenerator can link it ──
+            // This enables the HTML report footer to show a clickable "Word Report" link
+            // pointing to the .docx file generated for this test run.
+            ReportManager.setWordDocPath(iDocPath);
+
             CommonFunctions.log.info("BeforeAll complete | URL=" + iUrl + " | Report=" + iDocPath);
         }
         catch (Exception iException)
         {
-            throw new RuntimeException("BeforeAll failed for [" + iTestCaseID + "] : " + iException.getMessage(), iException);
+            throw new RuntimeException("BeforeAll failed for [" + iTestCaseID + "] : "
+                    + iException.getMessage(), iException);
         }
     }
 
-// ***********************************************************************
+    // ***************************************************************************************************************************************************************************************
 // @Before("@preliminary")
-// Description : Resolves one valid herd+username per preliminary check
-//               type (Overclaim, Dual claim, Agricultural Activity) for
-//               TC_18 / TC_19 / TC_20.
+// Description   : Resolves one valid herd+username per preliminary check type
+//                 (Overclaim, Dual claim, Agricultural Activity) for TC_18 / TC_19 / TC_20.
 //
-//               Strategy — offset-based retry loop:
-//                 1. Query BISS_DATA with offset N to get the Nth herd
-//                    per check type from the ROW_NUMBER partition.
-//                 2. For each of the 3 rows returned, validate BISS_INET.
-//                 3. If any check type has no USERNAME → increment offset
-//                    and repeat the whole 3-row fetch.
-//                 4. After MAX_PRELIM_ATTEMPTS fail → throw to abort TC.
+//                 Strategy — offset-based retry loop:
+//                   1. Query BISS_DATA with offset N to get the Nth herd per check type
+//                      from the ROW_NUMBER partition.
+//                   2. For each of the 3 rows returned, validate BISS_INET.
+//                   3. If any check type has no USERNAME → increment offset and repeat.
+//                   4. After MAX_ATTEMPTS fail → throw to abort TC.
 //
-//               This solves the "always same 3 herds, Overclaim has no
-//               agent" problem observed in CENTEST on 17-Apr-2026.
-// ***********************************************************************
+//                 FIX (22-04-2026) — RUNTIME_USERNAME sync:
+//                   After resolving all 3 herds, RUNTIME_USERNAME is overwritten with the
+//                   agent who owns the preliminary check herd for THIS scenario's check type.
+//
+//                   Root cause of the bug:
+//                     @BeforeAll sets RUNTIME_USERNAME = aga6296 (standard herd agent).
+//                     @Before("@preliminary") fires next and resolves OVERCLAIM_USERNAME = aga6352.
+//                     The Background login step then reads Hooks.RUNTIME_USERNAME = aga6296
+//                     and logs in as aga6296 — who cannot see herd A1060387 (owned by aga6352).
+//                     My Clients search returns 0 rows → all 15 retry attempts fail.
+//
+//                   Fix:
+//                     After resolving all 3 herds, detect the TC tag and set RUNTIME_USERNAME
+//                     to the matching preliminary agent so Background login is correct:
+//                       @TC_18 / @TC_15 → RUNTIME_USERNAME = OVERCLAIM_USERNAME
+//                       @TC_19 / @TC_16 → RUNTIME_USERNAME = DUAL_CLAIM_USERNAME
+//                       @TC_20 / @TC_17 → RUNTIME_USERNAME = AGRI_ACTIVITY_USERNAME
+// ***************************************************************************************************************************************************************************************
     @Before("@preliminary")
     public void resolveRuntimePreliminaryHerds(Scenario pScenario)
     {
-        final int    MAX_ATTEMPTS = 10;
+        final int    MAX_ATTEMPTS = 100;
         final String YEAR         = System.getProperty("herd.year", "2026").trim();
 
         CommonFunctions.log.info("[PRELIM-HOOK] Resolving preliminary herds for: " + pScenario.getName());
@@ -279,7 +290,8 @@ public class Hooks
 
         for (int iOffset = 0; iOffset < MAX_ATTEMPTS; iOffset++)
         {
-            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_ATTEMPTS + " — offset=" + iOffset);
+            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_ATTEMPTS
+                    + " — offset=" + iOffset);
 
             // Fetch one herd per check type at this offset from BISS_DATA
             database.DBRouter.runDB("DATA", "Preliminary checks herds", YEAR, String.valueOf(iOffset));
@@ -330,14 +342,46 @@ public class Hooks
 
             if (iOverclaimHerd != null && iDualClaimHerd != null && iAgriActivityHerd != null)
             {
-                OVERCLAIM_HERD         = iOverclaimHerd;    OVERCLAIM_USERNAME    = iOverclaimUser;
-                DUAL_CLAIM_HERD        = iDualClaimHerd;    DUAL_CLAIM_USERNAME   = iDualClaimUser;
+                OVERCLAIM_HERD         = iOverclaimHerd;    OVERCLAIM_USERNAME     = iOverclaimUser;
+                DUAL_CLAIM_HERD        = iDualClaimHerd;    DUAL_CLAIM_USERNAME    = iDualClaimUser;
                 AGRI_ACTIVITY_HERD     = iAgriActivityHerd; AGRI_ACTIVITY_USERNAME = iAgriActivityUser;
 
                 CommonFunctions.log.info("[PRELIM-HOOK] All 3 resolved:");
-                CommonFunctions.log.info("[PRELIM-HOOK]  Overclaim         → " + OVERCLAIM_HERD      + " / " + OVERCLAIM_USERNAME);
-                CommonFunctions.log.info("[PRELIM-HOOK]  Dual claim        → " + DUAL_CLAIM_HERD     + " / " + DUAL_CLAIM_USERNAME);
-                CommonFunctions.log.info("[PRELIM-HOOK]  Agri Activity     → " + AGRI_ACTIVITY_HERD  + " / " + AGRI_ACTIVITY_USERNAME);
+                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
+                CommonFunctions.log.info("[PRELIM-HOOK]  Overclaim         → " + OVERCLAIM_HERD + " / " + OVERCLAIM_USERNAME);
+                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
+                CommonFunctions.log.info("[PRELIM-HOOK]  Dual claim        → " + DUAL_CLAIM_HERD + " / " + DUAL_CLAIM_USERNAME);
+                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
+                CommonFunctions.log.info("[PRELIM-HOOK]  Agri Activity     → " + AGRI_ACTIVITY_HERD + " / " + AGRI_ACTIVITY_USERNAME);
+                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
+
+                // ── FIX (22-04-2026): Sync RUNTIME_USERNAME to the correct preliminary agent ──
+                //
+                // Problem: @BeforeAll sets RUNTIME_USERNAME to the standard herd agent (e.g. aga6296).
+                //          The Background login step reads Hooks.RUNTIME_USERNAME and logs in as
+                //          aga6296. But the preliminary herd (e.g. A1060387) belongs to aga6352.
+                //          My Clients search finds 0 rows → all 15 retry attempts fail.
+                //
+                // Fix: overwrite RUNTIME_USERNAME here with the agent for this TC's check type,
+                //      so the Background login step uses the correct agent automatically.
+                //
+                //   @TC_18 / @TC_15 → Overclaim agent
+                //   @TC_19 / @TC_16 → Dual Claim agent
+                //   @TC_20 / @TC_17 → Agricultural Activity agent
+                if (pScenario.getSourceTagNames().contains("@TC_18") || pScenario.getSourceTagNames().contains("@TC_15"))
+                {
+                    RUNTIME_USERNAME = OVERCLAIM_USERNAME;
+                }
+                else if (pScenario.getSourceTagNames().contains("@TC_19") || pScenario.getSourceTagNames().contains("@TC_16"))
+                {
+                    RUNTIME_USERNAME = DUAL_CLAIM_USERNAME;
+                }
+                else if (pScenario.getSourceTagNames().contains("@TC_20") || pScenario.getSourceTagNames().contains("@TC_17"))
+                {
+                    RUNTIME_USERNAME = AGRI_ACTIVITY_USERNAME;
+                }
+
+                CommonFunctions.log.info("[PRELIM-HOOK] RUNTIME_USERNAME synced → " + RUNTIME_USERNAME + " | Background login will use this agent.");
 
                 iAllResolved = true;
                 break;
@@ -351,22 +395,21 @@ public class Hooks
 
         if (!iAllResolved)
         {
-            throw new RuntimeException(
-                    "[PRELIM-HOOK] Could not resolve all 3 preliminary check herds after "
-                            + MAX_ATTEMPTS + " attempts for year=" + YEAR);
+            throw new RuntimeException("[PRELIM-HOOK] Could not resolve all 3 preliminary check herds after " + MAX_ATTEMPTS + " attempts for year=" + YEAR);
         }
     }
-    // ***************************************************************************************************************************************************************************************
-    // Method        : fetchPrelimUsername
-    // Description   : Queries BISS_INET for the agent login ID for a given herd number.
-    //                 Returns null if the herd is null/blank or no result is found.
-    //                 Logs a warning rather than throwing — a missing username for one check type
-    //                 should not block the other two TCs from running.
-    // Parameters    : pHerd      — herd number string e.g. "A1060204"
-    //                 pCheckType — label used only for log messages e.g. "OVERCLAIM"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 17-04-2026
-    // ***************************************************************************************************************************************************************************************
+
+// ***************************************************************************************************************************************************************************************
+// Method        : fetchPrelimUsername
+// Description   : Queries BISS_INET for the agent login ID for a given herd number.
+//                 Returns null if the herd is null/blank or no result is found.
+//                 Logs a warning rather than throwing — a missing username for one check type
+//                 should not block the other two TCs from running.
+// Parameters    : pHerd      — herd number string e.g. "A1060204"
+//                 pCheckType — label used only for log messages e.g. "OVERCLAIM"
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 17-04-2026
+// ***************************************************************************************************************************************************************************************
     private String fetchPrelimUsername(String pHerd, String pCheckType)
     {
         if (pHerd == null || pHerd.isBlank())
@@ -388,8 +431,8 @@ public class Hooks
     }
 
     // =================================================================================================
-    // BEFORE — runs before every scenario
-    // =================================================================================================
+// BEFORE — runs before every scenario
+// =================================================================================================
     @Before
     public void beforeScenarioExecution(Scenario pScenario)
     {
@@ -403,39 +446,31 @@ public class Hooks
     }
 
     // =================================================================================================
-    // AFTER — runs after every scenario
-    // =================================================================================================
+// AFTER — runs after every scenario
+// =================================================================================================
     @After
     public void afterScenarioExecution(Scenario pScenario)
     {
         SoftAssertManager.assertAll();
 
         long iScenarioDuration = System.currentTimeMillis() - iScenarioStartTime;
-        utilities.ScreenshotManager.appendScenarioDivider(
-                iDocument,
-                pScenario.getName(),
-                !pScenario.isFailed(),
-                iScenarioDuration
-        );
+        utilities.ScreenshotManager.appendScenarioDivider(iDocument, pScenario.getName(), !pScenario.isFailed(), iScenarioDuration);
 
         try
         {
             if (pScenario.isFailed())
             {
-                CommonFunctions.log.severe("---------- Scenario FAILED : " + pScenario.getName() + " ----------");
+                CommonFunctions.log.severe("---------- Scenario FAILED : " + pScenario.getName()
+                        + " ----------");
 
-                iAccumulatedErrors.append("Scenario [")
-                        .append(pScenario.getName())
-                        .append("] FAILED. Status=")
-                        .append(pScenario.getStatus().name())
-                        .append("\n");
+                iAccumulatedErrors.append("Scenario [").append(pScenario.getName())
+                        .append("] FAILED. Status=").append(pScenario.getStatus().name()).append("\n");
 
                 try
                 {
                     if (iDocument != null && !iDocPath.isEmpty())
                     {
-                        iLastScreenshotPath = CommonFunctions.addScreenshotToReport(
-                                iDocument, iDocPath, iTestCaseID);
+                        iLastScreenshotPath = CommonFunctions.addScreenshotToReport(iDocument, iDocPath, iTestCaseID);
                     }
                     else
                     {
@@ -450,7 +485,8 @@ public class Hooks
             }
             else
             {
-                CommonFunctions.log.info("---------- Scenario PASSED : " + pScenario.getName() + " ----------");
+                CommonFunctions.log.info("---------- Scenario PASSED : " + pScenario.getName()
+                        + " ----------");
             }
         }
         catch (Exception iException)
@@ -460,8 +496,8 @@ public class Hooks
     }
 
     // =================================================================================================
-    // AFTER ALL — runs once after all scenarios complete
-    // =================================================================================================
+// AFTER ALL — runs once after all scenarios complete
+// =================================================================================================
     @AfterAll
     public static void afterAllExecution()
     {
@@ -469,7 +505,8 @@ public class Hooks
         {
             if (iAccumulatedErrors.length() > 0)
             {
-                System.setProperty("lastFailureReason." + iTestCaseID, iAccumulatedErrors.toString().trim());
+                System.setProperty("lastFailureReason." + iTestCaseID,
+                        iAccumulatedErrors.toString().trim());
             }
             if (!iLastScreenshotPath.isEmpty())
             {
@@ -478,7 +515,8 @@ public class Hooks
         }
         catch (Exception iException)
         {
-            CommonFunctions.log.severe("Failed to publish failure properties : " + iException.getMessage());
+            CommonFunctions.log.severe("Failed to publish failure properties : "
+                    + iException.getMessage());
         }
 
         try
@@ -506,15 +544,16 @@ public class Hooks
     }
 
     // =================================================================================================
-    // UTILITY
-    // =================================================================================================
+// UTILITY
+// =================================================================================================
     public static void killProcessByName(String processName)
     {
         String os = System.getProperty("os.name").toLowerCase();
         String command;
         try {
             if (os.contains("win")) {
-                String processWithExe = processName.endsWith(".exe") ? processName : processName + ".exe";
+                String processWithExe = processName.endsWith(".exe")
+                        ? processName : processName + ".exe";
                 command = "taskkill /F /IM " + processWithExe + " /T";
             } else {
                 command = "pkill -f " + processName;
@@ -522,21 +561,23 @@ public class Hooks
             Runtime.getRuntime().exec(command);
             CommonFunctions.log.info("Cleaned up process: " + processName);
         } catch (Exception e) {
-            CommonFunctions.log.warning("Could not kill process " + processName + ": " + e.getMessage());
+            CommonFunctions.log.warning("Could not kill process " + processName
+                    + ": " + e.getMessage());
         }
     }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : captureStep
-    // Description   : On-demand screenshot method for step definitions.
-    //                 Takes a screenshot of the current browser state and embeds it into the
-    //                 running Word report with the supplied label as the caption.
-    // Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 26-03-2026
-    // ***************************************************************************************************************************************************************************************
+// Function Name : captureStep
+// Description   : On-demand screenshot method for step definitions.
+//                 Takes a screenshot of the current browser state and embeds it into the
+//                 running Word report with the supplied label as the caption.
+// Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 26-03-2026
+// ***************************************************************************************************************************************************************************************
     public static void captureStep(String pStepLabel)
     {
         CommonFunctions.captureStepScreenshot(iDocument, iDocPath, pStepLabel);
     }
+
 }
