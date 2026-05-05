@@ -292,6 +292,15 @@ public class CommonFunctions
                     iOptions.addArguments("--disable-infobars");
                     iOptions.addArguments("--disable-extensions");
 
+                    // Set browser-level zoom to 80% via Chrome user profile preferences.
+                    // This is the robust approach — sets the actual Chrome zoom (same as
+                    // Ctrl+- in browser) rather than CSS zoom which only affects body element.
+                    // The value is a double: 0.8 = 80%, 0.9 = 90%, 1.0 = 100%
+                    java.util.Map<String, Object> iPrefs = new java.util.HashMap<>();
+                    iPrefs.put("profile.default_content_settings.popups", 0);
+                    iPrefs.put("profile.default_zoom_level", -0.5733f);
+                    iOptions.setExperimentalOption("prefs", iPrefs);
+
                     if (iHeadless)
                     {
                         iOptions.addArguments("--headless=new");
@@ -300,8 +309,6 @@ public class CommonFunctions
 
                     System.setProperty("webdriver.chrome.driver","drivers/chromedriver.exe");
                     iDriver = new ChromeDriver(iOptions);
-
-
                     break;
                 }
 
@@ -342,12 +349,8 @@ public class CommonFunctions
             iDriverHolder.set(iDriver);
             iWaitHolder.set(new WebDriverWait(iDriver, Duration.ofSeconds(iExplicitWaitSeconds)));
             iDriver.get(pUrl.trim());
-            JavascriptExecutor js = (JavascriptExecutor) iDriver;
-            js.executeScript("document.body.style.zoom='80%'");
 
-            log.info("[" + getCurrentTimestamp() + "] Browser launched successfully | Browser=" + pBrowserType.toUpperCase()
-                    + " | Headless=" + iHeadless
-                    + " | URL=" + pUrl);
+            log.info("[" + getCurrentTimestamp() + "] Browser launched successfully | Browser=" + pBrowserType.toUpperCase() + " | Headless=" + iHeadless + " | URL=" + pUrl);
         }
         catch (Exception iException)
         {
