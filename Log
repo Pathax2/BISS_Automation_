@@ -1,38 +1,44 @@
-old 
+// ----------------------------------------------------------------
+// INET DB: get Username for a Herd (BPS_CONNECT)
+//
+// Source: Query 19 from BISS test data reference document.
+//
+// Uses a correlated subquery with ROWNUM = 1 to return the first
+// available agent login for the given herd. Works for any herd
+// regardless of how many agents are associated.
+//
+// ORDER BY ca.ca_start_date DESC ensures the most recently
+// associated agent is returned first — most likely to be the
+// current active agent.
+//
+// Column returned: USERNAME
+//   Aliased as LoginId in the original query but uppercased to
+//   USERNAME by executeQuery() so getValue("USERNAME") works.
+//
+// Expired agent handling:
+//   SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date filters
+//   expired herd registrations at DB level. If the returned agent
+//   has an expired SSO account, TC_03 login step detects
+//   "Account Expired" on screen → calls Hooks.markAgentExpired()
+//   → re-resolves a fresh herd+agent automatically.
+// ----------------------------------------------------------------
 case "GET LOGIN ID FOR HERD": {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                        "SELECT hbcus.bcus_bus_id        AS HERDNO, " +
-                                "       MIN(ui.uri_username)      AS USERNAME " +
-                                "  FROM tdco_customer_asscs ca, " +
-                                "       tdco_business_customers abcus, " +
-                                "       tdco_business_customers hbcus, " +
-                                "       tdcr_user_info ui " +
-                                " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
-                                "   AND ca.ca_cac_code     = 194 " +
-                                "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
-                                "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
-                                "   AND ui.uri_ccs_bus_id  = abcus.bcus_bus_id " +
-                                "   AND hbcus.bcus_bus_id  = ? " +
-                                " GROUP BY hbcus.bcus_bus_id " +
-                                "HAVING COUNT(DISTINCT ui.uri_username) = 1";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
-
-new 
-SELECT  hbcus.bcus_bus_id HerdNo,
-(SELECT ui.uri_username
-FROM tdcr_user_info ui
-WHERE uri_ccs_bus_id =  abcus.bcus_bus_id
-AND ROWNUM = 1)   LoginId
-FROM  tdco_customer_asscs ca,
-tdco_business_customers abcus,
-tdco_business_customers hbcus
-WHERE SYSDATE BETWEEN ca.ca_start_date
-AND ca.ca_end_date
-AND ca.ca_cac_code = 194
-AND ca.ca_bcus_id_from = abcus.bcus_id
-AND ca.ca_bcus_id_to = hbcus.bcus_id
-AND hbcus.bcus_bus_id = 'A101001X'
-order by ca_start_date desc; 
+    requireParamCountBetween(key, params, 1, 1);
+    sql =
+        "SELECT hbcus.bcus_bus_id AS HERDNO, " +
+        "       (SELECT ui.uri_username " +
+        "          FROM tdcr_user_info ui " +
+        "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
+        "           AND ROWNUM = 1) AS USERNAME " +
+        "  FROM tdco_customer_asscs ca, " +
+        "       tdco_business_customers abcus, " +
+        "       tdco_business_customers hbcus " +
+        " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
+        "   AND ca.ca_cac_code     = 194 " +
+        "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
+        "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
+        "   AND hbcus.bcus_bus_id  = ? " +
+        " ORDER BY ca.ca_start_date DESC";
+    jdbcParams = new Object[]{ params[0] };
+    break;
+}
