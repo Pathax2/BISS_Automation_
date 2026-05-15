@@ -1,273 +1,688 @@
-# ========================================
-TC-AMS-SUBMIT-01
-
-SUMMARY
-AMS R1 Submit - Successfully Submit All Responded AMS Notifications (Artificial Surface)
-
-DESCRIPTION
-Verifies the complete AMS Round 1 submit journey for a farmer or agent who has responded to all Red parcel notifications. The test covers pressing Submit, verifying the Submit confirmation popup content, confirming submission via Yes button, verifying the green toast message, verifying the response PDF is generated with the correct edit map Y/N indicator, and verifying the Farmer Dashboard AMS panel updates to show the green tick. Also verifies the AgriSnap message appears only when rejections exist, downstream effects on Land Details and Internal screens for accepted, rejected, and deleted parcels, and the internal history note. Linked to Xteams 4918 for EOS integration.
-
-LABELS
-AMS, Submit, Round1, ArtificialSurface, EOS, TestOnly
-
-COMPONENT
-AMS - Submit Process - Round 1
-
-ENVIRONMENT
-CENTEST
-
-ROUND
-Round 1 - 2026
-
-TEST DATA
-
-Run on CENTEST_BISS_DATA - Find herd with all AMS responses saved but not yet submitted:
-select LVL_HERD_NO, LML_PARCEL_LABEL, a.* from vwbs_ams_response a where lvl_year = 2026 and lvl_submit_id is null and ams_round = 1 order by lvl_herd_no;
-
-Run on CENTEST_BISS_DATA - Find herd with AMS Admin Inspection Round 1:
-SELECT app_herd_no, app_year, ist_desc, ins_completion_date, int_abbrev, int_desc FROM vwbs_inspection WHERE app_year = 2026 AND int_abbrev = ‘A’ ORDER BY app_herd_no;
-
-Run on CENTEST_BISS_INET - Get agent login for herd:
-SELECT hbcus.bcus_bus_id AS HERDNO, (SELECT ui.uri_username FROM tdcr_user_info ui WHERE uri_ccs_bus_id = abcus.bcus_bus_id AND ROWNUM = 1) AS USERNAME FROM tdco_customer_asscs ca, tdco_business_customers abcus, tdco_business_customers hbcus WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date AND ca.ca_cac_code = 194 AND ca.ca_bcus_id_from = abcus.bcus_id AND ca.ca_bcus_id_to = hbcus.bcus_id AND hbcus.bcus_bus_id = ‘<HERD_NUMBER>’ ORDER BY ca.ca_start_date DESC;
-
-PRECONDITIONS
-
-- Herd has Red AMS findings in Round 1
-- All Red parcel responses have been saved (accepted, rejected, or withdrawn/deleted)
-- At least one rejection exists for the AgriSnap message sub-scenario
-- At least one accepted response with map edit exists for digitising task sub-scenario
-- At least one deleted parcel exists for the deletion sub-scenario
-- Agent login resolved via INET query
-
-STEPS
-
-Action	Data	Expected Result
-Log in to BISS as farmer or agent with credentials and OTP	Agent username and password. OTP/PIN	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select client. If Farmer: Navigate to Farmer Dashboard directly	Herd number from vwbs_ams_response query	Farmer Dashboard displayed with AMS Findings panel visible
-Navigate to AMS panel on Farmer Dashboard and verify all responses are saved		AMS response screen displayed with green ticks on all parcel rows
-Verify sticky footer at bottom of AMS screen		Sticky footer shows Back and Submit buttons
-Click Submit button in sticky footer		Submit confirmation popup appears on screen
-Verify popup title		Popup title reads: Submit AMS response?
-Verify popup body message		Message reads: Have your accurately reflected your land details on the AMS response? Changes made may impact other area based scheme payments. Please note: Once the response is submitted, it cannot be amended.
-Verify popup buttons		Cancel and Yes buttons are both visible on the popup
-Click Yes to confirm submission		Submission is processed
-Verify green toast message on AMS screen		Toast message displayed: You have successfully submitted your AMS response
-Verify response PDF is generated		AMS Response PDF is generated for the submission
-Verify edit map indicator on PDF for parcel where map was edited		PDF shows Y in edit map column for parcels where map edits occurred
-Verify edit map indicator on PDF for parcel where no map edit		PDF shows N in edit map column for parcels where no map edit occurred
-Verify user is directed back to Farmer Dashboard after submission		Farmer Dashboard is displayed post-submission
-Verify AMS panel on Farmer Dashboard shows green tick		Green tick displayed on AMS panel confirming all AMS responses completed
-Verify notification count remains unchanged		Count of notifications is the same as before submission
-Verify AgriSnap message on Farmer Dashboard panel when rejection exists		Message displayed on AMS panel: You have submitted your AMS responses, please respond to any AgriSnap requests promptly
-Verify AgriSnap message does NOT appear when only Accept or Withdraw responses submitted		Message is NOT displayed on AMS panel when no rejections exist
-Verify note on internal history screen		Internal history shows note: AMS response submitted – Accept/Reject findings
-Verify accepted response with changed claimed area is updated on Land Details screen		Land Details screen shows updated claimed area for accepted parcels where area was changed
-Verify accepted response with changed claimed area is updated on Internal screen		Internal screen shows updated claimed area values for accepted parcels
-Verify deleted parcel - notes and drawings are deleted		Notes and map drawings for deleted parcel are removed
-Verify deleted parcel shows strikethrough on AMS response screen		Deleted parcel row displays with strikethrough on AMS response screen
-Verify deleted parcel is removed from Land Details screen		Land Details screen no longer shows the deleted parcel
-Verify deleted parcel is removed from Internal screen		Internal screen confirms parcel is deleted
-Verify deleted parcel note on internal history screen		Internal history shows note confirming parcel is deleted
-Verify accepted response with EH change and map edit generates digitising task on LPIS		Digitising task of type AMS response is generated on LPIS side for parcels with EH change and map edit
-
-# ========================================
-TC-AMS-SUBMIT-02
-
-SUMMARY
-AMS R1 Submit - Submit Blocked When Not All AMS Responses Completed
-
-DESCRIPTION
-Verifies that when a farmer or agent attempts to submit AMS Round 1 responses before all Red parcel notifications have been responded to, the system correctly blocks submission and displays a red validation message. Each unresponded parcel must show a red symbol on the row. The Accept/Reject findings column must show Select option in red for unresponded parcels. The Submit button must not proceed and a clear red error message must inform the user they must complete all responses first.
-
-LABELS
-AMS, Submit, Validation, Round1, TestOnly
-
-COMPONENT
-AMS - Submit Process - Validation
-
-ENVIRONMENT
-CENTEST
-
-ROUND
-Round 1 - 2026
-
-TEST DATA
-
-Run on CENTEST_BISS_DATA - Find herd with AMS findings (partial responses):
-select * from VWBS_AMS_NOTIFIED_HERD where scheme_year = 2026 and expired = 0 order by herd_no;
-
-Run on CENTEST_BISS_INET - Get agent login:
-SELECT hbcus.bcus_bus_id AS HERDNO, (SELECT ui.uri_username FROM tdcr_user_info ui WHERE uri_ccs_bus_id = abcus.bcus_bus_id AND ROWNUM = 1) AS USERNAME FROM tdco_customer_asscs ca, tdco_business_customers abcus, tdco_business_customers hbcus WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date AND ca.ca_cac_code = 194 AND ca.ca_bcus_id_from = abcus.bcus_id AND ca.ca_bcus_id_to = hbcus.bcus_id AND hbcus.bcus_bus_id = ‘<HERD_NUMBER>’ ORDER BY ca.ca_start_date DESC;
-
-PRECONDITIONS
-
-- Herd has multiple Red AMS findings in Round 1
-- At least one parcel has been responded to and at least one has NOT been responded to
-- Agent login resolved via INET query
-
-STEPS
-
-Action	Data	Expected Result
-Log in to BISS as farmer or agent with credentials and OTP	Agent username and password. OTP/PIN	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select client. If Farmer: Navigate to Farmer Dashboard directly	Herd with partial responses	Farmer Dashboard displayed
-Click Respond to Findings on AMS panel		AMS response screen displayed
-Verify red symbol is visible on each parcel row that has NOT been responded to		Red symbol visible on every unresponded parcel row
-Verify Accept/Reject findings column for unresponded parcels		Select option displayed in red in Accept/Reject findings column for each unresponded parcel
-Verify green tick is visible on parcel rows that HAVE been responded to		Green tick visible on responded parcel rows
-Attempt to click Submit button		Submit is blocked - system does not proceed with submission
-Verify red validation message on screen		Red message displayed: You cannot press Submit until you have completed all your AMS responses
-
-# ========================================
-TC-AMS-SUBMIT-03
-
-SUMMARY
-AMS R1 Submit - Cancel on Submit Popup Returns User to AMS Screen Unchanged
-
-DESCRIPTION
-Verifies that when a farmer or agent presses Submit after saving all AMS responses, the Submit confirmation popup appears correctly. When the user presses Cancel on the popup, the submission is cancelled, no data is submitted, and the user is returned to the AMS screen in exactly the same state as before pressing Submit. All saved responses remain intact.
-
-LABELS
-AMS, Submit, Cancel, Round1, TestOnly
-
-COMPONENT
-AMS - Submit Process - Cancel
-
-ENVIRONMENT
-CENTEST
-
-ROUND
-Round 1 - 2026
-
-TEST DATA
-Same herd as TC-AMS-SUBMIT-01 - all responses saved but not yet submitted.
-
-PRECONDITIONS
-
-- Herd has Red AMS findings in Round 1
-- All Red parcel responses have been saved
-- Agent login resolved via INET query
-
-STEPS
-
-Action	Data	Expected Result
-Log in to BISS as farmer or agent with credentials and OTP	Agent username and password. OTP/PIN	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select client. If Farmer: Navigate to Farmer Dashboard directly	Herd with all responses saved	Farmer Dashboard displayed
-Navigate to AMS response screen		AMS screen displayed with all parcels showing saved responses and green ticks
-Verify all parcel response green ticks are visible		Green tick on all parcel rows confirming all responses saved
-Click Submit button in sticky footer		Submit confirmation popup appears
-Verify popup title		Popup title reads: Submit AMS response?
-Verify popup body message		Message reads: Have your accurately reflected your land details on the AMS response? Changes made may impact other area based scheme payments. Please note: Once the response is submitted, it cannot be amended.
-Verify Cancel and Yes buttons are present		Both Cancel and Yes buttons visible on popup
-Click Cancel button		Popup dismissed - submission cancelled
-Verify user is returned to AMS screen		AMS screen displayed - user is back exactly where they were before pressing Submit
-Verify all responses are still saved and unchanged		All parcel rows still show saved responses and green ticks - no data changed
-Verify Submit button is still visible in sticky footer		Submit button still present and available - no state change occurred
-
-# ========================================
-TC-AMS-SUBMIT-04
-
-SUMMARY
-AMS R1 Submit - Navigating Away Without Submitting Shows Warning Popup with Back to AMS and Continue Options
-
-DESCRIPTION
-Verifies that when a farmer or agent has saved all AMS Round 1 responses but has not yet pressed Submit, attempting to navigate away from the AMS screen triggers a warning popup. The popup must inform the user clearly that responses have not been submitted and they must return to submit. Two options must be offered - Back to AMS returns the user to the AMS screen, and Continue proceeds with navigation away. This protects against accidental non-submission.
-
-LABELS
-AMS, Submit, Navigation, Warning, Round1, TestOnly
-
-COMPONENT
-AMS - Submit Process - Navigation Warning
-
-ENVIRONMENT
-CENTEST
-
-ROUND
-Round 1 - 2026
-
-TEST DATA
-Same herd as TC-AMS-SUBMIT-01 - all responses saved but not yet submitted.
-
-PRECONDITIONS
-
-- Herd has Red AMS findings in Round 1
-- All Red parcel responses saved with green ticks visible
-- Responses have NOT been submitted
-- Agent login resolved via INET query
-
-STEPS
-
-Action	Data	Expected Result
-Log in to BISS as farmer or agent with credentials and OTP	Agent username and password. OTP/PIN	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select client. If Farmer: Navigate to Farmer Dashboard directly	Herd with all responses saved not submitted	Farmer Dashboard displayed
-Navigate to AMS response screen		AMS screen displayed
-Verify all parcel responses saved and green ticks visible on all parcel lines		Green tick visible on all parcel rows
-Verify sticky footer shows Back and Submit buttons		Back and Submit buttons visible in sticky footer
-Attempt to navigate away from AMS screen without pressing Submit		Navigation away triggered
-Verify warning popup appears		Warning popup displayed
-Verify popup message line 1		Message reads: Please Note: You have not submitted your AMS responses.
-Verify popup message line 2		Second line reads: You must select submit on the AMS Response screen in order to complete your response.
-Verify popup buttons		Two buttons visible: Back to AMS and Continue
-Click Back to AMS button		Popup dismissed - user returned to AMS screen with all saved responses intact
-Verify AMS screen is displayed with responses still saved		All parcel rows still show green ticks and saved responses - no data lost
-Attempt to navigate away again and click Continue		Navigation proceeds away from AMS screen
-Verify user navigates away successfully		User leaves the AMS screen as requested
-
-# ========================================
-TC-AMS-SUBMIT-05
-
-SUMMARY
-AMS R1 Submit - Accept Response with Claimed Area 0.00 ha Submits Successfully and EOS Receives Correct Data for All Response Types
-
-DESCRIPTION
-Verifies that a claimed area of 0.00 ha is accepted by the system when saving and submitting an AMS Accept response. EOS must receive 0.00 ha correctly. Also verifies that EOS receives the correct data for each individual response type - one accept, each of the five reject reasons individually (Bare soil, Crop is as claimed, Feature no longer exists, Temporary bale storage, Other with free text), and withdrawn parcels. Linked to Xteams 4918 EOS integration. Also verifies AMS Response PDF generation handles fewer than 4 rounds in 2025 as per the technical note requiring change of PDF generation logic.
-
-LABELS
-AMS, Submit, AcceptResponse, ClaimedArea, EOS, Round1, TestOnly
-
-COMPONENT
-AMS - Submit Process - EOS Integration
-
-ENVIRONMENT
-CENTEST
-
-ROUND
-Round 1 - 2026
-
-TEST DATA
-
-Run on CENTEST_BISS_DATA - Find herd with AMS findings:
-select * from VWBS_AMS_NOTIFIED_HERD where scheme_year = 2026 and expired = 0 order by herd_no;
-
-Run on CENTEST_BISS_DATA - Find AMS crop mismatch herds for reject reason testing:
-select apl.app_year, apl.app_herd_no, apl.parcel_id, apl.crp_desc AS application_crop, ams.crop_found_eos AS ams_crop_found FROM vwbs_application_land apl LEFT JOIN vweo_ams_inspected_land ams ON apl.apl_lnu_id = ams.lnu_id AND apl.app_herd_no = ams.inspected_herd AND apl.app_year = ams.scheme_year WHERE apl.app_year = 2026 AND apl.mde_abbrev = ‘I’ AND apl.apl_deleted_ind = ‘N’ AND apl.app_herd_no = ‘<HERD_NUMBER>’;
-
-Run on CENTEST_BISS_INET - Get agent login:
-SELECT hbcus.bcus_bus_id AS HERDNO, (SELECT ui.uri_username FROM tdcr_user_info ui WHERE uri_ccs_bus_id = abcus.bcus_bus_id AND ROWNUM = 1) AS USERNAME FROM tdco_customer_asscs ca, tdco_business_customers abcus, tdco_business_customers hbcus WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date AND ca.ca_cac_code = 194 AND ca.ca_bcus_id_from = abcus.bcus_id AND ca.ca_bcus_id_to = hbcus.bcus_id AND hbcus.bcus_bus_id = ‘<HERD_NUMBER>’ ORDER BY ca.ca_start_date DESC;
-
-PRECONDITIONS
-
-- Herd has Red AMS findings in Round 1
-- Separate herds available to test each reject reason type individually
-- Agent login resolved via INET query
-
-STEPS
-
-Action	Data	Expected Result
-Log in to BISS as farmer or agent with credentials and OTP	Agent username and password. OTP/PIN	Successfully authenticated and landed on BISS Home page
-If Agent: Navigate to Agent Tools and select AMS then select client. If Farmer: Navigate to Farmer Dashboard	Herd with Red AMS notifications	Farmer Dashboard displayed
-Click Respond to Findings on AMS panel		AMS response screen displayed
-Click on a Red parcel row to open the side drawer		Side drawer opens
-Select Accept for the AMS finding		Accept option selected
-Change the claimed area value to 0.00		0.00 entered in claimed area field
-Click Save Changes		Changes saved successfully - side drawer closes - green tick on parcel row
-When all responses are complete click Submit and confirm with Yes		Submission processed with 0.00 ha claimed area value
-Verify toast message		Toast: You have successfully submitted your AMS response
-Verify EOS receives 0.00 ha as the claimed area for the accepted parcel		EOS confirms 0.00 ha received correctly for accepted parcel
-Verify EOS receives correct data for single accept response submission		EOS integration confirmed - accept response data correct
-Repeat test - submit with one reject response reason Bare soil		EOS confirms rejection received with reason Bare soil
-Repeat test - submit with one reject response reason Crop is as claimed		EOS confirms rejection received with reason Crop is as claimed
-Repeat test - submit with one reject response reason Feature no longer exists		EOS confirms rejection received with reason Feature no longer exists
-Repeat test - submit with one reject response reason Temporary bale storage		EOS confirms rejection received with reason Temporary bale storage
-Repeat test - submit with one reject response reason Other with free text		EOS confirms rejection received with reason Other and free text included correctly
-Repeat test - submit with one withdrawn parcel		EOS confirms withdrawn parcel received with status Withdrawn
-Verify AMS Response PDF generation with fewer than 4 rounds in 2025		PDF generated correctly when fewer than 4 rounds exist - change of PDF generation logic confirmed working
+package utilities.ExtractHerdsDB;
+
+// ***************************************************************************************************************************************************************************************
+// File          : HerdAgentExtractor.java
+// Package       : utilities.ExtractHerdsDB
+// Description   : Standalone GUI utility for extracting herd numbers from BISS_DATA
+//                 and resolving agent login IDs from BISS_INET.
+//
+//                 Reuses DBRouter for all database access — connection details
+//                 are read from src/test/resources/db.properties automatically.
+//                 No separate DB credentials needed in the UI.
+//
+//                 Designed for future extension:
+//                   - Phase 2: Open BISS application via CommonFunctions.launchBrowser()
+//                   - Phase 2: Extract additional data via Selenium + iAction()
+//                   - Phase 2: Cross-validate herd visibility in My Clients UI
+//
+//                 Usage: Run directly from IntelliJ as a main() application.
+//                        Right-click HerdAgentExtractor.java → Run 'HerdAgentExtractor.main()'
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 05-05-2026
+// ***************************************************************************************************************************************************************************************
+
+import database.DBRouter;
+
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.table.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.List;
+
+public class HerdAgentExtractor extends JFrame
+{
+    // ── Colors ────────────────────────────────────────────────────────
+    private static final Color C_BG        = new Color(18,  22,  30);
+    private static final Color C_PANEL     = new Color(26,  32,  44);
+    private static final Color C_BORDER    = new Color(45,  55,  72);
+    private static final Color C_GREEN     = new Color(56, 161, 105);
+    private static final Color C_GREEN_HV  = new Color(72, 187, 120);
+    private static final Color C_TEXT      = new Color(237, 242, 247);
+    private static final Color C_MUTED     = new Color(160, 174, 192);
+    private static final Color C_INPUT_BG  = new Color(35,  42,  55);
+    private static final Color C_ACCENT    = new Color(99,  179, 237);
+    private static final Color C_ORANGE    = new Color(237, 137,  54);
+    private static final Color C_RED       = new Color(229,  62,  62);
+    private static final Color C_HEADER_BG = new Color(30,  38,  52);
+
+    // ── Fonts ─────────────────────────────────────────────────────────
+    private static final Font FONT_TITLE  = new Font("Segoe UI", Font.BOLD,  18);
+    private static final Font FONT_LABEL  = new Font("Segoe UI", Font.BOLD,  12);
+    private static final Font FONT_INPUT  = new Font("Consolas",  Font.PLAIN, 12);
+    private static final Font FONT_BUTTON = new Font("Segoe UI", Font.BOLD,  12);
+    private static final Font FONT_TABLE  = new Font("Segoe UI", Font.PLAIN, 11);
+    private static final Font FONT_SMALL  = new Font("Segoe UI", Font.PLAIN, 11);
+
+    // ── Query inputs ──────────────────────────────────────────────────
+    private JTextArea  iQueryArea;
+    private JTextField iColumnNameField;
+    private JTextField iHerdLimitField;
+
+    // ── Output ────────────────────────────────────────────────────────
+    private JTable            iResultTable;
+    private DefaultTableModel iTableModel;
+    private JLabel            iStatusLabel;
+    private JButton           iRunButton;
+    private JButton           iExportButton;
+    private JTextArea         iLogArea;
+
+    // ── State ─────────────────────────────────────────────────────────
+    private final List<String[]> iResultRows = new ArrayList<>();
+
+    // =================================================================
+    // CONSTRUCTOR
+    // =================================================================
+    public HerdAgentExtractor()
+    {
+        super("BISS Herd Agent Extractor");
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setSize(1100, 780);
+        setLocationRelativeTo(null);
+        getContentPane().setBackground(C_BG);
+        setLayout(new BorderLayout(0, 0));
+
+        add(buildHeader(),    BorderLayout.NORTH);
+        add(buildMainPanel(), BorderLayout.CENTER);
+        add(buildStatusBar(), BorderLayout.SOUTH);
+    }
+
+    // =================================================================
+    // HEADER
+    // =================================================================
+    private JPanel buildHeader()
+    {
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(C_HEADER_BG);
+        p.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, C_BORDER));
+        p.setPreferredSize(new Dimension(0, 60));
+
+        JLabel iTitle = new JLabel("  BISS Herd Agent Extractor");
+        iTitle.setFont(FONT_TITLE);
+        iTitle.setForeground(C_TEXT);
+
+        JLabel iSub = new JLabel("DB connections via db.properties  |  DBRouter  |  utilities.ExtractHerdsDB  ");
+        iSub.setFont(FONT_SMALL);
+        iSub.setForeground(C_MUTED);
+
+        p.add(iTitle, BorderLayout.WEST);
+        p.add(iSub,   BorderLayout.EAST);
+        return p;
+    }
+
+    // =================================================================
+    // MAIN PANEL
+    // =================================================================
+    private JSplitPane buildMainPanel()
+    {
+        JSplitPane iSplit = new JSplitPane(
+                JSplitPane.HORIZONTAL_SPLIT,
+                buildLeftPanel(),
+                buildRightPanel());
+        iSplit.setDividerLocation(420);
+        iSplit.setDividerSize(4);
+        iSplit.setBorder(null);
+        iSplit.setBackground(C_BG);
+        return iSplit;
+    }
+
+    // =================================================================
+    // LEFT PANEL — inputs
+    // =================================================================
+    private JPanel buildLeftPanel()
+    {
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setBackground(C_BG);
+        p.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 8));
+
+        // ── DB info note ─────────────────────────────────────────────
+        JPanel iInfoBox = new JPanel(new BorderLayout());
+        iInfoBox.setBackground(new Color(20, 40, 60));
+        iInfoBox.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(C_ACCENT, 1),
+                BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+        iInfoBox.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+        JLabel iInfoText = new JLabel("<html><b style='color:#63b3ed'>DB connections loaded from db.properties</b>" +
+                "<br><span style='color:#a0aec0'>BISS_DATA (db.url) and BISS_INET (db.inet.url)<br>" +
+                "No credentials needed here.</span></html>");
+        iInfoText.setFont(FONT_SMALL);
+        iInfoBox.add(iInfoText);
+        p.add(iInfoBox);
+        p.add(Box.createVerticalStrut(20));
+
+        // ── SQL Query ────────────────────────────────────────────────
+        p.add(sectionLabel("BISS_DATA SQL Query"));
+        p.add(Box.createVerticalStrut(6));
+
+        iQueryArea = new JTextArea(10, 30);
+        iQueryArea.setFont(FONT_INPUT);
+        iQueryArea.setBackground(C_INPUT_BG);
+        iQueryArea.setForeground(C_TEXT);
+        iQueryArea.setCaretColor(C_TEXT);
+        iQueryArea.setLineWrap(true);
+        iQueryArea.setWrapStyleWord(true);
+        iQueryArea.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(C_BORDER, 1),
+                BorderFactory.createEmptyBorder(8, 10, 8, 10)));
+        iQueryArea.setText(
+                "SELECT ap_ri.app_herd_no\n" +
+                "FROM vwbs_application ap_ri\n" +
+                "WHERE ap_ri.app_mde_code = 1\n" +
+                "AND ap_ri.app_year = 2026\n" +
+                "AND ap_ri.app_herd_no LIKE 'A%'\n" +
+                "AND EXISTS (\n" +
+                "    SELECT 1\n" +
+                "    FROM tdbs_application_land x\n" +
+                "    WHERE x.apl_year        = ap_ri.app_year\n" +
+                "    AND   x.apl_app_id      = ap_ri.app_id\n" +
+                "    AND   x.apl_deleted_ind = 'N'\n" +
+                ")\n" +
+                "AND NOT EXISTS (\n" +
+                "    SELECT 1\n" +
+                "    FROM vwbs_application app\n" +
+                "    WHERE app.app_year     = ap_ri.app_year\n" +
+                "    AND   app.app_herd_no  = ap_ri.app_herd_no\n" +
+                "    AND   app.app_mde_code IN (3, 4, 6, 8)\n" +
+                ")\n" +
+                "ORDER BY ap_ri.app_herd_no");
+
+        JScrollPane iQScroll = new JScrollPane(iQueryArea);
+        iQScroll.setBorder(null);
+        iQScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 230));
+        p.add(iQScroll);
+        p.add(Box.createVerticalStrut(16));
+
+        // ── Column name ──────────────────────────────────────────────
+        p.add(sectionLabel("Herd Number Column Name"));
+        p.add(Box.createVerticalStrut(6));
+        iColumnNameField = inputField("APP_HERD_NO");
+        iColumnNameField.setToolTipText(
+                "Column in your query that contains herd numbers e.g. APP_HERD_NO or LVL_HERD_NO");
+        p.add(labeledRow("Column", iColumnNameField));
+        p.add(Box.createVerticalStrut(16));
+
+        // ── Herd limit ───────────────────────────────────────────────
+        p.add(sectionLabel("Herd Limit  (blank = all rows)"));
+        p.add(Box.createVerticalStrut(6));
+        iHerdLimitField = inputField("");
+        iHerdLimitField.setToolTipText(
+                "Leave blank to process every row returned by the query");
+        p.add(labeledRow("Limit", iHerdLimitField));
+        p.add(Box.createVerticalStrut(24));
+
+        // ── Run button ───────────────────────────────────────────────
+        iRunButton = styledButton("▶   Run Extraction", C_GREEN, C_GREEN_HV);
+        iRunButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        iRunButton.addActionListener(e -> runExtraction());
+        p.add(iRunButton);
+
+        // ── Phase 2 placeholder ──────────────────────────────────────
+        p.add(Box.createVerticalStrut(10));
+        JLabel iPhase2 = new JLabel("  Phase 2: Open BISS + UI extraction — coming soon");
+        iPhase2.setFont(FONT_SMALL);
+        iPhase2.setForeground(C_MUTED);
+        iPhase2.setAlignmentX(Component.LEFT_ALIGNMENT);
+        p.add(iPhase2);
+
+        p.add(Box.createVerticalGlue());
+        return p;
+    }
+
+    // =================================================================
+    // RIGHT PANEL — results table + log
+    // =================================================================
+    private JPanel buildRightPanel()
+    {
+        JPanel p = new JPanel(new BorderLayout(0, 8));
+        p.setBackground(C_BG);
+        p.setBorder(BorderFactory.createEmptyBorder(16, 8, 16, 16));
+
+        // ── Top row: label + export button ──────────────────────────
+        JPanel iTopRow = new JPanel(new BorderLayout());
+        iTopRow.setBackground(C_BG);
+        JLabel iTableLabel = new JLabel("Results");
+        iTableLabel.setFont(FONT_LABEL);
+        iTableLabel.setForeground(C_TEXT);
+        iExportButton = styledButton("⬇  Export to CSV", C_ACCENT, C_ACCENT.brighter());
+        iExportButton.setEnabled(false);
+        iExportButton.addActionListener(e -> exportToCsv());
+        iTopRow.add(iTableLabel,   BorderLayout.WEST);
+        iTopRow.add(iExportButton, BorderLayout.EAST);
+
+        // ── Results table ────────────────────────────────────────────
+        iTableModel = new DefaultTableModel(
+                new String[]{"#", "Herd Number", "Agent Username", "Status"}, 0)
+        {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        iResultTable = new JTable(iTableModel);
+        styleTable(iResultTable);
+
+        JScrollPane iTScroll = new JScrollPane(iResultTable);
+        iTScroll.setBorder(BorderFactory.createLineBorder(C_BORDER, 1));
+        iTScroll.setBackground(C_PANEL);
+        iTScroll.getViewport().setBackground(C_PANEL);
+
+        // ── Log console ──────────────────────────────────────────────
+        iLogArea = new JTextArea(6, 40);
+        iLogArea.setFont(FONT_INPUT);
+        iLogArea.setBackground(new Color(15, 18, 25));
+        iLogArea.setForeground(new Color(120, 220, 120));
+        iLogArea.setEditable(false);
+        iLogArea.setCaretColor(C_TEXT);
+        iLogArea.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+
+        JScrollPane iLScroll = new JScrollPane(iLogArea);
+        iLScroll.setBorder(BorderFactory.createLineBorder(C_BORDER, 1));
+        iLScroll.setPreferredSize(new Dimension(0, 130));
+
+        JSplitPane iVSplit = new JSplitPane(
+                JSplitPane.VERTICAL_SPLIT, iTScroll, iLScroll);
+        iVSplit.setDividerLocation(380);
+        iVSplit.setDividerSize(4);
+        iVSplit.setBorder(null);
+        iVSplit.setBackground(C_BG);
+
+        p.add(iTopRow,  BorderLayout.NORTH);
+        p.add(iVSplit,  BorderLayout.CENTER);
+        return p;
+    }
+
+    // =================================================================
+    // STATUS BAR
+    // =================================================================
+    private JPanel buildStatusBar()
+    {
+        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 16, 6));
+        p.setBackground(C_HEADER_BG);
+        p.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, C_BORDER));
+        iStatusLabel = new JLabel("Ready  —  db.properties loaded from src/test/resources/");
+        iStatusLabel.setFont(FONT_SMALL);
+        iStatusLabel.setForeground(C_MUTED);
+        p.add(iStatusLabel);
+        return p;
+    }
+
+    // =================================================================
+    // CORE LOGIC — run extraction via DBRouter
+    // =================================================================
+    private void runExtraction()
+    {
+        String iSql     = iQueryArea.getText().trim();
+        String iColName = iColumnNameField.getText().trim().toUpperCase();
+        String iLimStr  = iHerdLimitField.getText().trim();
+
+        // ── Validation ───────────────────────────────────────────────
+        if (iSql.isEmpty())
+        {
+            showError("SQL query cannot be empty.");
+            return;
+        }
+        if (iColName.isEmpty())
+        {
+            showError("Column name cannot be empty.\nEnter the column that contains herd numbers e.g. APP_HERD_NO");
+            return;
+        }
+
+        int iLimit = -1;
+        if (!iLimStr.isEmpty())
+        {
+            try { iLimit = Integer.parseInt(iLimStr); }
+            catch (NumberFormatException e) { showError("Herd limit must be a whole number or leave blank for all rows."); return; }
+        }
+
+        final int iFinalLimit = iLimit;
+
+        // ── Reset UI ─────────────────────────────────────────────────
+        iRunButton.setEnabled(false);
+        iExportButton.setEnabled(false);
+        iTableModel.setRowCount(0);
+        iResultRows.clear();
+        iLogArea.setText("");
+        setStatus("Running...", C_ACCENT);
+
+        // ── Background worker ─────────────────────────────────────────
+        SwingWorker<Void, String[]> iWorker = new SwingWorker<>()
+        {
+            @Override
+            protected Void doInBackground()
+            {
+                log("Step 1 — Running SQL on BISS_DATA via DBRouter...");
+
+                // ── Run user SQL on BISS_DATA ─────────────────────────
+                // DBRouter handles the connection via db.properties.
+                // We pass the raw SQL as a custom label so DBRouter executes
+                // it directly via executeQuery().
+                List<String> iHerds = new ArrayList<>();
+
+                try
+                {
+                    // ── Run user SQL directly on BISS_DATA ───────────────
+                    // runRawSQL bypasses the DBRouter label switch and
+                    // executes the query string as-is using the DATA
+                    // connection configured in db.properties.
+                    database.DBRouter.runRawSQL("DATA", iSql);
+
+                    List<Map<String, Object>> iRows = database.DBRouter.getRows();
+
+                    if (iRows == null || iRows.isEmpty())
+                    {
+                        log("WARNING: Query returned no rows from BISS_DATA.");
+                        log("Check the SQL query and year parameters.");
+                        return null;
+                    }
+
+                    log("Query returned " + iRows.size() + " row(s) from BISS_DATA.");
+
+                    // Extract herd numbers from the specified column
+                    for (Map<String, Object> iRow : iRows)
+                    {
+                        // Try exact match first, then case-insensitive
+                        Object iVal = iRow.get(iColName);
+                        if (iVal == null)
+                        {
+                            for (String k : iRow.keySet())
+                            {
+                                if (k.equalsIgnoreCase(iColName)) { iVal = iRow.get(k); break; }
+                            }
+                        }
+
+                        if (iVal != null)
+                        {
+                            String h = iVal.toString().trim();
+                            if (!h.isEmpty()) iHerds.add(h);
+                        }
+
+                        if (iFinalLimit > 0 && iHerds.size() >= iFinalLimit) break;
+                    }
+
+                    if (iHerds.isEmpty())
+                    {
+                        log("ERROR: Column '" + iColName + "' not found or returned no values.");
+                        log("Available columns in result:");
+                        if (!iRows.isEmpty())
+                        {
+                            iRows.get(0).keySet().forEach(k -> log("  • " + k));
+                        }
+                        return null;
+                    }
+
+                    log("Extracted " + iHerds.size() + " herd number(s).");
+                    log("─".repeat(55));
+                    log("Step 2 — Querying BISS_INET for agent logins...");
+                    log("─".repeat(55));
+
+                    // ── For each herd query BISS_INET via DBRouter ────
+                    int iRowNum = 0;
+                    for (String iHerd : iHerds)
+                    {
+                        iRowNum++;
+                        try
+                        {
+                            database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
+                            String iAgent = database.DBRouter.getValue("USERNAME");
+
+                            if (iAgent != null && !iAgent.isBlank())
+                            {
+                                String[] iRowData = {
+                                        String.valueOf(iRowNum),
+                                        iHerd,
+                                        iAgent.trim(),
+                                        "FOUND"
+                                };
+                                publish(iRowData);
+                                log("[" + iRowNum + "] " + iHerd + "  →  " + iAgent.trim());
+                            }
+                            else
+                            {
+                                String[] iRowData = {
+                                        String.valueOf(iRowNum),
+                                        iHerd,
+                                        "",
+                                        "NO AGENT"
+                                };
+                                publish(iRowData);
+                                log("[" + iRowNum + "] " + iHerd + "  →  (no active agent found in INET)");
+                            }
+                        }
+                        catch (Exception iEx)
+                        {
+                            String[] iRowData = {
+                                    String.valueOf(iRowNum),
+                                    iHerd,
+                                    "",
+                                    "ERROR"
+                            };
+                            publish(iRowData);
+                            log("[" + iRowNum + "] " + iHerd + "  →  ERROR: " + iEx.getMessage());
+                        }
+                    }
+
+                    log("─".repeat(55));
+                    log("Done — " + iRowNum + " herd(s) processed.");
+
+                    long iFount = iResultRows.stream()
+                            .filter(r -> "FOUND".equals(r[3])).count();
+                    log("FOUND: " + iFount + "  |  NO AGENT: " + (iRowNum - iFount));
+                }
+                catch (Exception iEx)
+                {
+                    log("ERROR: " + iEx.getMessage());
+                    log("Check db.properties and DBRouter configuration.");
+                }
+
+                return null;
+            }
+
+            @Override
+            protected void process(List<String[]> chunks)
+            {
+                for (String[] row : chunks)
+                {
+                    iTableModel.addRow(row);
+                    iResultRows.add(row);
+                }
+                // Refresh renderer on each batch so colours apply immediately
+                iResultTable.setDefaultRenderer(Object.class, buildRenderer());
+            }
+
+            @Override
+            protected void done()
+            {
+                iRunButton.setEnabled(true);
+                iExportButton.setEnabled(!iResultRows.isEmpty());
+                long iFount = iResultRows.stream().filter(r -> "FOUND".equals(r[3])).count();
+                setStatus("Completed  —  " + iResultRows.size() + " herd(s)  |  "
+                        + iFount + " agent(s) found.", C_GREEN);
+            }
+        };
+
+        iWorker.execute();
+    }
+
+    // =================================================================
+    // TABLE RENDERER — colour by status
+    // =================================================================
+    private TableCellRenderer buildRenderer()
+    {
+        return new DefaultTableCellRenderer()
+        {
+            @Override
+            public Component getTableCellRendererComponent(
+                    JTable t, Object v, boolean sel, boolean foc, int r, int c)
+            {
+                super.getTableCellRendererComponent(t, v, sel, foc, r, c);
+                String iStatus = Objects.toString(t.getValueAt(r, 3), "");
+                Color iFg = switch (iStatus)
+                {
+                    case "FOUND"    -> C_GREEN;
+                    case "NO AGENT" -> C_ORANGE;
+                    default         -> C_RED;
+                };
+                setForeground(iFg);
+                setBackground(sel ? C_BORDER : C_PANEL);
+                setFont(FONT_TABLE);
+                setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 8));
+                return this;
+            }
+        };
+    }
+
+    // =================================================================
+    // EXPORT TO CSV
+    // =================================================================
+    private void exportToCsv()
+    {
+        JFileChooser iChooser = new JFileChooser();
+        iChooser.setDialogTitle("Export Results to CSV");
+        iChooser.setSelectedFile(new File(
+                "BISS_Herd_Agents_"
+                + new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())
+                + ".csv"));
+
+        if (iChooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
+
+        File iFile = iChooser.getSelectedFile();
+        if (!iFile.getName().endsWith(".csv"))
+        {
+            iFile = new File(iFile.getAbsolutePath() + ".csv");
+        }
+
+        try (PrintWriter iWriter = new PrintWriter(new FileWriter(iFile)))
+        {
+            iWriter.println("Row,Herd Number,Agent Username,Status");
+            for (String[] iRow : iResultRows)
+            {
+                iWriter.println(String.join(",", iRow));
+            }
+            setStatus("Exported: " + iFile.getAbsolutePath(), C_GREEN);
+            log("Exported to: " + iFile.getAbsolutePath());
+            JOptionPane.showMessageDialog(this,
+                    "Exported successfully:\n" + iFile.getAbsolutePath(),
+                    "Export Complete",
+                    JOptionPane.INFORMATION_MESSAGE);
+        }
+        catch (IOException e)
+        {
+            showError("Export failed: " + e.getMessage());
+        }
+    }
+
+    // =================================================================
+    // UI HELPERS
+    // =================================================================
+    private void styleTable(JTable t)
+    {
+        t.setBackground(C_PANEL);
+        t.setForeground(C_TEXT);
+        t.setFont(FONT_TABLE);
+        t.setRowHeight(28);
+        t.setShowGrid(false);
+        t.setIntercellSpacing(new Dimension(0, 1));
+        t.setSelectionBackground(C_BORDER);
+        t.setSelectionForeground(C_TEXT);
+        t.setDefaultRenderer(Object.class, buildRenderer());
+
+        JTableHeader iHeader = t.getTableHeader();
+        iHeader.setBackground(C_HEADER_BG);
+        iHeader.setForeground(C_MUTED);
+        iHeader.setFont(FONT_LABEL);
+        iHeader.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, C_BORDER));
+
+        t.getColumnModel().getColumn(0).setMaxWidth(50);
+        t.getColumnModel().getColumn(3).setMaxWidth(120);
+    }
+
+    private JLabel sectionLabel(String text)
+    {
+        JLabel l = new JLabel(text);
+        l.setFont(FONT_LABEL);
+        l.setForeground(C_ACCENT);
+        l.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return l;
+    }
+
+    private JTextField inputField(String placeholder)
+    {
+        JTextField f = new JTextField(placeholder);
+        f.setFont(FONT_INPUT);
+        f.setBackground(C_INPUT_BG);
+        f.setForeground(C_TEXT);
+        f.setCaretColor(C_TEXT);
+        f.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(C_BORDER, 1),
+                BorderFactory.createEmptyBorder(4, 8, 4, 8)));
+        return f;
+    }
+
+    private JPanel labeledRow(String label, JComponent field)
+    {
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setBackground(C_BG);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        JLabel l = new JLabel(label);
+        l.setFont(FONT_SMALL);
+        l.setForeground(C_MUTED);
+        l.setPreferredSize(new Dimension(80, 0));
+        row.add(l,     BorderLayout.WEST);
+        row.add(field, BorderLayout.CENTER);
+        return row;
+    }
+
+    private JButton styledButton(String text, Color bg, Color hover)
+    {
+        JButton b = new JButton(text);
+        b.setFont(FONT_BUTTON);
+        b.setBackground(bg);
+        b.setForeground(Color.WHITE);
+        b.setFocusPainted(false);
+        b.setBorderPainted(false);
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        b.setAlignmentX(Component.LEFT_ALIGNMENT);
+        b.addMouseListener(new MouseAdapter()
+        {
+            public void mouseEntered(MouseEvent e) { if (b.isEnabled()) b.setBackground(hover); }
+            public void mouseExited(MouseEvent e)  { b.setBackground(bg); }
+        });
+        return b;
+    }
+
+    private void setStatus(String msg, Color color)
+    {
+        SwingUtilities.invokeLater(() -> {
+            iStatusLabel.setText(msg);
+            iStatusLabel.setForeground(color);
+        });
+    }
+
+    private void log(String msg)
+    {
+        SwingUtilities.invokeLater(() -> {
+            iLogArea.append(msg + "\n");
+            iLogArea.setCaretPosition(iLogArea.getDocument().getLength());
+        });
+    }
+
+    private void showError(String msg)
+    {
+        JOptionPane.showMessageDialog(this, msg, "Error", JOptionPane.ERROR_MESSAGE);
+    }
+
+    // =================================================================
+    // MAIN — launch from IntelliJ
+    // =================================================================
+    public static void main(String[] args)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
+            catch (Exception ignored) {}
+            new HerdAgentExtractor().setVisible(true);
+        });
+    }
+}
