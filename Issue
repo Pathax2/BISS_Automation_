@@ -1,549 +1,688 @@
-package database;
+package utilities.ExtractHerdsDB;
 
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.sql.*;
+// ***************************************************************************************************************************************************************************************
+// File          : HerdAgentExtractor.java
+// Package       : utilities.ExtractHerdsDB
+// Description   : Standalone GUI utility for extracting herd numbers from BISS_DATA
+//                 and resolving agent login IDs from BISS_INET.
+//
+//                 Reuses DBRouter for all database access — connection details
+//                 are read from src/test/resources/db.properties automatically.
+//                 No separate DB credentials needed in the UI.
+//
+//                 Designed for future extension:
+//                   - Phase 2: Open BISS application via CommonFunctions.launchBrowser()
+//                   - Phase 2: Extract additional data via Selenium + iAction()
+//                   - Phase 2: Cross-validate herd visibility in My Clients UI
+//
+//                 Usage: Run directly from IntelliJ as a main() application.
+//                        Right-click HerdAgentExtractor.java → Run 'HerdAgentExtractor.main()'
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 05-05-2026
+// ***************************************************************************************************************************************************************************************
+
+import database.DBRouter;
+
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.table.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.Date;
-import java.util.logging.*;
+import java.util.List;
 
-/**
- * DBRouter (multi-DB, Option B)
- * ------------------------------------------------------------------------
- * Usage:
- *   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "25");
- *   String herd = DBRouter.getValue("APP_HERD_NO");
- *
- *   DBRouter.runDB("INET", "Get Login Id for herd", herd);
- *   String username = DBRouter.getValue("USERNAME");
- *
- * Properties:
- *   src/test/resources/db.properties
- *     # DATA DB (BISS_DATA)
- *     db.url=...
- *     db.username=...
- *     db.password=...
- *
- *     # INET DB (BPS_CONNECT)
- *     db.inet.url=...
- *     db.inet.username=...
- *     db.inet.password=...
- */
-public class DBRouter {
+public class HerdAgentExtractor extends JFrame
+{
+    // ── Colors ────────────────────────────────────────────────────────
+    private static final Color C_BG        = new Color(18,  22,  30);
+    private static final Color C_PANEL     = new Color(26,  32,  44);
+    private static final Color C_BORDER    = new Color(45,  55,  72);
+    private static final Color C_GREEN     = new Color(56, 161, 105);
+    private static final Color C_GREEN_HV  = new Color(72, 187, 120);
+    private static final Color C_TEXT      = new Color(237, 242, 247);
+    private static final Color C_MUTED     = new Color(160, 174, 192);
+    private static final Color C_INPUT_BG  = new Color(35,  42,  55);
+    private static final Color C_ACCENT    = new Color(99,  179, 237);
+    private static final Color C_ORANGE    = new Color(237, 137,  54);
+    private static final Color C_RED       = new Color(229,  62,  62);
+    private static final Color C_HEADER_BG = new Color(30,  38,  52);
 
-    // =====================================================================
-    // STATIC RESULT STORE
-    // =====================================================================
-    public static List<Map<String, Object>> lastRows = new ArrayList<>();
-    public static Object lastScalar = null;
-    public static String lastLabel = "";
+    // ── Fonts ─────────────────────────────────────────────────────────
+    private static final Font FONT_TITLE  = new Font("Segoe UI", Font.BOLD,  18);
+    private static final Font FONT_LABEL  = new Font("Segoe UI", Font.BOLD,  12);
+    private static final Font FONT_INPUT  = new Font("Consolas",  Font.PLAIN, 12);
+    private static final Font FONT_BUTTON = new Font("Segoe UI", Font.BOLD,  12);
+    private static final Font FONT_TABLE  = new Font("Segoe UI", Font.PLAIN, 11);
+    private static final Font FONT_SMALL  = new Font("Segoe UI", Font.PLAIN, 11);
 
-    // =====================================================================
-    // DB CONFIGURATION
-    // =====================================================================
-    private static final Logger log = Logger.getLogger(DBRouter.class.getName());
-    private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
+    // ── Query inputs ──────────────────────────────────────────────────
+    private JTextArea  iQueryArea;
+    private JTextField iColumnNameField;
+    private JTextField iHerdLimitField;
 
-    // DATA (default) — existing keys
-    private static String DB_URL;
-    private static String DB_USER;
-    private static String DB_PASSWORD;
+    // ── Output ────────────────────────────────────────────────────────
+    private JTable            iResultTable;
+    private DefaultTableModel iTableModel;
+    private JLabel            iStatusLabel;
+    private JButton           iRunButton;
+    private JButton           iExportButton;
+    private JTextArea         iLogArea;
 
-    // INET — new keys
-    private static String DB_INET_URL;
-    private static String DB_INET_USER;
-    private static String DB_INET_PASSWORD;
+    // ── State ─────────────────────────────────────────────────────────
+    private final List<String[]> iResultRows = new ArrayList<>();
 
-    static {
-        setupLogger();
-        loadDBProperties();
+    // =================================================================
+    // CONSTRUCTOR
+    // =================================================================
+    public HerdAgentExtractor()
+    {
+        super("BISS Herd Agent Extractor");
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setSize(1100, 780);
+        setLocationRelativeTo(null);
+        getContentPane().setBackground(C_BG);
+        setLayout(new BorderLayout(0, 0));
+
+        add(buildHeader(),    BorderLayout.NORTH);
+        add(buildMainPanel(), BorderLayout.CENTER);
+        add(buildStatusBar(), BorderLayout.SOUTH);
     }
 
-    // =====================================================================
-    // PUBLIC API
-    // =====================================================================
-    /**
-     * Run a labeled SQL on the chosen DB.
-     *
-     * @param dbKey  "DATA" or "INET"
-     * @param label  logical query label
-     * @param params label parameters (if any)
-     */
-    public static void runDB(String dbKey, String label, String... params) {
-        Objects.requireNonNull(dbKey, "dbKey cannot be null");
-        Objects.requireNonNull(label, "label cannot be null");
+    // =================================================================
+    // HEADER
+    // =================================================================
+    private JPanel buildHeader()
+    {
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(C_HEADER_BG);
+        p.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, C_BORDER));
+        p.setPreferredSize(new Dimension(0, 60));
 
-        final String which = normalizeDb(dbKey);
-        final String key   = normalize(label);
+        JLabel iTitle = new JLabel("  BISS Herd Agent Extractor");
+        iTitle.setFont(FONT_TITLE);
+        iTitle.setForeground(C_TEXT);
 
-        lastLabel = label;
+        JLabel iSub = new JLabel("DB connections via db.properties  |  DBRouter  |  utilities.ExtractHerdsDB  ");
+        iSub.setFont(FONT_SMALL);
+        iSub.setForeground(C_MUTED);
 
-        String   sql        = null;
-        Object[] jdbcParams = new Object[0];
+        p.add(iTitle, BorderLayout.WEST);
+        p.add(iSub,   BorderLayout.EAST);
+        return p;
+    }
 
-        switch (key) {
+    // =================================================================
+    // MAIN PANEL
+    // =================================================================
+    private JSplitPane buildMainPanel()
+    {
+        JSplitPane iSplit = new JSplitPane(
+                JSplitPane.HORIZONTAL_SPLIT,
+                buildLeftPanel(),
+                buildRightPanel());
+        iSplit.setDividerLocation(420);
+        iSplit.setDividerSize(4);
+        iSplit.setBorder(null);
+        iSplit.setBackground(C_BG);
+        return iSplit;
+    }
 
-            // ----------------------------------------------------------------
-            // DATA DB: Not Started herds — individual (A prefix), no errors
-            //
-            // CONFIRMED FINAL (27-04-2026) after full DB investigation:
-            //
-            //   Selects herds that are:
-            //     - app_mde_code = 1  → RI (Renewal iNet / preprint)
-            //     - app_herd_no LIKE 'A%' → individual herds only
-            //       (excludes D/Z/C prefix herds that belong to other
-            //        agent portfolios and cause INET mismatch)
-            //     - Has at least one non-deleted land parcel
-            //     - NOT EXISTS app_mde_code IN (3,4,6,8):
-            //         3 = D   (Draft)
-            //         4 = I   (iNet / Submitted)
-            //         6 = H   (Helpdesk)
-            //         8 = DD  (Draft Dept)
-            //       → guarantees "Not Started" status only
-            //
-            //   Expired herd handling:
-            //     Expired herds are filtered downstream by INET validation.
-            //     GET LOGIN ID FOR HERD uses ROWNUM = 1 correlated subquery
-            //     (Query 19 from reference doc) to return the first agent.
-            //     If no active agent exists, USERNAME is null → Hooks skips.
-            //     Column-by-column DB comparison (A1010096 vs A1010070)
-            //     confirmed "Herd Expired" is NOT stored in vwbs_application.
-            //
-            //   Column returned: APP_HERD_NO
-            //     DBRouter.executeQuery() uppercases all column names so
-            //     Hooks.java r.get("APP_HERD_NO") works without any changes.
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH NO ERRORS AT ALL": {
-                requireParamCountBetween(key, params, 1, 3);
+    // =================================================================
+    // LEFT PANEL — inputs
+    // =================================================================
+    private JPanel buildLeftPanel()
+    {
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setBackground(C_BG);
+        p.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 8));
 
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                // params[2] accepted for backward compatibility but not used
+        // ── DB info note ─────────────────────────────────────────────
+        JPanel iInfoBox = new JPanel(new BorderLayout());
+        iInfoBox.setBackground(new Color(20, 40, 60));
+        iInfoBox.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(C_ACCENT, 1),
+                BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+        iInfoBox.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+        JLabel iInfoText = new JLabel("<html><b style='color:#63b3ed'>DB connections loaded from db.properties</b>" +
+                "<br><span style='color:#a0aec0'>BISS_DATA (db.url) and BISS_INET (db.inet.url)<br>" +
+                "No credentials needed here.</span></html>");
+        iInfoText.setFont(FONT_SMALL);
+        iInfoBox.add(iInfoText);
+        p.add(iInfoBox);
+        p.add(Box.createVerticalStrut(20));
 
-                sql =
-                    "SELECT ap_ri.app_herd_no " +
-                    "FROM vwbs_application ap_ri " +
-                    "WHERE ap_ri.app_mde_code = 1 " +
-                    "AND ap_ri.app_year = ? " +
-                    "AND ap_ri.app_herd_no LIKE 'A%' " +
-                    "AND EXISTS ( " +
-                    "    SELECT 1 " +
-                    "    FROM tdbs_application_land x " +
-                    "    WHERE x.apl_year        = ap_ri.app_year " +
-                    "    AND   x.apl_app_id      = ap_ri.app_id " +
-                    "    AND   x.apl_deleted_ind = 'N' " +
-                    ") " +
-                    "AND NOT EXISTS ( " +
-                    "    SELECT 1 " +
-                    "    FROM vwbs_application app " +
-                    "    WHERE app.app_year     = ap_ri.app_year " +
-                    "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
-                    "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
-                    ") " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY ap_ri.app_herd_no";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+        // ── SQL Query ────────────────────────────────────────────────
+        p.add(sectionLabel("BISS_DATA SQL Query"));
+        p.add(Box.createVerticalStrut(6));
 
-            // ----------------------------------------------------------------
-            // DATA DB: herds by scheme year
-            // ----------------------------------------------------------------
-            case "HERDS BY SCHEME YEAR": {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                    "SELECT h.hld_herd_no " +
-                    "FROM tddp_application a " +
-                    "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
-                    "WHERE a.app_syr_code = ? " +
-                    "ORDER BY h.hld_herd_no";
-                jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
-                break;
-            }
+        iQueryArea = new JTextArea(10, 30);
+        iQueryArea.setFont(FONT_INPUT);
+        iQueryArea.setBackground(C_INPUT_BG);
+        iQueryArea.setForeground(C_TEXT);
+        iQueryArea.setCaretColor(C_TEXT);
+        iQueryArea.setLineWrap(true);
+        iQueryArea.setWrapStyleWord(true);
+        iQueryArea.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(C_BORDER, 1),
+                BorderFactory.createEmptyBorder(8, 10, 8, 10)));
+        iQueryArea.setText(
+                "SELECT ap_ri.app_herd_no\n" +
+                "FROM vwbs_application ap_ri\n" +
+                "WHERE ap_ri.app_mde_code = 1\n" +
+                "AND ap_ri.app_year = 2026\n" +
+                "AND ap_ri.app_herd_no LIKE 'A%'\n" +
+                "AND EXISTS (\n" +
+                "    SELECT 1\n" +
+                "    FROM tdbs_application_land x\n" +
+                "    WHERE x.apl_year        = ap_ri.app_year\n" +
+                "    AND   x.apl_app_id      = ap_ri.app_id\n" +
+                "    AND   x.apl_deleted_ind = 'N'\n" +
+                ")\n" +
+                "AND NOT EXISTS (\n" +
+                "    SELECT 1\n" +
+                "    FROM vwbs_application app\n" +
+                "    WHERE app.app_year     = ap_ri.app_year\n" +
+                "    AND   app.app_herd_no  = ap_ri.app_herd_no\n" +
+                "    AND   app.app_mde_code IN (3, 4, 6, 8)\n" +
+                ")\n" +
+                "ORDER BY ap_ri.app_herd_no");
 
-            // ----------------------------------------------------------------
-            // DATA DB: get_hold
-            // ----------------------------------------------------------------
-            case "GET HOLD ID FOR HERD": {
-                requireParamCountBetween(key, params, 1, 1);
-                sql = "SELECT get_hold(?) AS holding_id FROM dual";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
+        JScrollPane iQScroll = new JScrollPane(iQueryArea);
+        iQScroll.setBorder(null);
+        iQScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 230));
+        p.add(iQScroll);
+        p.add(Box.createVerticalStrut(16));
 
-            // ----------------------------------------------------------------
-            // INET DB: get Username for a Herd (BPS_CONNECT)
-            //
-            // Source: Query 19 from BISS test data reference document.
-            //
-            // Uses correlated subquery with ROWNUM = 1 inside the SELECT list
-            // to return the first available agent login for the herd.
-            // ORDER BY ca_start_date DESC returns the most recently associated
-            // agent first — most likely to be the current active agent.
-            //
-            // Expired agent handling:
-            //     SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date filters
-            //     out expired herd registrations at DB level.
-            //     If the returned agent has an expired SSO account, TC_03 login
-            //     step detects "Account Expired" on screen → calls
-            //     Hooks.markAgentExpired() → re-resolves a fresh herd+agent.
-            // ----------------------------------------------------------------
-            case "GET LOGIN ID FOR HERD": {
-                requireParamCountBetween(key, params, 1, 1);
-                // ----------------------------------------------------------------
-                // INET DB: get Username for a Herd (BPS_CONNECT)
-                //
-                // Source: Query 19 from BISS test data reference document.
-                //
-                // Uses a correlated subquery with ROWNUM = 1 to return the first
-                // available agent login for the given herd. This approach always
-                // returns a result as long as at least one active agent association
-                // exists — regardless of how many agents the herd has.
-                //
-                // ORDER BY ca_start_date DESC ensures the most recently associated
-                // agent is returned first — most likely to be the active/current agent.
-                //
-                // Column returned: USERNAME (aliased as LoginId in the original query,
-                // uppercased to USERNAME by executeQuery() for consistent getValue() calls).
-                // ----------------------------------------------------------------
-                sql =
-                    "SELECT hbcus.bcus_bus_id AS HERDNO, " +
-                    "       (SELECT ui.uri_username " +
-                    "          FROM tdcr_user_info ui " +
-                    "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
-                    "           AND ROWNUM = 1) AS USERNAME " +
-                    "  FROM tdco_customer_asscs ca, " +
-                    "       tdco_business_customers abcus, " +
-                    "       tdco_business_customers hbcus " +
-                    " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
-                    "   AND ca.ca_cac_code     = 194 " +
-                    "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
-                    "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
-                    "   AND hbcus.bcus_bus_id  = ? " +
-                    " ORDER BY ca.ca_start_date DESC";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
+        // ── Column name ──────────────────────────────────────────────
+        p.add(sectionLabel("Herd Number Column Name"));
+        p.add(Box.createVerticalStrut(6));
+        iColumnNameField = inputField("APP_HERD_NO");
+        iColumnNameField.setToolTipText(
+                "Column in your query that contains herd numbers e.g. APP_HERD_NO or LVL_HERD_NO");
+        p.add(labeledRow("Column", iColumnNameField));
+        p.add(Box.createVerticalStrut(16));
 
-            // ----------------------------------------------------------------
-            // DATA DB: herds with Preliminary Checks (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIMINARY CHECKS": {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                    "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                    "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                    "FROM vwbs_land_validation " +
-                    "WHERE lvl_year = ? " +
-                    "AND lvt_desc = 'Preliminary Check' " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+        // ── Herd limit ───────────────────────────────────────────────
+        p.add(sectionLabel("Herd Limit  (blank = all rows)"));
+        p.add(Box.createVerticalStrut(6));
+        iHerdLimitField = inputField("");
+        iHerdLimitField.setToolTipText(
+                "Leave blank to process every row returned by the query");
+        p.add(labeledRow("Limit", iHerdLimitField));
+        p.add(Box.createVerticalStrut(24));
 
-            // ----------------------------------------------------------------
-            // DATA DB: herds with Dual Claims check (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH DUAL CLAIMS CHECK": {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                    "SELECT * " +
-                    "FROM vwbs_preliminary_check_dc_ol " +
-                    "WHERE scheme_year = ? " +
-                    "AND ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+        // ── Run button ───────────────────────────────────────────────
+        iRunButton = styledButton("▶   Run Extraction", C_GREEN, C_GREEN_HV);
+        iRunButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        iRunButton.addActionListener(e -> runExtraction());
+        p.add(iRunButton);
 
-            // ----------------------------------------------------------------
-            // DATA DB: herds with Overclaims check (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH OVERCLAIMS CHECK": {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                    "SELECT * " +
-                    "FROM vwbs_preliminary_check_oc " +
-                    "WHERE scheme_year = ? " +
-                    "AND ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+        // ── Phase 2 placeholder ──────────────────────────────────────
+        p.add(Box.createVerticalStrut(10));
+        JLabel iPhase2 = new JLabel("  Phase 2: Open BISS + UI extraction — coming soon");
+        iPhase2.setFont(FONT_SMALL);
+        iPhase2.setForeground(C_MUTED);
+        iPhase2.setAlignmentX(Component.LEFT_ALIGNMENT);
+        p.add(iPhase2);
 
-            // ----------------------------------------------------------------
-            // DATA DB: herds with Prelim Checks AND commonage parcels (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE": {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                    "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                    "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                    "FROM vwbs_land_validation " +
-                    "WHERE lvl_year = ? " +
-                    "AND lvt_desc = 'Preliminary Check' " +
-                    "AND lvl_commonage_id IS NOT NULL " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+        p.add(Box.createVerticalGlue());
+        return p;
+    }
 
-            // ----------------------------------------------------------------
-            // DATA DB: herds with Prelim Checks filtered by response status
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS": {
-                requireParamCountBetween(key, params, 2, 3);
-                int year      = parseInt(params[0], "year");
-                String status = params[1].trim();
-                int maxRows   = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
-                sql =
-                    "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
-                    "FROM vwbs_land_validation " +
-                    "WHERE lvl_year = ? " +
-                    "AND lvt_desc = 'Preliminary Check' " +
-                    "AND lvs_desc = ? " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, status, maxRows };
-                break;
-            }
+    // =================================================================
+    // RIGHT PANEL — results table + log
+    // =================================================================
+    private JPanel buildRightPanel()
+    {
+        JPanel p = new JPanel(new BorderLayout(0, 8));
+        p.setBackground(C_BG);
+        p.setBorder(BorderFactory.createEmptyBorder(16, 8, 16, 16));
 
-            // ----------------------------------------------------------------
-            // DATA DB: one herd per preliminary check type (Overclaim,
-            // Dual claim, Agricultural Activity) — offset-based retry.
-            //
-            // params[0] = year   (required)
-            // params[1] = offset (required — 0 on first call, increment
-            //                     on each retry that fails INET validation)
-            // ----------------------------------------------------------------
-            case "PRELIMINARY CHECKS HERDS": {
-                requireParamCountBetween(key, params, 2, 2);
-                int year     = parseInt(params[0], "year");
-                int offset   = parseInt(params[1], "offset");
-                int targetRn = offset + 1;
+        // ── Top row: label + export button ──────────────────────────
+        JPanel iTopRow = new JPanel(new BorderLayout());
+        iTopRow.setBackground(C_BG);
+        JLabel iTableLabel = new JLabel("Results");
+        iTableLabel.setFont(FONT_LABEL);
+        iTableLabel.setForeground(C_TEXT);
+        iExportButton = styledButton("⬇  Export to CSV", C_ACCENT, C_ACCENT.brighter());
+        iExportButton.setEnabled(false);
+        iExportButton.addActionListener(e -> exportToCsv());
+        iTopRow.add(iTableLabel,   BorderLayout.WEST);
+        iTopRow.add(iExportButton, BorderLayout.EAST);
 
-                sql =
-                    "SELECT * FROM ( " +
-                    "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
-                    "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
-                    "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
-                    "         ROW_NUMBER() OVER ( " +
-                    "             PARTITION BY LVC_DESC " +
-                    "             ORDER BY LVL_HERD_NO " +
-                    "         ) AS RN " +
-                    "  FROM vwbs_land_validation " +
-                    "  WHERE LVL_YEAR = ? " +
-                    "  AND LVT_DESC = 'Preliminary Check' " +
-                    "  AND LVS_DESC = 'Pending' " +
-                    "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
-                    ") WHERE RN = ?";
-                jdbcParams = new Object[]{ year, targetRn };
-                break;
-            }
+        // ── Results table ────────────────────────────────────────────
+        iTableModel = new DefaultTableModel(
+                new String[]{"#", "Herd Number", "Agent Username", "Status"}, 0)
+        {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        iResultTable = new JTable(iTableModel);
+        styleTable(iResultTable);
 
-            default:
-                throw new RuntimeException("Unknown DB label: " + label);
+        JScrollPane iTScroll = new JScrollPane(iResultTable);
+        iTScroll.setBorder(BorderFactory.createLineBorder(C_BORDER, 1));
+        iTScroll.setBackground(C_PANEL);
+        iTScroll.getViewport().setBackground(C_PANEL);
+
+        // ── Log console ──────────────────────────────────────────────
+        iLogArea = new JTextArea(6, 40);
+        iLogArea.setFont(FONT_INPUT);
+        iLogArea.setBackground(new Color(15, 18, 25));
+        iLogArea.setForeground(new Color(120, 220, 120));
+        iLogArea.setEditable(false);
+        iLogArea.setCaretColor(C_TEXT);
+        iLogArea.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+
+        JScrollPane iLScroll = new JScrollPane(iLogArea);
+        iLScroll.setBorder(BorderFactory.createLineBorder(C_BORDER, 1));
+        iLScroll.setPreferredSize(new Dimension(0, 130));
+
+        JSplitPane iVSplit = new JSplitPane(
+                JSplitPane.VERTICAL_SPLIT, iTScroll, iLScroll);
+        iVSplit.setDividerLocation(380);
+        iVSplit.setDividerSize(4);
+        iVSplit.setBorder(null);
+        iVSplit.setBackground(C_BG);
+
+        p.add(iTopRow,  BorderLayout.NORTH);
+        p.add(iVSplit,  BorderLayout.CENTER);
+        return p;
+    }
+
+    // =================================================================
+    // STATUS BAR
+    // =================================================================
+    private JPanel buildStatusBar()
+    {
+        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 16, 6));
+        p.setBackground(C_HEADER_BG);
+        p.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, C_BORDER));
+        iStatusLabel = new JLabel("Ready  —  db.properties loaded from src/test/resources/");
+        iStatusLabel.setFont(FONT_SMALL);
+        iStatusLabel.setForeground(C_MUTED);
+        p.add(iStatusLabel);
+        return p;
+    }
+
+    // =================================================================
+    // CORE LOGIC — run extraction via DBRouter
+    // =================================================================
+    private void runExtraction()
+    {
+        String iSql     = iQueryArea.getText().trim();
+        String iColName = iColumnNameField.getText().trim().toUpperCase();
+        String iLimStr  = iHerdLimitField.getText().trim();
+
+        // ── Validation ───────────────────────────────────────────────
+        if (iSql.isEmpty())
+        {
+            showError("SQL query cannot be empty.");
+            return;
+        }
+        if (iColName.isEmpty())
+        {
+            showError("Column name cannot be empty.\nEnter the column that contains herd numbers e.g. APP_HERD_NO");
+            return;
         }
 
-        executeQuery(which, sql, jdbcParams);
-    }
+        int iLimit = -1;
+        if (!iLimStr.isEmpty())
+        {
+            try { iLimit = Integer.parseInt(iLimStr); }
+            catch (NumberFormatException e) { showError("Herd limit must be a whole number or leave blank for all rows."); return; }
+        }
 
-    // =====================================================================
-    // PUBLIC RAW SQL — bypasses label switch, executes user-supplied SQL
-    // =====================================================================
-    /**
-     * Execute a raw SQL string directly on the chosen DB without going
-     * through the label switch. Used by HerdAgentExtractor and other
-     * utilities that build their own SQL at runtime.
-     *
-     * @param dbKey  "DATA" or "INET"
-     * @param sql    raw SQL string — must not contain '?' placeholders
-     *               (use params for parameterised queries)
-     * @param params optional bind parameters matching '?' in sql
-     */
-    public static void runRawSQL(String dbKey, String sql, Object... params) {
-        Objects.requireNonNull(dbKey, "dbKey cannot be null");
-        Objects.requireNonNull(sql,   "sql cannot be null");
-        lastLabel = "RAW_SQL";
-        executeQuery(normalizeDb(dbKey), sql, params);
-    }
+        final int iFinalLimit = iLimit;
 
+        // ── Reset UI ─────────────────────────────────────────────────
+        iRunButton.setEnabled(false);
+        iExportButton.setEnabled(false);
+        iTableModel.setRowCount(0);
+        iResultRows.clear();
+        iLogArea.setText("");
+        setStatus("Running...", C_ACCENT);
 
-    private static void executeQuery(String whichDb, String sql, Object... params) {
-        lastRows   = new ArrayList<>();
-        lastScalar = null;
+        // ── Background worker ─────────────────────────────────────────
+        SwingWorker<Void, String[]> iWorker = new SwingWorker<>()
+        {
+            @Override
+            protected Void doInBackground()
+            {
+                log("Step 1 — Running SQL on BISS_DATA via DBRouter...");
 
-        try (Connection conn = "INET".equals(whichDb)
-                ? getInetConnection() : getDataConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
+                // ── Run user SQL on BISS_DATA ─────────────────────────
+                // DBRouter handles the connection via db.properties.
+                // We pass the raw SQL as a custom label so DBRouter executes
+                // it directly via executeQuery().
+                List<String> iHerds = new ArrayList<>();
 
-            for (int i = 0; i < params.length; i++) {
-                stmt.setObject(i + 1, params[i]);
-            }
+                try
+                {
+                    // ── Run user SQL directly on BISS_DATA ───────────────
+                    // runRawSQL bypasses the DBRouter label switch and
+                    // executes the query string as-is using the DATA
+                    // connection configured in db.properties.
+                    database.DBRouter.runRawSQL("DATA", iSql);
 
-            try (ResultSet rs = stmt.executeQuery()) {
-                ResultSetMetaData md       = rs.getMetaData();
-                int               colCount = md.getColumnCount();
+                    List<Map<String, Object>> iRows = database.DBRouter.getRows();
 
-                while (rs.next()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    for (int c = 1; c <= colCount; c++) {
-                        String col = md.getColumnLabel(c);
-                        if (col == null || col.isEmpty()) col = md.getColumnName(c);
-                        // Always uppercase — callers use getValue("APP_HERD_NO") etc.
-                        row.put(col.toUpperCase(Locale.ROOT), rs.getObject(c));
+                    if (iRows == null || iRows.isEmpty())
+                    {
+                        log("WARNING: Query returned no rows from BISS_DATA.");
+                        log("Check the SQL query and year parameters.");
+                        return null;
                     }
-                    lastRows.add(row);
+
+                    log("Query returned " + iRows.size() + " row(s) from BISS_DATA.");
+
+                    // Extract herd numbers from the specified column
+                    for (Map<String, Object> iRow : iRows)
+                    {
+                        // Try exact match first, then case-insensitive
+                        Object iVal = iRow.get(iColName);
+                        if (iVal == null)
+                        {
+                            for (String k : iRow.keySet())
+                            {
+                                if (k.equalsIgnoreCase(iColName)) { iVal = iRow.get(k); break; }
+                            }
+                        }
+
+                        if (iVal != null)
+                        {
+                            String h = iVal.toString().trim();
+                            if (!h.isEmpty()) iHerds.add(h);
+                        }
+
+                        if (iFinalLimit > 0 && iHerds.size() >= iFinalLimit) break;
+                    }
+
+                    if (iHerds.isEmpty())
+                    {
+                        log("ERROR: Column '" + iColName + "' not found or returned no values.");
+                        log("Available columns in result:");
+                        if (!iRows.isEmpty())
+                        {
+                            iRows.get(0).keySet().forEach(k -> log("  • " + k));
+                        }
+                        return null;
+                    }
+
+                    log("Extracted " + iHerds.size() + " herd number(s).");
+                    log("─".repeat(55));
+                    log("Step 2 — Querying BISS_INET for agent logins...");
+                    log("─".repeat(55));
+
+                    // ── For each herd query BISS_INET via DBRouter ────
+                    int iRowNum = 0;
+                    for (String iHerd : iHerds)
+                    {
+                        iRowNum++;
+                        try
+                        {
+                            database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
+                            String iAgent = database.DBRouter.getValue("USERNAME");
+
+                            if (iAgent != null && !iAgent.isBlank())
+                            {
+                                String[] iRowData = {
+                                        String.valueOf(iRowNum),
+                                        iHerd,
+                                        iAgent.trim(),
+                                        "FOUND"
+                                };
+                                publish(iRowData);
+                                log("[" + iRowNum + "] " + iHerd + "  →  " + iAgent.trim());
+                            }
+                            else
+                            {
+                                String[] iRowData = {
+                                        String.valueOf(iRowNum),
+                                        iHerd,
+                                        "",
+                                        "NO AGENT"
+                                };
+                                publish(iRowData);
+                                log("[" + iRowNum + "] " + iHerd + "  →  (no active agent found in INET)");
+                            }
+                        }
+                        catch (Exception iEx)
+                        {
+                            String[] iRowData = {
+                                    String.valueOf(iRowNum),
+                                    iHerd,
+                                    "",
+                                    "ERROR"
+                            };
+                            publish(iRowData);
+                            log("[" + iRowNum + "] " + iHerd + "  →  ERROR: " + iEx.getMessage());
+                        }
+                    }
+
+                    log("─".repeat(55));
+                    log("Done — " + iRowNum + " herd(s) processed.");
+
+                    long iFount = iResultRows.stream()
+                            .filter(r -> "FOUND".equals(r[3])).count();
+                    log("FOUND: " + iFount + "  |  NO AGENT: " + (iRowNum - iFount));
                 }
-                if (!lastRows.isEmpty()) {
-                    lastScalar = lastRows.get(0).values().iterator().next();
+                catch (Exception iEx)
+                {
+                    log("ERROR: " + iEx.getMessage());
+                    log("Check db.properties and DBRouter configuration.");
                 }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("DB (" + whichDb + ") execution failed: "
-                    + e.getMessage(), e);
-        }
-    }
 
-    private static Connection getDataConnection() throws SQLException {
-        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-    }
-
-    private static Connection getInetConnection() throws SQLException {
-        return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
-    }
-
-    // =====================================================================
-    // HELPER ACCESSORS
-    // =====================================================================
-    /** First row's column value (case-insensitive), or null if absent. */
-    public static String getValue(String column) {
-        if (lastRows.isEmpty()) return null;
-        Map<String, Object> first = lastRows.get(0);
-        for (String k : first.keySet())
-            if (k.equalsIgnoreCase(column))
-                return Objects.toString(first.get(k), null);
-        return null;
-    }
-
-    /** All rows of last result. */
-    public static List<Map<String, Object>> getRows() { return lastRows; }
-
-    /** True if last result has at least one row. */
-    public static boolean hasRows() { return !lastRows.isEmpty(); }
-
-    // =====================================================================
-    // PROPERTY LOADER
-    // =====================================================================
-    private static void loadDBProperties() {
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE)) {
-            props.load(fis);
-
-            DB_URL      = props.getProperty("db.url");
-            DB_USER     = props.getProperty("db.username");
-            DB_PASSWORD = props.getProperty("db.password");
-            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD)) {
-                throw new RuntimeException(
-                        "Missing DATA DB properties (db.url / db.username / db.password)");
+                return null;
             }
 
-            DB_INET_URL      = props.getProperty("db.inet.url");
-            DB_INET_USER     = props.getProperty("db.inet.username");
-            DB_INET_PASSWORD = props.getProperty("db.inet.password");
-            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD)) {
-                throw new RuntimeException(
-                        "Missing INET DB properties "
-                        + "(db.inet.url / db.inet.username / db.inet.password)");
-            }
-
-            log.info("[DBRouter] Loaded DATA & INET connection properties.");
-        } catch (IOException e) {
-            throw new RuntimeException("Cannot load DB properties at "
-                    + PROPERTIES_FILE + " : " + e.getMessage(), e);
-        }
-    }
-
-    // =====================================================================
-    // LOGGER
-    // =====================================================================
-    private static void setupLogger() {
-        try {
-            Logger root = Logger.getLogger(DBRouter.class.getName());
-            root.setUseParentHandlers(false);
-            root.setLevel(Level.ALL);
-
-            java.util.logging.Formatter fmt = new java.util.logging.Formatter() {
-                @Override
-                public String format(LogRecord r) {
-                    return String.format("[%s] [%s] %s%n",
-                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                                    .format(new Date(r.getMillis())),
-                            r.getLevel(),
-                            r.getMessage());
+            @Override
+            protected void process(List<String[]> chunks)
+            {
+                for (String[] row : chunks)
+                {
+                    iTableModel.addRow(row);
+                    iResultRows.add(row);
                 }
-            };
+                // Refresh renderer on each batch so colours apply immediately
+                iResultTable.setDefaultRenderer(Object.class, buildRenderer());
+            }
 
-            ConsoleHandler console = new ConsoleHandler();
-            console.setLevel(Level.ALL);
-            console.setFormatter(fmt);
+            @Override
+            protected void done()
+            {
+                iRunButton.setEnabled(true);
+                iExportButton.setEnabled(!iResultRows.isEmpty());
+                long iFount = iResultRows.stream().filter(r -> "FOUND".equals(r[3])).count();
+                setStatus("Completed  —  " + iResultRows.size() + " herd(s)  |  "
+                        + iFount + " agent(s) found.", C_GREEN);
+            }
+        };
 
-            for (Handler h : root.getHandlers()) root.removeHandler(h);
-            root.addHandler(console);
-        } catch (Exception e) {
-            System.err.println("Logger setup failed: " + e.getMessage());
+        iWorker.execute();
+    }
+
+    // =================================================================
+    // TABLE RENDERER — colour by status
+    // =================================================================
+    private TableCellRenderer buildRenderer()
+    {
+        return new DefaultTableCellRenderer()
+        {
+            @Override
+            public Component getTableCellRendererComponent(
+                    JTable t, Object v, boolean sel, boolean foc, int r, int c)
+            {
+                super.getTableCellRendererComponent(t, v, sel, foc, r, c);
+                String iStatus = Objects.toString(t.getValueAt(r, 3), "");
+                Color iFg = switch (iStatus)
+                {
+                    case "FOUND"    -> C_GREEN;
+                    case "NO AGENT" -> C_ORANGE;
+                    default         -> C_RED;
+                };
+                setForeground(iFg);
+                setBackground(sel ? C_BORDER : C_PANEL);
+                setFont(FONT_TABLE);
+                setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 8));
+                return this;
+            }
+        };
+    }
+
+    // =================================================================
+    // EXPORT TO CSV
+    // =================================================================
+    private void exportToCsv()
+    {
+        JFileChooser iChooser = new JFileChooser();
+        iChooser.setDialogTitle("Export Results to CSV");
+        iChooser.setSelectedFile(new File(
+                "BISS_Herd_Agents_"
+                + new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())
+                + ".csv"));
+
+        if (iChooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
+
+        File iFile = iChooser.getSelectedFile();
+        if (!iFile.getName().endsWith(".csv"))
+        {
+            iFile = new File(iFile.getAbsolutePath() + ".csv");
+        }
+
+        try (PrintWriter iWriter = new PrintWriter(new FileWriter(iFile)))
+        {
+            iWriter.println("Row,Herd Number,Agent Username,Status");
+            for (String[] iRow : iResultRows)
+            {
+                iWriter.println(String.join(",", iRow));
+            }
+            setStatus("Exported: " + iFile.getAbsolutePath(), C_GREEN);
+            log("Exported to: " + iFile.getAbsolutePath());
+            JOptionPane.showMessageDialog(this,
+                    "Exported successfully:\n" + iFile.getAbsolutePath(),
+                    "Export Complete",
+                    JOptionPane.INFORMATION_MESSAGE);
+        }
+        catch (IOException e)
+        {
+            showError("Export failed: " + e.getMessage());
         }
     }
 
-    // =====================================================================
-    // NORMALIZERS & VALIDATORS
-    // =====================================================================
-    private static String normalizeDb(String s) {
-        String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
-        if ("DATA".equals(v) || "INET".equals(v)) return v;
-        throw new IllegalArgumentException(
-                "dbKey must be 'DATA' or 'INET' (was: " + s + ")");
+    // =================================================================
+    // UI HELPERS
+    // =================================================================
+    private void styleTable(JTable t)
+    {
+        t.setBackground(C_PANEL);
+        t.setForeground(C_TEXT);
+        t.setFont(FONT_TABLE);
+        t.setRowHeight(28);
+        t.setShowGrid(false);
+        t.setIntercellSpacing(new Dimension(0, 1));
+        t.setSelectionBackground(C_BORDER);
+        t.setSelectionForeground(C_TEXT);
+        t.setDefaultRenderer(Object.class, buildRenderer());
+
+        JTableHeader iHeader = t.getTableHeader();
+        iHeader.setBackground(C_HEADER_BG);
+        iHeader.setForeground(C_MUTED);
+        iHeader.setFont(FONT_LABEL);
+        iHeader.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, C_BORDER));
+
+        t.getColumnModel().getColumn(0).setMaxWidth(50);
+        t.getColumnModel().getColumn(3).setMaxWidth(120);
     }
 
-    private static String normalize(String s) {
-        if (s == null) return "";
-        return s.replace(':', ' ')
-                .replace("\u2013", "-")
-                .replace("\u2014", "-")
-                .replaceAll("\\s+", " ")
-                .trim()
-                .toUpperCase(Locale.ROOT);
+    private JLabel sectionLabel(String text)
+    {
+        JLabel l = new JLabel(text);
+        l.setFont(FONT_LABEL);
+        l.setForeground(C_ACCENT);
+        l.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return l;
     }
 
-    private static void requireParamCountBetween(String labelKey,
-                                                  String[] params,
-                                                  int min, int max) {
-        int n = (params == null) ? 0 : params.length;
-        if (n < min || n > max) {
-            throw new IllegalArgumentException(
-                    "Label '" + labelKey + "' expects between "
-                    + min + " and " + max + " parameter(s); got " + n);
-        }
+    private JTextField inputField(String placeholder)
+    {
+        JTextField f = new JTextField(placeholder);
+        f.setFont(FONT_INPUT);
+        f.setBackground(C_INPUT_BG);
+        f.setForeground(C_TEXT);
+        f.setCaretColor(C_TEXT);
+        f.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(C_BORDER, 1),
+                BorderFactory.createEmptyBorder(4, 8, 4, 8)));
+        return f;
     }
 
-    private static int parseInt(String s, String name) {
-        try { return Integer.parseInt(s.trim()); }
-        catch (Exception e) {
-            throw new IllegalArgumentException(
-                    "Expected integer for " + name + " but got: " + s);
-        }
+    private JPanel labeledRow(String label, JComponent field)
+    {
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setBackground(C_BG);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        JLabel l = new JLabel(label);
+        l.setFont(FONT_SMALL);
+        l.setForeground(C_MUTED);
+        l.setPreferredSize(new Dimension(80, 0));
+        row.add(l,     BorderLayout.WEST);
+        row.add(field, BorderLayout.CENTER);
+        return row;
     }
 
-    private static boolean isBlank(String s) {
-        return s == null || s.trim().isEmpty();
+    private JButton styledButton(String text, Color bg, Color hover)
+    {
+        JButton b = new JButton(text);
+        b.setFont(FONT_BUTTON);
+        b.setBackground(bg);
+        b.setForeground(Color.WHITE);
+        b.setFocusPainted(false);
+        b.setBorderPainted(false);
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        b.setAlignmentX(Component.LEFT_ALIGNMENT);
+        b.addMouseListener(new MouseAdapter()
+        {
+            public void mouseEntered(MouseEvent e) { if (b.isEnabled()) b.setBackground(hover); }
+            public void mouseExited(MouseEvent e)  { b.setBackground(bg); }
+        });
+        return b;
+    }
+
+    private void setStatus(String msg, Color color)
+    {
+        SwingUtilities.invokeLater(() -> {
+            iStatusLabel.setText(msg);
+            iStatusLabel.setForeground(color);
+        });
+    }
+
+    private void log(String msg)
+    {
+        SwingUtilities.invokeLater(() -> {
+            iLogArea.append(msg + "\n");
+            iLogArea.setCaretPosition(iLogArea.getDocument().getLength());
+        });
+    }
+
+    private void showError(String msg)
+    {
+        JOptionPane.showMessageDialog(this, msg, "Error", JOptionPane.ERROR_MESSAGE);
+    }
+
+    // =================================================================
+    // MAIN — launch from IntelliJ
+    // =================================================================
+    public static void main(String[] args)
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
+            catch (Exception ignored) {}
+            new HerdAgentExtractor().setVisible(true);
+        });
     }
 }
