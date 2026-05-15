@@ -8,88 +8,96 @@ import java.util.*;
 import java.util.Date;
 import java.util.logging.*;
 
-/**
+// =====================================================================================================================================
+// File          : DBRouter.java
+// Package       : database
+// Description   : Multi-database query router for the BISS Automation Framework.
+//                 Provides a single entry point for all SQL execution across BISS_DATA
+//                 and BISS_INET Oracle databases. All queries are identified by a logical
+//                 label string and resolved to parameterised SQL internally, keeping
+//                 step definitions and hooks free of SQL syntax.
+//
+//                 Supports two execution modes:
+//                   1. runDB()     — label-based execution (predefined queries only)
+//                   2. runRawSQL() — raw SQL execution (utility tools and ad-hoc queries)
+//
+//                 Connection properties are loaded once at class initialisation from:
+//                   src/test/resources/db.properties
+//
+//                 Usage:
+//                   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "25");
+//                   String herd = DBRouter.getValue("APP_HERD_NO");
+//
+//                   DBRouter.runDB("INET", "Get Login Id for herd", herd);
+//                   String username = DBRouter.getValue("USERNAME");
+//
+//                   DBRouter.runRawSQL("DATA", "SELECT app_herd_no FROM vwbs_application WHERE ...");
+//                   List<Map<String, Object>> rows = DBRouter.getRows();
+//
+//                 db.properties keys:
+//                   db.url              — BISS_DATA JDBC connection URL
+//                   db.username         — BISS_DATA username
+//                   db.password         — BISS_DATA password
+//                   db.inet.url         — BISS_INET JDBC connection URL
+//                   db.inet.username    — BISS_INET username
+//                   db.inet.password    — BISS_INET password
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 27-04-2026
+// =====================================================================================================================================
 
- - DBRouter (multi-DB, Option B)
- - -----
- - Usage:
- - DBRouter.runDB(“DATA”, “List of herds with no errors at all”, “2026”, “25”);
- - String herd = DBRouter.getValue(“APP_HERD_NO”);
- -
- - DBRouter.runDB(“INET”, “Get Login Id for herd”, herd);
- - String username = DBRouter.getValue(“USERNAME”);
- -
- - Properties:
- - src/test/resources/db.properties
- - ```
- # DATA DB (BISS_DATA)
- ```
- - ```
- db.url=...
- ```
- - ```
- db.username=...
- ```
- - ```
- db.password=...
- ```
- -
- - ```
- # INET DB (BPS_CONNECT)
- ```
- - ```
- db.inet.url=...
- ```
- - ```
- db.inet.username=...
- ```
- - ```
- db.inet.password=...
- ```
-
- */
-public class DBRouter {
+public class DBRouter
+{
     // =====================================================================
-// STATIC RESULT STORE
-// =====================================================================
-    public static List<Map<String, Object>> lastRows = new ArrayList<>();
-    public static Object lastScalar = null;
-    public static String lastLabel = "";
+    // STATIC RESULT STORE
+    // =====================================================================
+    public static List<Map<String, Object>> lastRows   = new ArrayList<>();
+    public static Object                    lastScalar = null;
+    public static String                    lastLabel  = "";
 
     // =====================================================================
-// DB CONFIGURATION
-// =====================================================================
-    private static final Logger log = Logger.getLogger(DBRouter.class.getName());
+    // DB CONFIGURATION
+    // =====================================================================
+    private static final Logger log             = Logger.getLogger(DBRouter.class.getName());
     private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
 
-    // DATA (default) — existing keys
+    // BISS_DATA connection
     private static String DB_URL;
     private static String DB_USER;
     private static String DB_PASSWORD;
 
-    // INET — new keys
+    // BISS_INET connection
     private static String DB_INET_URL;
     private static String DB_INET_USER;
     private static String DB_INET_PASSWORD;
 
-    static {
+    static
+    {
         setupLogger();
         loadDBProperties();
     }
 
-// =====================================================================
-// PUBLIC API
-// =====================================================================
-    /**
-     * Run a labeled SQL on the chosen DB.
-     *
-     * @param dbKey  "DATA" or "INET"
-     * @param label  logical query label
-     * @param params label parameters (if any)
-     */
-    public static void runDB(String dbKey, String label, String... params) {
-        Objects.requireNonNull(dbKey, "dbKey cannot be null");
-        Objects.requireNonNull(label, "label cannot be null");
+    // =====================================================================
+    // PUBLIC API — LABEL-BASED EXECUTION
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : runDB
+    // Description   : Executes a predefined SQL query identified by a logical label string.
+    //                 The label is normalised (trimmed, uppercased, special characters replaced)
+    //                 and matched in a switch block to the corresponding parameterised SQL.
+    //                 Results are stored in lastRows and lastScalar for caller access via
+    //                 getValue(), getRows(), and hasRows().
+    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
+    //                 label  — logical query label e.g. "List of herds with no errors at all"
+    //                 params — bind parameter values for the selected query (varies per label)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void runDB(String dbKey, String label, String... params)
+    {
+        Objects.requireNonNull(dbKey,  "dbKey cannot be null");
+        Objects.requireNonNull(label,  "label cannot be null");
 
         final String which = normalizeDb(dbKey);
         final String key   = normalize(label);
@@ -99,264 +107,274 @@ public class DBRouter {
         String   sql        = null;
         Object[] jdbcParams = new Object[0];
 
-        switch (key) {
-
+        switch (key)
+        {
             // ----------------------------------------------------------------
-            // DATA DB: Not Started herds — individual (A prefix), no errors
+            // DATA DB: Not Started individual herds (A prefix) with no errors
             //
-            // CONFIRMED FINAL (27-04-2026) after full DB investigation:
+            // Confirmed final query (27-04-2026) after full DB investigation.
             //
-            //   Selects herds that are:
-            //     - app_mde_code = 1  → RI (Renewal iNet / preprint)
-            //     - app_herd_no LIKE 'A%' → individual herds only
-            //       (excludes D/Z/C prefix herds that belong to other
-            //        agent portfolios and cause INET mismatch)
-            //     - Has at least one non-deleted land parcel
-            //     - NOT EXISTS app_mde_code IN (3,4,6,8):
-            //         3 = D   (Draft)
-            //         4 = I   (iNet / Submitted)
-            //         6 = H   (Helpdesk)
-            //         8 = DD  (Draft Dept)
-            //       → guarantees "Not Started" status only
+            // Selection criteria:
+            //   app_mde_code = 1        → RI status (Renewal iNet preprint / Not Started)
+            //   app_herd_no LIKE 'A%'   → Individual herds only. Excludes D/Z/C prefix
+            //                             herds which belong to other agent portfolios
+            //                             and cause BISS_INET mismatch.
+            //   EXISTS land parcel      → Herd must have at least one non-deleted land parcel.
+            //   NOT EXISTS mde_code IN  → Excludes herds with any of the following statuses:
+            //     (3, 4, 6, 8)              3 = D  (Draft)
+            //                               4 = I  (iNet / Submitted)
+            //                               6 = H  (Helpdesk)
+            //                               8 = DD (Draft Dept)
             //
-            //   Expired herd handling:
-            //     Expired herds are filtered downstream by INET validation.
-            //     GET LOGIN ID FOR HERD uses HAVING COUNT = 1 which returns
-            //     null for herds with no single active agent → Hooks skips.
-            //     Column-by-column DB comparison (A1010096 vs A1010070)
-            //     confirmed "Herd Expired" is NOT stored in vwbs_application.
+            // Expired herd handling:
+            //   Herd expiry is not stored in vwbs_application — confirmed by column-by-column
+            //   comparison of A1010096 (valid) vs A1010070 (expired). Expiry is in Keycloak
+            //   SSO only. Expired agents are handled at runtime by Hooks.markAgentExpired()
+            //   which detects the "Account Expired" screen and re-resolves a fresh herd+agent.
             //
-            //   Column returned: APP_HERD_NO
-            //     DBRouter.executeQuery() uppercases all column names so
-            //     Hooks.java r.get("APP_HERD_NO") works without any changes.
+            // Column returned: APP_HERD_NO
+            //   executeQuery() uppercases all column labels so Hooks.java r.get("APP_HERD_NO")
+            //   works without any additional mapping.
             // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH NO ERRORS AT ALL": {
+            case "LIST OF HERDS WITH NO ERRORS AT ALL":
+            {
                 requireParamCountBetween(key, params, 1, 3);
 
                 int year    = parseInt(params[0], "year");
                 int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 150;
-                // params[2] accepted for backward compatibility but not used
+                // params[2] accepted for backward compatibility — not used in current query
 
                 sql =
-                        "SELECT ap_ri.app_herd_no " +
-                                "FROM vwbs_application ap_ri " +
-                                "WHERE ap_ri.app_mde_code = 1 " +
-                                "AND ap_ri.app_year = ? " +
-                                "AND ap_ri.app_herd_no LIKE 'C%' " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_application_land x " +
-                                "    WHERE x.apl_year        = ap_ri.app_year " +
-                                "    AND   x.apl_app_id      = ap_ri.app_id " +
-                                "    AND   x.apl_deleted_ind = 'N' " +
-                                ") " +
-                                "AND NOT EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM vwbs_application app " +
-                                "    WHERE app.app_year     = ap_ri.app_year " +
-                                "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
-                                "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
-                                ") " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY ap_ri.app_herd_no";
+                    "SELECT ap_ri.app_herd_no " +
+                    "FROM vwbs_application ap_ri " +
+                    "WHERE ap_ri.app_mde_code = 1 " +
+                    "AND ap_ri.app_year = ? " +
+                    "AND ap_ri.app_herd_no LIKE 'A%' " +
+                    "AND EXISTS ( " +
+                    "    SELECT 1 " +
+                    "    FROM tdbs_application_land x " +
+                    "    WHERE x.apl_year        = ap_ri.app_year " +
+                    "    AND   x.apl_app_id      = ap_ri.app_id " +
+                    "    AND   x.apl_deleted_ind = 'N' " +
+                    ") " +
+                    "AND NOT EXISTS ( " +
+                    "    SELECT 1 " +
+                    "    FROM vwbs_application app " +
+                    "    WHERE app.app_year     = ap_ri.app_year " +
+                    "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
+                    "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
+                    ") " +
+                    "AND ROWNUM <= ? " +
+                    "ORDER BY ap_ri.app_herd_no";
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // DATA DB: herds by scheme year
+            // DATA DB: Herds by scheme year
             // ----------------------------------------------------------------
-            case "HERDS BY SCHEME YEAR": {
+            case "HERDS BY SCHEME YEAR":
+            {
                 requireParamCountBetween(key, params, 1, 1);
                 sql =
-                        "SELECT h.hld_herd_no " +
-                                "FROM tddp_application a " +
-                                "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
-                                "WHERE a.app_syr_code = ? " +
-                                "ORDER BY h.hld_herd_no";
+                    "SELECT h.hld_herd_no " +
+                    "FROM tddp_application a " +
+                    "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
+                    "WHERE a.app_syr_code = ? " +
+                    "ORDER BY h.hld_herd_no";
                 jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // DATA DB: get_hold
+            // DATA DB: Resolve holding ID for a given herd number
             // ----------------------------------------------------------------
-            case "GET HOLD ID FOR HERD": {
+            case "GET HOLD ID FOR HERD":
+            {
                 requireParamCountBetween(key, params, 1, 1);
-                sql = "SELECT get_hold(?) AS holding_id FROM dual";
+                sql        = "SELECT get_hold(?) AS holding_id FROM dual";
                 jdbcParams = new Object[]{ params[0] };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // INET DB: get Username for a Herd (BPS_CONNECT)
+            // INET DB: Get agent username for a given herd number
             //
-            // CONFIRMED FINAL (27-04-2026) after full investigation:
+            // Source: Query 19 from BISS test data reference document.
             //
-            //   Returns the agent USERNAME only if the herd has EXACTLY ONE
-            //   active agent association. If the herd has multiple agents,
-            //   HAVING COUNT = 1 returns no rows → USERNAME is null →
-            //   Hooks skips this herd and tries the next BISS_DATA candidate.
+            // Uses a correlated subquery with ROWNUM = 1 to return the first
+            // available agent login for the given herd. Works for any herd
+            // regardless of how many agents are associated.
             //
-            //   Rationale for HAVING COUNT = 1:
-            //     Multi-agent herds cause ambiguity — ROWNUM = 1 picks the
-            //     first alphabetically but that agent may not have visibility
-            //     of the herd in My Clients (confirmed with aga6478/aga6701
-            //     vs A1010100). Single-agent herds are unambiguous.
+            // ORDER BY ca.ca_start_date DESC returns the most recently associated
+            // agent first — most likely to be the current active/primary agent.
             //
-            //   Expired herd handling:
-            //     SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date
-            //     already filters out expired herd registrations.
-            //     An expired herd returns no rows → null → Hooks skips.
+            // Expired agent handling:
+            //   SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date filters
+            //   expired herd registrations at the DB level. If the returned agent
+            //   has an expired SSO account, the TC_03 login step detects
+            //   "Account Expired" on screen and calls Hooks.markAgentExpired()
+            //   which re-resolves a fresh herd+agent pair automatically.
             //
-            //   Confirmed working single-agent herds from investigation:
-            //     A1010096 → aga6553 ✓ (Marian Fallon, Not Started)
-            //     A1010312 → aga6505 ✓
-            //     A1010452 → aga6553 ✓
-            //     A1010746 → aga6553 ✓
-            //     A1011041 → aga6505 ✓
+            // Column returned: USERNAME
+            //   Aliased as LoginId in the original query but uppercased to USERNAME
+            //   by executeQuery() so getValue("USERNAME") works consistently.
             // ----------------------------------------------------------------
-            case "GET LOGIN ID FOR HERD": {
+            case "GET LOGIN ID FOR HERD":
+            {
                 requireParamCountBetween(key, params, 1, 1);
                 sql =
-                        "SELECT hbcus.bcus_bus_id AS HERDNO, " +
-                                "       (SELECT ui.uri_username " +
-                                "          FROM tdcr_user_info ui " +
-                                "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
-                                "           AND ROWNUM = 1) AS USERNAME " +
-                                "  FROM tdco_customer_asscs ca, " +
-                                "       tdco_business_customers abcus, " +
-                                "       tdco_business_customers hbcus " +
-                                " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
-                                "   AND ca.ca_cac_code     = 194 " +
-                                "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
-                                "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
-                                "   AND hbcus.bcus_bus_id  = ? " +
-                                " ORDER BY ca.ca_start_date DESC";
+                    "SELECT hbcus.bcus_bus_id AS HERDNO, " +
+                    "       (SELECT ui.uri_username " +
+                    "          FROM tdcr_user_info ui " +
+                    "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
+                    "           AND ROWNUM = 1) AS USERNAME " +
+                    "  FROM tdco_customer_asscs ca, " +
+                    "       tdco_business_customers abcus, " +
+                    "       tdco_business_customers hbcus " +
+                    " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
+                    "   AND ca.ca_cac_code     = 194 " +
+                    "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
+                    "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
+                    "   AND hbcus.bcus_bus_id  = ? " +
+                    " ORDER BY ca.ca_start_date DESC";
                 jdbcParams = new Object[]{ params[0] };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // DATA DB: herds with Preliminary Checks (year)
+            // DATA DB: Herds with active Preliminary Checks (year)
             // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIMINARY CHECKS": {
+            case "LIST OF HERDS WITH PRELIMINARY CHECKS":
+            {
                 requireParamCountBetween(key, params, 1, 2);
                 int year    = parseInt(params[0], "year");
                 int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
                 sql =
-                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
+                    "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
+                    "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
+                    "FROM vwbs_land_validation " +
+                    "WHERE lvl_year = ? " +
+                    "AND lvt_desc = 'Preliminary Check' " +
+                    "AND ROWNUM <= ? " +
+                    "ORDER BY LVL_HERD_NO";
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // DATA DB: herds with Dual Claims check (year)
+            // DATA DB: Herds with Dual Claims or Overlap findings (year)
             // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH DUAL CLAIMS CHECK": {
+            case "LIST OF HERDS WITH DUAL CLAIMS CHECK":
+            {
                 requireParamCountBetween(key, params, 1, 2);
                 int year    = parseInt(params[0], "year");
                 int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
                 sql =
-                        "SELECT * " +
-                                "FROM vwbs_preliminary_check_dc_ol " +
-                                "WHERE scheme_year = ? " +
-                                "AND ROWNUM <= ?";
+                    "SELECT * " +
+                    "FROM vwbs_preliminary_check_dc_ol " +
+                    "WHERE scheme_year = ? " +
+                    "AND ROWNUM <= ?";
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // DATA DB: herds with Overclaims check (year)
+            // DATA DB: Herds with Overclaim findings (year)
             // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH OVERCLAIMS CHECK": {
+            case "LIST OF HERDS WITH OVERCLAIMS CHECK":
+            {
                 requireParamCountBetween(key, params, 1, 2);
                 int year    = parseInt(params[0], "year");
                 int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
                 sql =
-                        "SELECT * " +
-                                "FROM vwbs_preliminary_check_oc " +
-                                "WHERE scheme_year = ? " +
-                                "AND ROWNUM <= ?";
+                    "SELECT * " +
+                    "FROM vwbs_preliminary_check_oc " +
+                    "WHERE scheme_year = ? " +
+                    "AND ROWNUM <= ?";
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // DATA DB: herds with Prelim Checks AND commonage parcels (year)
+            // DATA DB: Herds with Preliminary Checks on commonage parcels
             // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE": {
+            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE":
+            {
                 requireParamCountBetween(key, params, 1, 2);
                 int year    = parseInt(params[0], "year");
                 int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
                 sql =
-                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND lvl_commonage_id IS NOT NULL " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
+                    "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
+                    "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
+                    "FROM vwbs_land_validation " +
+                    "WHERE lvl_year = ? " +
+                    "AND lvt_desc = 'Preliminary Check' " +
+                    "AND lvl_commonage_id IS NOT NULL " +
+                    "AND ROWNUM <= ? " +
+                    "ORDER BY LVL_HERD_NO";
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // DATA DB: herds with Prelim Checks filtered by response status
+            // DATA DB: Herds with Preliminary Checks filtered by response status
+            //
+            // params[0] = year
+            // params[1] = status e.g. "Pending", "Accepted", "Rejected"
+            // params[2] = limit (optional)
             // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS": {
+            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS":
+            {
                 requireParamCountBetween(key, params, 2, 3);
-                int year      = parseInt(params[0], "year");
-                String status = params[1].trim();
-                int maxRows   = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
+                int    year     = parseInt(params[0], "year");
+                String status   = params[1].trim();
+                int    maxRows  = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
                 sql =
-                        "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND lvs_desc = ? " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
+                    "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
+                    "FROM vwbs_land_validation " +
+                    "WHERE lvl_year = ? " +
+                    "AND lvt_desc = 'Preliminary Check' " +
+                    "AND lvs_desc = ? " +
+                    "AND ROWNUM <= ? " +
+                    "ORDER BY LVL_HERD_NO";
                 jdbcParams = new Object[]{ year, status, maxRows };
                 break;
             }
 
             // ----------------------------------------------------------------
-            // DATA DB: one herd per preliminary check type (Overclaim,
-            // Dual claim, Agricultural Activity) — offset-based retry.
+            // DATA DB: One herd per Preliminary Check type (offset-based retry)
             //
-            // params[0] = year   (required)
-            // params[1] = offset (required — 0 on first call, increment
-            //                     on each retry that fails INET validation)
+            // Returns one herd per check type (Overclaim, Dual claim, Agricultural
+            // Activity) using ROW_NUMBER() OVER (PARTITION BY LVC_DESC).
+            // The offset parameter increments on each retry so a different herd
+            // is returned if the previous candidate fails INET validation.
+            //
+            // params[0] = year
+            // params[1] = offset (0 on first call, increment on each retry)
             // ----------------------------------------------------------------
-            case "PRELIMINARY CHECKS HERDS": {
+            case "PRELIMINARY CHECKS HERDS":
+            {
                 requireParamCountBetween(key, params, 2, 2);
                 int year     = parseInt(params[0], "year");
                 int offset   = parseInt(params[1], "offset");
                 int targetRn = offset + 1;
 
                 sql =
-                        "SELECT * FROM ( " +
-                                "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
-                                "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
-                                "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
-                                "         ROW_NUMBER() OVER ( " +
-                                "             PARTITION BY LVC_DESC " +
-                                "             ORDER BY LVL_HERD_NO " +
-                                "         ) AS RN " +
-                                "  FROM vwbs_land_validation " +
-                                "  WHERE LVL_YEAR = ? " +
-                                "  AND LVT_DESC = 'Preliminary Check' " +
-                                "  AND LVS_DESC = 'Pending' " +
-                                "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
-                                ") WHERE RN = ?";
+                    "SELECT * FROM ( " +
+                    "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
+                    "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
+                    "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
+                    "         ROW_NUMBER() OVER ( " +
+                    "             PARTITION BY LVC_DESC " +
+                    "             ORDER BY LVL_HERD_NO " +
+                    "         ) AS RN " +
+                    "  FROM vwbs_land_validation " +
+                    "  WHERE LVL_YEAR = ? " +
+                    "  AND LVT_DESC = 'Preliminary Check' " +
+                    "  AND LVS_DESC = 'Pending' " +
+                    "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
+                    ") WHERE RN = ?";
                 jdbcParams = new Object[]{ year, targetRn };
                 break;
             }
@@ -369,27 +387,58 @@ public class DBRouter {
     }
 
     // =====================================================================
-// EXECUTE SQL (with DB choice)
-// =====================================================================
-    private static void executeQuery(String whichDb, String sql, Object... params) {
+    // PUBLIC API — RAW SQL EXECUTION
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : runRawSQL
+    // Description   : Executes a user-supplied raw SQL string directly on the chosen database,
+    //                 bypassing the label switch in runDB(). Used by utility tools such as
+    //                 HerdAgentExtractor where the SQL is composed at runtime and does not
+    //                 correspond to a predefined label.
+    //                 Results are stored identically to runDB() — accessible via getValue(),
+    //                 getRows(), and hasRows().
+    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
+    //                 sql    — raw SQL string to execute
+    //                 params — optional bind parameters matching '?' placeholders in sql
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 05-05-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void runRawSQL(String dbKey, String sql, Object... params)
+    {
+        Objects.requireNonNull(dbKey, "dbKey cannot be null");
+        Objects.requireNonNull(sql,   "sql cannot be null");
+        lastLabel = "RAW_SQL";
+        executeQuery(normalizeDb(dbKey), sql, params);
+    }
+
+    // =====================================================================
+    // EXECUTE SQL (internal — shared by runDB and runRawSQL)
+    // =====================================================================
+    private static void executeQuery(String whichDb, String sql, Object... params)
+    {
         lastRows   = new ArrayList<>();
         lastScalar = null;
 
         try (Connection conn = "INET".equals(whichDb)
                 ? getInetConnection() : getDataConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            for (int i = 0; i < params.length; i++) {
+             PreparedStatement stmt = conn.prepareStatement(sql))
+        {
+            for (int i = 0; i < params.length; i++)
+            {
                 stmt.setObject(i + 1, params[i]);
             }
 
-            try (ResultSet rs = stmt.executeQuery()) {
+            try (ResultSet rs = stmt.executeQuery())
+            {
                 ResultSetMetaData md       = rs.getMetaData();
                 int               colCount = md.getColumnCount();
 
-                while (rs.next()) {
+                while (rs.next())
+                {
                     Map<String, Object> row = new LinkedHashMap<>();
-                    for (int c = 1; c <= colCount; c++) {
+                    for (int c = 1; c <= colCount; c++)
+                    {
                         String col = md.getColumnLabel(c);
                         if (col == null || col.isEmpty()) col = md.getColumnName(c);
                         // Always uppercase — callers use getValue("APP_HERD_NO") etc.
@@ -397,29 +446,45 @@ public class DBRouter {
                     }
                     lastRows.add(row);
                 }
-                if (!lastRows.isEmpty()) {
+
+                if (!lastRows.isEmpty())
+                {
                     lastScalar = lastRows.get(0).values().iterator().next();
                 }
             }
-        } catch (SQLException e) {
+        }
+        catch (SQLException e)
+        {
             throw new RuntimeException("DB (" + whichDb + ") execution failed: "
                     + e.getMessage(), e);
         }
     }
 
-    private static Connection getDataConnection() throws SQLException {
+    private static Connection getDataConnection() throws SQLException
+    {
         return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
     }
 
-    private static Connection getInetConnection() throws SQLException {
+    private static Connection getInetConnection() throws SQLException
+    {
         return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
     }
 
-// =====================================================================
-// HELPER ACCESSORS
-// =====================================================================
-    /** First row's column value (case-insensitive), or null if absent. */
-    public static String getValue(String column) {
+    // =====================================================================
+    // HELPER ACCESSORS
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getValue
+    // Description   : Returns the value of the specified column from the first row of the last
+    //                 query result. Column name matching is case-insensitive. Returns null if
+    //                 the result set is empty or the column is not found.
+    // Parameters    : column — column name e.g. "APP_HERD_NO" or "USERNAME"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static String getValue(String column)
+    {
         if (lastRows.isEmpty()) return null;
         Map<String, Object> first = lastRows.get(0);
         for (String k : first.keySet())
@@ -428,56 +493,94 @@ public class DBRouter {
         return null;
     }
 
-    /** All rows of last result. */
-    public static List<Map<String, Object>> getRows() { return lastRows; }
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getRows
+    // Description   : Returns all rows from the last query result as a list of column-value maps.
+    //                 Column names are always stored in uppercase.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static List<Map<String, Object>> getRows()  { return lastRows; }
 
-    /** True if last result has at least one row. */
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : hasRows
+    // Description   : Returns true if the last query returned at least one row.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
     public static boolean hasRows() { return !lastRows.isEmpty(); }
 
     // =====================================================================
-// PROPERTY LOADER
-// =====================================================================
-    private static void loadDBProperties() {
+    // PROPERTY LOADER
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : loadDBProperties
+    // Description   : Loads BISS_DATA and BISS_INET JDBC connection properties from
+    //                 src/test/resources/db.properties at class initialisation time.
+    //                 Throws RuntimeException if any required property is missing or blank.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void loadDBProperties()
+    {
         Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE)) {
+        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE))
+        {
             props.load(fis);
 
             DB_URL      = props.getProperty("db.url");
             DB_USER     = props.getProperty("db.username");
             DB_PASSWORD = props.getProperty("db.password");
-            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD)) {
+            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD))
+            {
                 throw new RuntimeException(
-                        "Missing DATA DB properties (db.url / db.username / db.password)");
+                        "Missing BISS_DATA properties (db.url / db.username / db.password)");
             }
 
             DB_INET_URL      = props.getProperty("db.inet.url");
             DB_INET_USER     = props.getProperty("db.inet.username");
             DB_INET_PASSWORD = props.getProperty("db.inet.password");
-            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD)) {
+            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD))
+            {
                 throw new RuntimeException(
-                        "Missing INET DB properties "
-                                + "(db.inet.url / db.inet.username / db.inet.password)");
+                        "Missing BISS_INET properties " +
+                        "(db.inet.url / db.inet.username / db.inet.password)");
             }
 
-            log.info("[DBRouter] Loaded DATA & INET connection properties.");
-        } catch (IOException e) {
-            throw new RuntimeException("Cannot load DB properties at "
+            log.info("[DBRouter] DATA and INET connection properties loaded successfully.");
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException("Cannot load db.properties at "
                     + PROPERTIES_FILE + " : " + e.getMessage(), e);
         }
     }
 
     // =====================================================================
-// LOGGER
-// =====================================================================
-    private static void setupLogger() {
-        try {
-            Logger root = Logger.getLogger(DBRouter.class.getName());
-            root.setUseParentHandlers(false);
-            root.setLevel(Level.ALL);
+    // LOGGER SETUP
+    // =====================================================================
 
-            java.util.logging.Formatter fmt = new java.util.logging.Formatter() {
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setupLogger
+    // Description   : Configures a custom ConsoleHandler with a timestamped log format.
+    //                 Removes any default parent handlers to prevent duplicate log output.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void setupLogger()
+    {
+        try
+        {
+            Logger iRoot = Logger.getLogger(DBRouter.class.getName());
+            iRoot.setUseParentHandlers(false);
+            iRoot.setLevel(Level.ALL);
+
+            java.util.logging.Formatter iFmt = new java.util.logging.Formatter()
+            {
                 @Override
-                public String format(LogRecord r) {
+                public String format(LogRecord r)
+                {
                     return String.format("[%s] [%s] %s%n",
                             new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
                                     .format(new Date(r.getMillis())),
@@ -486,28 +589,33 @@ public class DBRouter {
                 }
             };
 
-            ConsoleHandler console = new ConsoleHandler();
-            console.setLevel(Level.ALL);
-            console.setFormatter(fmt);
+            ConsoleHandler iConsole = new ConsoleHandler();
+            iConsole.setLevel(Level.ALL);
+            iConsole.setFormatter(iFmt);
 
-            for (Handler h : root.getHandlers()) root.removeHandler(h);
-            root.addHandler(console);
-        } catch (Exception e) {
+            for (Handler h : iRoot.getHandlers()) iRoot.removeHandler(h);
+            iRoot.addHandler(iConsole);
+        }
+        catch (Exception e)
+        {
             System.err.println("Logger setup failed: " + e.getMessage());
         }
     }
 
     // =====================================================================
-// NORMALIZERS & VALIDATORS
-// =====================================================================
-    private static String normalizeDb(String s) {
+    // NORMALIZERS AND VALIDATORS
+    // =====================================================================
+
+    private static String normalizeDb(String s)
+    {
         String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
         if ("DATA".equals(v) || "INET".equals(v)) return v;
         throw new IllegalArgumentException(
                 "dbKey must be 'DATA' or 'INET' (was: " + s + ")");
     }
 
-    private static String normalize(String s) {
+    private static String normalize(String s)
+    {
         if (s == null) return "";
         return s.replace(':', ' ')
                 .replace("\u2013", "-")
@@ -518,27 +626,30 @@ public class DBRouter {
     }
 
     private static void requireParamCountBetween(String labelKey,
-                                                 String[] params,
-                                                 int min, int max) {
+                                                  String[] params,
+                                                  int min, int max)
+    {
         int n = (params == null) ? 0 : params.length;
-        if (n < min || n > max) {
+        if (n < min || n > max)
+        {
             throw new IllegalArgumentException(
                     "Label '" + labelKey + "' expects between "
-                            + min + " and " + max + " parameter(s); got " + n);
+                    + min + " and " + max + " parameter(s); got " + n);
         }
     }
 
-    private static int parseInt(String s, String name) {
+    private static int parseInt(String s, String name)
+    {
         try { return Integer.parseInt(s.trim()); }
-        catch (Exception e) {
+        catch (Exception e)
+        {
             throw new IllegalArgumentException(
                     "Expected integer for " + name + " but got: " + s);
         }
     }
 
-    private static boolean isBlank(String s) {
+    private static boolean isBlank(String s)
+    {
         return s == null || s.trim().isEmpty();
     }
-
-
 }
