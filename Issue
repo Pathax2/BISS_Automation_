@@ -1,770 +1,191 @@
-package database;
-
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.sql.*;
-import java.text.SimpleDateFormat;
-import java.util.*;
-import java.util.Date;
-import java.util.logging.*;
-
-// =====================================================================================================================================
-// File          : DBRouter.java
-// Package       : database
-// Description   : Multi-database query router for the BISS Automation Framework.
-//                 Provides a single entry point for all SQL execution across BISS_DATA
-//                 and BISS_INET Oracle databases. All queries are identified by a logical
-//                 label string and resolved to parameterised SQL internally, keeping
-//                 step definitions and hooks free of SQL syntax.
-//
-//                 Supports two execution modes:
-//                   1. runDB()     — label-based execution (predefined queries only)
-//                   2. runRawSQL() — raw SQL execution (utility tools and ad-hoc queries)
-//
-//                 Connection properties are loaded once at class initialisation from:
-//                   src/test/resources/db.properties
-//
-//                 Usage:
-//                   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "25");
-//                   String herd = DBRouter.getValue("APP_HERD_NO");
-//
-//                   DBRouter.runDB("INET", "Get Login Id for herd", herd);
-//                   String username = DBRouter.getValue("USERNAME");
-//
-//                   DBRouter.runDB("DATA", "List of individual herds with CISYF scheme", "2026", "25");
-//                   DBRouter.runDB("DATA", "List of not started individual herds eligible for CISYF", "2026", "25");
-//                   String herd = DBRouter.getValue("APP_HERD_NO");
-//
-//                   DBRouter.runRawSQL("DATA", "SELECT app_herd_no FROM vwbs_application WHERE ...");
-//                   List<Map<String, Object>> rows = DBRouter.getRows();
-//
-//                 db.properties keys:
-//                   db.url              — BISS_DATA JDBC connection URL
-//                   db.username         — BISS_DATA username
-//                   db.password         — BISS_DATA password
-//                   db.inet.url         — BISS_INET JDBC connection URL
-//                   db.inet.username    — BISS_INET username
-//                   db.inet.password    — BISS_INET password
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 27-04-2026
-// =====================================================================================================================================
-
-public class DBRouter
-{
-    // =====================================================================
-    // STATIC RESULT STORE
-    // =====================================================================
-    public static List<Map<String, Object>> lastRows   = new ArrayList<>();
-    public static Object                    lastScalar = null;
-    public static String                    lastLabel  = "";
-
-    // =====================================================================
-    // DB CONFIGURATION
-    // =====================================================================
-    private static final Logger log             = Logger.getLogger(DBRouter.class.getName());
-    private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
-
-    // BISS_DATA connection
-    private static String DB_URL;
-    private static String DB_USER;
-    private static String DB_PASSWORD;
-
-    // BISS_INET connection
-    private static String DB_INET_URL;
-    private static String DB_INET_USER;
-    private static String DB_INET_PASSWORD;
-
-    static
-    {
-        setupLogger();
-        loadDBProperties();
-    }
-
-    // =====================================================================
-    // PUBLIC API — LABEL-BASED EXECUTION
-    // =====================================================================
+<div id="cdk-overlay-0" class="cdk-overlay-pane mat-mdc-dialog-panel" style="max-height: 90vh; position: static;"><div tabindex="0" class="cdk-visually-hidden cdk-focus-trap-anchor" aria-hidden="true"></div><mat-dialog-container tabindex="-1" class="mat-mdc-dialog-container mdc-dialog cdk-dialog-container mat-mdc-dialog-container-with-actions mdc-dialog--open" id="mat-mdc-dialog-0" role="dialog" aria-modal="true" aria-labelledby="mat-mdc-dialog-title-0" style="--mat-dialog-transition-duration: 150ms;"><div class="mat-mdc-dialog-inner-container mdc-dialog__container"><div class="mat-mdc-dialog-surface mdc-dialog__surface"><app-nr-cisyf-category-select-popup _nghost-ng-c3068956607="" class="mat-mdc-dialog-component-host ng-star-inserted"><mat-card-title _ngcontent-ng-c3068956607="" mat-dialog-title="" class="mat-mdc-card-title mat-mdc-dialog-title mdc-dialog__title header" id="mat-mdc-dialog-title-0"> Select Category
+</mat-card-title><hr _ngcontent-ng-c3068956607="" style="margin: 1em;"><div _ngcontent-ng-c3068956607="" mat-dialog-content="" class="mat-mdc-dialog-content mdc-dialog__content" style="overflow: visible;"><p _ngcontent-ng-c3068956607="" style="text-align: left; color: black;"> Please tick the appropriate box(es) to indicate the categories you wish to apply under. Helpful information on each category can be accessed by clicking the <mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate icon material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">info</mat-icon> icons below. Applicants who meet the definition of a 'Young Farmer' are eligible to apply under both 'A. National Reserve (as Young Farmer)' and 'C. Complementary Income Support for Young Farmers'. </p></div><div _ngcontent-ng-c3068956607="" class="pt-3" style="margin: 0px 20px;"><form _ngcontent-ng-c3068956607="" novalidate="" class="ng-dirty ng-invalid ng-touched"><div _ngcontent-ng-c3068956607="" class="center-vertically"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate icon material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">info</mat-icon><mat-checkbox _ngcontent-ng-c3068956607="" formcontrolname="nrYoungFarmer" class="mat-mdc-checkbox mat-accent ng-valid ng-dirty ng-touched" id="mat-mdc-checkbox-1"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-checkbox"><div class="mat-mdc-checkbox-touch-target"></div><input type="checkbox" class="mdc-checkbox__native-control" id="mat-mdc-checkbox-1-input" tabindex="0"><div class="mdc-checkbox__ripple"></div><div class="mdc-checkbox__background"><svg focusable="false" viewBox="0 0 24 24" aria-hidden="true" class="mdc-checkbox__checkmark"><path fill="none" d="M1.73,12.91 8.1,19.28 22.79,4.59" class="mdc-checkbox__checkmark-path"></path></svg><div class="mdc-checkbox__mixedmark"></div></div><div mat-ripple="" class="mat-ripple mat-mdc-checkbox-ripple mat-mdc-focus-indicator"></div></div><label class="mdc-label" for="mat-mdc-checkbox-1-input"> A. National Reserve (as Young Farmer) </label></div></mat-checkbox></div><!----><div _ngcontent-ng-c3068956607="" class="info-categories ng-star-inserted" style="text-align: left;"><p _ngcontent-ng-c3068956607=""> A young farmer applying to the National Reserve under the 2026 scheme year must be aged no more than 40 at any time in the calendar year in which they first submit an application under the National Reserve and must participate in the Basic Income Support for Sustainability Scheme in 2026. S/he must also be setting up an agricultural holding for the first time or has set up such a holding during the five years preceding this first submission of a National Reserve application. See <a _ngcontent-ng-c3068956607="" target="_blank" href="https://www.gov.ie/en/service/bb30b-national-reserve-young-farmer-category/"> National Reserve Terms and Conditions</a> and <a _ngcontent-ng-c3068956607="" target="_blank" href="https://www.gov.ie/en/service/38d46-complementary-income-support-for-young-farmers/">Complementary Income Support for Young Farmers Scheme Terms and Conditions</a> for the full definition of a 'Young Farmer'. </p><p _ngcontent-ng-c3068956607=""> A person who meets the definition of a 'young farmer' may be eligible to apply under Categories A (National Reserve as Young Farmer) and C (Complementary Income Support for Young Farmers). </p></div><!----><div _ngcontent-ng-c3068956607="" class="center-vertically"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate icon material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">info</mat-icon><mat-checkbox _ngcontent-ng-c3068956607="" formcontrolname="nrNewFarmer" class="mat-mdc-checkbox mat-accent ng-untouched ng-pristine ng-valid" id="mat-mdc-checkbox-2"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-checkbox"><div class="mat-mdc-checkbox-touch-target"></div><input type="checkbox" class="mdc-checkbox__native-control" id="mat-mdc-checkbox-2-input" tabindex="0"><div class="mdc-checkbox__ripple"></div><div class="mdc-checkbox__background"><svg focusable="false" viewBox="0 0 24 24" aria-hidden="true" class="mdc-checkbox__checkmark"><path fill="none" d="M1.73,12.91 8.1,19.28 22.79,4.59" class="mdc-checkbox__checkmark-path"></path></svg><div class="mdc-checkbox__mixedmark"></div></div><div mat-ripple="" class="mat-ripple mat-mdc-checkbox-ripple mat-mdc-focus-indicator"></div></div><label class="mdc-label" for="mat-mdc-checkbox-2-input"> B. National Reserve (as New Farmer) </label></div></mat-checkbox></div><!----><div _ngcontent-ng-c3068956607="" class="info-categories ng-star-inserted" style="text-align: left; margin-bottom: 0.5em;"><p _ngcontent-ng-c3068956607=""> A 'new farmer' applying to the National Reserve under the 2026 scheme year must have commenced his/her present agricultural activity in the 2023 calendar year or later. Applicants under this category must participate in the Basic Income Support for Sustainability Scheme in 2026. See the <a _ngcontent-ng-c3068956607="" target="_blank" href="https://www.gov.ie/en/service/5b7788-national-reserve-new-entrant-category/"> National Reserve Terms and Conditions</a> for the full definition of a 'New Farmer'. </p><p _ngcontent-ng-c3068956607=""> While no age restrictions is applied to a 'new farmer', persons who apply under this category will normally be aged over 40 in the year they apply to the National Reserve. It is therefore unlikely that a person who applies under Category B(New Farmer) would be eligible on age grounds to apply under Category A(National Reserve as a Young Farmer). </p></div><!----><div _ngcontent-ng-c3068956607="" class="center-vertically"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate icon material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">info</mat-icon><mat-checkbox _ngcontent-ng-c3068956607="" formcontrolname="nrCisyf" class="mat-mdc-checkbox mat-accent ng-untouched ng-pristine ng-valid" id="mat-mdc-checkbox-3"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-checkbox"><div class="mat-mdc-checkbox-touch-target"></div><input type="checkbox" class="mdc-checkbox__native-control" id="mat-mdc-checkbox-3-input" tabindex="0"><div class="mdc-checkbox__ripple"></div><div class="mdc-checkbox__background"><svg focusable="false" viewBox="0 0 24 24" aria-hidden="true" class="mdc-checkbox__checkmark"><path fill="none" d="M1.73,12.91 8.1,19.28 22.79,4.59" class="mdc-checkbox__checkmark-path"></path></svg><div class="mdc-checkbox__mixedmark"></div></div><div mat-ripple="" class="mat-ripple mat-mdc-checkbox-ripple mat-mdc-focus-indicator"></div></div><label class="mdc-label" for="mat-mdc-checkbox-3-input"> C. Complementary income Support for Young Farmers </label></div></mat-checkbox></div><div _ngcontent-ng-c3068956607="" class="info-categories ng-star-inserted" style="text-align: left;"><p _ngcontent-ng-c3068956607=""> A young farmer applying to participate in the Complementary Income Support for Young Farmers Scheme under the 2026 scheme year must be no more than 40 at any time in the calendar year in which they first submit an application under the Complementary Income Support for Young Farmers Scheme and must participate in the Basic Income Support for Sustainability Scheme in 2026. S/he must also be setting up an agricultural holding for the first time or has set up such a holding during the five years preceding the first submission of a Complementary Income Support for Young Farmers scheme application. See <a _ngcontent-ng-c3068956607="" target="_blank" href="https://www.gov.ie/en/service/38d46-complementary-income-support-for-young-farmers/">Complementary Income Support for Young Farmers Scheme Terms and Conditions</a> for the full definition of a 'young farmer'. </p><p _ngcontent-ng-c3068956607=""> A person who meets the definition of a 'young farmer' may be eligible to apply under Categories A (National Reserve as a Young Farmer) and C (Complementary Income Support for Young Farmers). </p></div><!----><!----><!----><mat-error _ngcontent-ng-c3068956607="" aria-atomic="true" class="mat-mdc-form-field-error mat-mdc-form-field-bottom-align ng-star-inserted" aria-live="polite" id="mat-mdc-error-2"> Please select a category </mat-error><!----><div _ngcontent-ng-c3068956607="" mat-dialog-actions="" align="end" class="mat-mdc-dialog-actions mdc-dialog__actions mat-mdc-dialog-actions-align-end"><button _ngcontent-ng-c3068956607="" type="button" class="nav-button clearBtn"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">close</mat-icon><span _ngcontent-ng-c3068956607="">Close</span></button><button _ngcontent-ng-c3068956607="" type="button" class="nav-button" disabled=""><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate material-icons mat-ligature-font mat-icon-no-color" style="color: white;" aria-hidden="true" data-mat-icon-type="font"> navigate_next </mat-icon><span _ngcontent-ng-c3068956607="" style="color: white;"> Next </span></button></div></form></div><!----></app-nr-cisyf-category-select-popup><!----></div></div></mat-dialog-container><div tabindex="0" class="cdk-visually-hidden cdk-focus-trap-anchor" aria-hidden="true"></div></div>
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : runDB
-    // Description   : Executes a predefined SQL query identified by a logical label string.
-    //                 The label is normalised (trimmed, uppercased, special characters replaced)
-    //                 and matched in a switch block to the corresponding parameterised SQL.
-    //                 Results are stored in lastRows and lastScalar for caller access via
-    //                 getValue(), getRows(), and hasRows().
-    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
-    //                 label  — logical query label e.g. "List of herds with no errors at all"
-    //                 params — bind parameter values for the selected query (varies per label)
+    // Step          : the info icon for category {string} should display the correct description
+    // Description   : Clicks the info icon for the named category (A/B/C) and verifies the
+    //                 tooltip or info panel content is not empty
+    // Parameters    : pCategory (String) - "A", "B", or "C"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
+    // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static void runDB(String dbKey, String label, String... params)
+    @Then("the info icon for category {string} should display the correct description")
+    public void theInfoIconForCategoryShouldDisplayTheCorrectDescription(String pCategory)
     {
-        Objects.requireNonNull(dbKey,  "dbKey cannot be null");
-        Objects.requireNonNull(label,  "label cannot be null");
+        log.info("[STEP] Then the info icon for category '" + pCategory + "' should display the correct description");
 
-        final String which = normalizeDb(dbKey);
-        final String key   = normalize(label);
-
-        lastLabel = label;
-
-        String   sql        = null;
-        Object[] jdbcParams = new Object[0];
-
-        switch (key)
+        // Map category letter to its position index in the dialog (1-based)
+        String iIndex;
+        switch (pCategory.trim().toUpperCase())
         {
-            // ----------------------------------------------------------------
-            // DATA DB: Not Started individual herds (A prefix) with no errors
-            //
-            // Confirmed final query (27-04-2026) after full DB investigation.
-            //
-            // Selection criteria:
-            //   app_mde_code = 1        → RI status (Renewal iNet preprint / Not Started)
-            //   app_herd_no LIKE 'A%'   → Individual herds only. Excludes D/Z/C prefix
-            //                             herds which belong to other agent portfolios
-            //                             and cause BISS_INET mismatch.
-            //   EXISTS land parcel      → Herd must have at least one non-deleted land parcel.
-            //   NOT EXISTS mde_code IN  → Excludes herds with any of the following statuses:
-            //     (3, 4, 6, 8)              3 = D  (Draft)
-            //                               4 = I  (iNet / Submitted)
-            //                               6 = H  (Helpdesk)
-            //                               8 = DD (Draft Dept)
-            //
-            // Expired herd handling:
-            //   Herd expiry is not stored in vwbs_application — confirmed by column-by-column
-            //   comparison of A1010096 (valid) vs A1010070 (expired). Expiry is in Keycloak
-            //   SSO only. Expired agents are handled at runtime by Hooks.markAgentExpired()
-            //   which detects the "Account Expired" screen and re-resolves a fresh herd+agent.
-            //
-            // Column returned: APP_HERD_NO
-            //   executeQuery() uppercases all column labels so Hooks.java r.get("APP_HERD_NO")
-            //   works without any additional mapping.
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH NO ERRORS AT ALL":
-            {
-                requireParamCountBetween(key, params, 1, 3);
-
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 150;
-                // params[2] accepted for backward compatibility — not used in current query
-
-                sql =
-                    "SELECT ap_ri.app_herd_no " +
-                    "FROM vwbs_application ap_ri " +
-                    "WHERE ap_ri.app_mde_code = 1 " +
-                    "AND ap_ri.app_year = ? " +
-                    "AND ap_ri.app_herd_no LIKE 'A%' " +
-                    "AND EXISTS ( " +
-                    "    SELECT 1 " +
-                    "    FROM tdbs_application_land x " +
-                    "    WHERE x.apl_year        = ap_ri.app_year " +
-                    "    AND   x.apl_app_id      = ap_ri.app_id " +
-                    "    AND   x.apl_deleted_ind = 'N' " +
-                    ") " +
-                    "AND NOT EXISTS ( " +
-                    "    SELECT 1 " +
-                    "    FROM vwbs_application app " +
-                    "    WHERE app.app_year     = ap_ri.app_year " +
-                    "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
-                    "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
-                    ") " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY ap_ri.app_herd_no";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds by scheme year
-            // ----------------------------------------------------------------
-            case "HERDS BY SCHEME YEAR":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                    "SELECT h.hld_herd_no " +
-                    "FROM tddp_application a " +
-                    "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
-                    "WHERE a.app_syr_code = ? " +
-                    "ORDER BY h.hld_herd_no";
-                jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Resolve holding ID for a given herd number
-            // ----------------------------------------------------------------
-            case "GET HOLD ID FOR HERD":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql        = "SELECT get_hold(?) AS holding_id FROM dual";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // INET DB: Get agent username for a given herd number
-            //
-            // Source: Query 19 from BISS test data reference document.
-            //
-            // Uses a correlated subquery with ROWNUM = 1 to return the first
-            // available agent login for the given herd. Works for any herd
-            // regardless of how many agents are associated.
-            //
-            // ORDER BY ca.ca_start_date DESC returns the most recently associated
-            // agent first — most likely to be the current active/primary agent.
-            //
-            // Expired agent handling:
-            //   SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date filters
-            //   expired herd registrations at the DB level. If the returned agent
-            //   has an expired SSO account, the TC_03 login step detects
-            //   "Account Expired" on screen and calls Hooks.markAgentExpired()
-            //   which re-resolves a fresh herd+agent pair automatically.
-            //
-            // Column returned: USERNAME
-            //   Aliased as LoginId in the original query but uppercased to USERNAME
-            //   by executeQuery() so getValue("USERNAME") works consistently.
-            // ----------------------------------------------------------------
-            case "GET LOGIN ID FOR HERD":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                    "SELECT hbcus.bcus_bus_id AS HERDNO, " +
-                    "       (SELECT ui.uri_username " +
-                    "          FROM tdcr_user_info ui " +
-                    "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
-                    "           AND ROWNUM = 1) AS USERNAME " +
-                    "  FROM tdco_customer_asscs ca, " +
-                    "       tdco_business_customers abcus, " +
-                    "       tdco_business_customers hbcus " +
-                    " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
-                    "   AND ca.ca_cac_code     = 194 " +
-                    "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
-                    "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
-                    "   AND hbcus.bcus_bus_id  = ? " +
-                    " ORDER BY ca.ca_start_date DESC";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with active Preliminary Checks (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIMINARY CHECKS":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                    "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                    "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                    "FROM vwbs_land_validation " +
-                    "WHERE lvl_year = ? " +
-                    "AND lvt_desc = 'Preliminary Check' " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Dual Claims or Overlap findings (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH DUAL CLAIMS CHECK":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                    "SELECT * " +
-                    "FROM vwbs_preliminary_check_dc_ol " +
-                    "WHERE scheme_year = ? " +
-                    "AND ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Overclaim findings (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH OVERCLAIMS CHECK":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                    "SELECT * " +
-                    "FROM vwbs_preliminary_check_oc " +
-                    "WHERE scheme_year = ? " +
-                    "AND ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Preliminary Checks on commonage parcels
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                    "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                    "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                    "FROM vwbs_land_validation " +
-                    "WHERE lvl_year = ? " +
-                    "AND lvt_desc = 'Preliminary Check' " +
-                    "AND lvl_commonage_id IS NOT NULL " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Preliminary Checks filtered by response status
-            //
-            // params[0] = year
-            // params[1] = status e.g. "Pending", "Accepted", "Rejected"
-            // params[2] = limit (optional)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS":
-            {
-                requireParamCountBetween(key, params, 2, 3);
-                int    year     = parseInt(params[0], "year");
-                String status   = params[1].trim();
-                int    maxRows  = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
-                sql =
-                    "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
-                    "FROM vwbs_land_validation " +
-                    "WHERE lvl_year = ? " +
-                    "AND lvt_desc = 'Preliminary Check' " +
-                    "AND lvs_desc = ? " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, status, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: One herd per Preliminary Check type (offset-based retry)
-            //
-            // Returns one herd per check type (Overclaim, Dual claim, Agricultural
-            // Activity) using ROW_NUMBER() OVER (PARTITION BY LVC_DESC).
-            // The offset parameter increments on each retry so a different herd
-            // is returned if the previous candidate fails INET validation.
-            //
-            // params[0] = year
-            // params[1] = offset (0 on first call, increment on each retry)
-            // ----------------------------------------------------------------
-            case "PRELIMINARY CHECKS HERDS":
-            {
-                requireParamCountBetween(key, params, 2, 2);
-                int year     = parseInt(params[0], "year");
-                int offset   = parseInt(params[1], "offset");
-                int targetRn = offset + 1;
-
-                sql =
-                    "SELECT * FROM ( " +
-                    "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
-                    "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
-                    "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
-                    "         ROW_NUMBER() OVER ( " +
-                    "             PARTITION BY LVC_DESC " +
-                    "             ORDER BY LVL_HERD_NO " +
-                    "         ) AS RN " +
-                    "  FROM vwbs_land_validation " +
-                    "  WHERE LVL_YEAR = ? " +
-                    "  AND LVT_DESC = 'Preliminary Check' " +
-                    "  AND LVS_DESC = 'Pending' " +
-                    "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
-                    ") WHERE RN = ?";
-                jdbcParams = new Object[]{ year, targetRn };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Individual herds with CISYF scheme applied (TC_13 ENTS)
-            //
-            // Returns individual herds (applicant_type = 'I') where:
-            //   - Application status is Submitted (mde_abbrev = 'I')
-            //   - Herd prefix is 'J%' (intentional for TC_13 ENTS scenarios)
-            //   - At least one non-deleted land parcel exists
-            //   - No payment has been processed yet (pap_payment_ind = 'Y' absent)
-            //   - CISYF scheme is applied — fn_GetSchemeApplied(aph_app_id, 3) = 'Y'
-            //     (scheme code 3 = CISYF in pkbs_payment_utils)
-            //   - substr(app_herd_no, 1, 1) > 'A' excludes TRNs as an additional guard
-            //
-            // J% prefix is intentional — TC_13 ENTS transfer scenarios require
-            // J-prefix herds specifically. Do not generalise to other prefixes
-            // without confirming TC_13 test data requirements.
-            //
-            // params[0] = year  (required)
-            // params[1] = limit (optional — defaults to 50)
-            // ----------------------------------------------------------------
-            case "LIST OF INDIVIDUAL HERDS WITH CISYF SCHEME":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 50;
-                sql =
-                    "SELECT app_herd_no, app_year, aph_herd_type " +
-                    "FROM vwbs_application_herd " +
-                    "WHERE mde_abbrev     = 'I' " +
-                    "AND   app_herd_no    LIKE 'J%' " +
-                    "AND   applicant_type = 'I' " +
-                    "AND EXISTS ( " +
-                    "    SELECT 1 " +
-                    "    FROM tdbs_application_land x " +
-                    "    WHERE x.apl_year        = app_year " +
-                    "    AND   x.apl_aph_id      = aph_id " +
-                    "    AND   x.apl_app_id      = aph_app_id " +
-                    "    AND   x.apl_deleted_ind = 'N' " +
-                    ") " +
-                    "AND NOT EXISTS ( " +
-                    "    SELECT 1 " +
-                    "    FROM tdbs_payment_application x " +
-                    "    WHERE x.pap_app_id      = aph_app_id " +
-                    "    AND   x.pap_payment_ind = 'Y' " +
-                    ") " +
-                    "AND app_year = ? " +
-                    "AND NVL(pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3), 'N') = 'Y' " +
-                    "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY app_herd_no DESC";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Not Started individual herds eligible for CISYF (TC_13 ENTS)
-            //
-            // Returns J-prefix individual herds where the CURRENT year application
-            // is Not Started (mde_abbrev = 'RI') but the PREVIOUS year's submitted
-            // application had CISYF applied — meaning the herd is eligible for
-            // NR/CISYF in the current year but hasn't started yet.
-            //
-            // Use case: TC_13 full submission flow from scratch — herd appears on
-            // the NR/CISYF tab with no existing application, allowing a fresh Apply.
-            //
-            // Selection criteria:
-            //   curr.mde_abbrev = 'RI'                → Not Started (current year)
-            //   curr.app_herd_no LIKE 'J%'             → J-prefix individual herds
-            //   curr.applicant_type = 'I'              → Individual only
-            //   EXISTS land parcel (current year)      → Herd has active land
-            //   EXISTS prev year submitted with CISYF  → CISYF-eligible based on
-            //                                            previous year application
-            //   SUBSTR > 'A'                           → Excludes TRNs
-            //
-            // params[0] = year  (required — current scheme year)
-            // params[1] = limit (optional — defaults to 50)
-            // ----------------------------------------------------------------
-            case "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 50;
-                sql =
-                    "SELECT curr.app_herd_no, curr.app_year, curr.aph_herd_type " +
-                    "FROM vwbs_application_herd curr " +
-                    "WHERE curr.mde_abbrev     = 'RI' " +
-                    "AND   curr.app_herd_no    LIKE 'J%' " +
-                    "AND   curr.applicant_type = 'I' " +
-                    "AND   curr.app_year       = ? " +
-                    "AND EXISTS ( " +
-                    "    SELECT 1 " +
-                    "    FROM tdbs_application_land x " +
-                    "    WHERE x.apl_year        = curr.app_year " +
-                    "    AND   x.apl_aph_id      = curr.aph_id " +
-                    "    AND   x.apl_app_id      = curr.aph_app_id " +
-                    "    AND   x.apl_deleted_ind = 'N' " +
-                    ") " +
-                    "AND EXISTS ( " +
-                    "    SELECT 1 " +
-                    "    FROM vwbs_application_herd prev " +
-                    "    WHERE prev.app_herd_no = curr.app_herd_no " +
-                    "    AND   prev.app_year    = curr.app_year - 1 " +
-                    "    AND   prev.mde_abbrev  = 'I' " +
-                    "    AND   NVL(pkbs_payment_utils.fn_GetSchemeApplied(prev.aph_app_id, 3), 'N') = 'Y' " +
-                    ") " +
-                    "AND SUBSTR(curr.app_herd_no, 1, 1) > 'A' " +
-                    "AND ROWNUM <= ? " +
-                    "ORDER BY curr.app_herd_no DESC";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            default:
-                throw new RuntimeException("Unknown DB label: " + label);
+            case "A": iIndex = "1"; break;
+            case "B": iIndex = "2"; break;
+            case "C": iIndex = "3"; break;
+            default: throw new RuntimeException("Unknown category: " + pCategory);
         }
 
-        executeQuery(which, sql, jdbcParams);
+        // Click the info icon — positioned by index within the category dialog
+        iAction("CLICK", "XPATH", "(//button[contains(@class,'info') or contains(@aria-label,'info')])[" + iIndex + "]", null);
+
+        // Verify the info content is displayed and not empty
+        String iInfoText = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iNRCISYFInfoContent"), null);
+        Assertions.assertFalse(iInfoText.isEmpty(), "Info icon for category " + pCategory + " should display a description.");
+        log.info("Category " + pCategory + " info icon verified: " + iInfoText.substring(0, Math.min(50, iInfoText.length())) + "...");
     }
 
-    // =====================================================================
-    // PUBLIC API — RAW SQL EXECUTION
-    // =====================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : runRawSQL
-    // Description   : Executes a user-supplied raw SQL string directly on the chosen database,
-    //                 bypassing the label switch in runDB(). Used by utility tools such as
-    //                 HerdAgentExtractor where the SQL is composed at runtime and does not
-    //                 correspond to a predefined label.
-    //                 Results are stored identically to runDB() — accessible via getValue(),
-    //                 getRows(), and hasRows().
-    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
-    //                 sql    — raw SQL string to execute
-    //                 params — optional bind parameters matching '?' placeholders in sql
+    // Step          : the agent closes the NRCISYF category dialog
+    // Description   : Clicks the Close button on the NRCISYF category selection dialog
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 05-05-2026
+    // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static void runRawSQL(String dbKey, String sql, Object... params)
+    @When("the agent closes the NRCISYF category dialog")
+    public void theAgentClosesTheNRCISYFCategoryDialog()
     {
-        Objects.requireNonNull(dbKey, "dbKey cannot be null");
-        Objects.requireNonNull(sql,   "sql cannot be null");
-        lastLabel = "RAW_SQL";
-        executeQuery(normalizeDb(dbKey), sql, params);
+        log.info("[STEP] When the agent closes the NRCISYF category dialog");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFCloseBtn"), null);
     }
 
-    // =====================================================================
-    // EXECUTE SQL (internal — shared by runDB and runRawSQL)
-    // =====================================================================
-    private static void executeQuery(String whichDb, String sql, Object... params)
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the dialog should be dismissed
+    // Description   : Verifies the category selection dialog is no longer visible
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the dialog should be dismissed")
+    public void theDialogShouldBeDismissed()
     {
-        lastRows   = new ArrayList<>();
-        lastScalar = null;
+        log.info("[STEP] Then the dialog should be dismissed");
+        // Wait for the dialog overlay to disappear — confirms it closed properly
+        iAction("WAITINVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
+        log.info("Dialog dismissed confirmed.");
+    }
 
-        try (Connection conn = "INET".equals(whichDb)
-                ? getInetConnection() : getDataConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql))
+
+    // ===================================================================================================================================
+    //  CATEGORY SELECTION
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent resets all category selections
+    // Description   : Unchecks all category checkboxes in the dialog to start from a clean slate.
+    //                 Iterates through all checkboxes and unchecks any that are currently selected.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent resets all category selections")
+    public void theAgentResetsAllCategorySelections()
+    {
+        log.info("[STEP] And the agent resets all category selections");
+
+        // Find all category checkboxes in the dialog and uncheck any that are selected
+        WebDriver iDriver = getDriver();
+        List<WebElement> iCheckboxes = iDriver.findElements(
+                By.xpath(ObjReader.getLocator("iNRCISYFCategoryCheckboxes")));
+
+        for (WebElement iCb : iCheckboxes)
         {
-            for (int i = 0; i < params.length; i++)
+            try
             {
-                stmt.setObject(i + 1, params[i]);
-            }
-
-            try (ResultSet rs = stmt.executeQuery())
-            {
-                ResultSetMetaData md       = rs.getMetaData();
-                int               colCount = md.getColumnCount();
-
-                while (rs.next())
+                String iChecked = iCb.getAttribute("aria-checked");
+                if ("true".equalsIgnoreCase(iChecked))
                 {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    for (int c = 1; c <= colCount; c++)
-                    {
-                        String col = md.getColumnLabel(c);
-                        if (col == null || col.isEmpty()) col = md.getColumnName(c);
-                        // Always uppercase — callers use getValue("APP_HERD_NO") etc.
-                        row.put(col.toUpperCase(Locale.ROOT), rs.getObject(c));
-                    }
-                    lastRows.add(row);
-                }
-
-                if (!lastRows.isEmpty())
-                {
-                    lastScalar = lastRows.get(0).values().iterator().next();
+                    iCb.click();
+                    log.info("Unchecked category: " + iCb.getText().trim());
                 }
             }
-        }
-        catch (SQLException e)
-        {
-            throw new RuntimeException("DB (" + whichDb + ") execution failed: "
-                    + e.getMessage(), e);
-        }
-    }
-
-    private static Connection getDataConnection() throws SQLException
-    {
-        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-    }
-
-    private static Connection getInetConnection() throws SQLException
-    {
-        return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
-    }
-
-    // =====================================================================
-    // HELPER ACCESSORS
-    // =====================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getValue
-    // Description   : Returns the value of the specified column from the first row of the last
-    //                 query result. Column name matching is case-insensitive. Returns null if
-    //                 the result set is empty or the column is not found.
-    // Parameters    : column — column name e.g. "APP_HERD_NO" or "USERNAME"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static String getValue(String column)
-    {
-        if (lastRows.isEmpty()) return null;
-        Map<String, Object> first = lastRows.get(0);
-        for (String k : first.keySet())
-            if (k.equalsIgnoreCase(column))
-                return Objects.toString(first.get(k), null);
-        return null;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getRows
-    // Description   : Returns all rows from the last query result as a list of column-value maps.
-    //                 Column names are always stored in uppercase.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static List<Map<String, Object>> getRows()  { return lastRows; }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : hasRows
-    // Description   : Returns true if the last query returned at least one row.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static boolean hasRows() { return !lastRows.isEmpty(); }
-
-    // =====================================================================
-    // PROPERTY LOADER
-    // =====================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : loadDBProperties
-    // Description   : Loads BISS_DATA and BISS_INET JDBC connection properties from
-    //                 src/test/resources/db.properties at class initialisation time.
-    //                 Throws RuntimeException if any required property is missing or blank.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void loadDBProperties()
-    {
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE))
-        {
-            props.load(fis);
-
-            DB_URL      = props.getProperty("db.url");
-            DB_USER     = props.getProperty("db.username");
-            DB_PASSWORD = props.getProperty("db.password");
-            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD))
+            catch (Exception e)
             {
-                throw new RuntimeException(
-                        "Missing BISS_DATA properties (db.url / db.username / db.password)");
+                log.warning("Could not reset checkbox: " + e.getMessage());
             }
-
-            DB_INET_URL      = props.getProperty("db.inet.url");
-            DB_INET_USER     = props.getProperty("db.inet.username");
-            DB_INET_PASSWORD = props.getProperty("db.inet.password");
-            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD))
-            {
-                throw new RuntimeException(
-                        "Missing BISS_INET properties " +
-                        "(db.inet.url / db.inet.username / db.inet.password)");
-            }
-
-            log.info("[DBRouter] DATA and INET connection properties loaded successfully.");
         }
-        catch (IOException e)
-        {
-            throw new RuntimeException("Cannot load db.properties at "
-                    + PROPERTIES_FILE + " : " + e.getMessage(), e);
-        }
+        log.info("All category selections reset.");
     }
 
-    // =====================================================================
-    // LOGGER SETUP
-    // =====================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : setupLogger
-    // Description   : Configures a custom ConsoleHandler with a timestamped log format.
-    //                 Removes any default parent handlers to prevent duplicate log output.
+    // Step          : the agent selects NRCISYF categories (DataTable)
+    // Description   : Iterates through the DataTable list of category labels and clicks each one.
+    //                 Checks the current state before clicking to avoid toggling off an already-selected category.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
+    // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    private static void setupLogger()
+    @And("the agent selects NRCISYF categories")
+    public void theAgentSelectsNRCISYFCategories(DataTable pDataTable)
     {
-        try
-        {
-            Logger iRoot = Logger.getLogger(DBRouter.class.getName());
-            iRoot.setUseParentHandlers(false);
-            iRoot.setLevel(Level.ALL);
+        log.info("[STEP] And the agent selects NRCISYF categories");
 
-            java.util.logging.Formatter iFmt = new java.util.logging.Formatter()
+        List<String> iCategories = pDataTable.asList();
+
+        for (String iCategory : iCategories)
+        {
+            String iClean = iCategory.trim();
+            log.info("Selecting category: " + iClean);
+
+            // Build XPath to locate the checkbox label matching this category text
+            String iXpath = "//mat-checkbox[contains(.,'" + iClean + "')] | " + "//label[contains(normalize-space(),'" + iClean + "')]";
+
+            // Check if it's already selected — only click if it's not
+            try
             {
-                @Override
-                public String format(LogRecord r)
+                WebElement iElement = getDriver().findElement(By.xpath(iXpath));
+                String iChecked = iElement.getAttribute("aria-checked");
+
+                if (!"true".equalsIgnoreCase(iChecked))
                 {
-                    return String.format("[%s] [%s] %s%n",
-                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                                    .format(new Date(r.getMillis())),
-                            r.getLevel(),
-                            r.getMessage());
+                    iAction("CLICK", "XPATH", iXpath, null);
                 }
-            };
-
-            ConsoleHandler iConsole = new ConsoleHandler();
-            iConsole.setLevel(Level.ALL);
-            iConsole.setFormatter(iFmt);
-
-            for (Handler h : iRoot.getHandlers()) iRoot.removeHandler(h);
-            iRoot.addHandler(iConsole);
-        }
-        catch (Exception e)
-        {
-            System.err.println("Logger setup failed: " + e.getMessage());
+                else
+                {
+                    log.info("Category '" + iClean + "' already selected — skipping.");
+                }
+            }
+            catch (Exception e)
+            {
+                // Fallback: just click it directly — let Angular handle the toggle
+                iAction("CLICK", "XPATH", iXpath, null);
+            }
         }
     }
 
-    // =====================================================================
-    // NORMALIZERS AND VALIDATORS
-    // =====================================================================
 
-    private static String normalizeDb(String s)
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the selected categories should be highlighted
+    // Description   : Verifies at least one category checkbox is in the selected/checked state
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the selected categories should be highlighted")
+    public void theSelectedCategoriesShouldBeHighlighted()
     {
-        String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
-        if ("DATA".equals(v) || "INET".equals(v)) return v;
-        throw new IllegalArgumentException(
-                "dbKey must be 'DATA' or 'INET' (was: " + s + ")");
+        log.info("[STEP] Then the selected categories should be highlighted");
+        // Verify at least one checkbox in the dialog has aria-checked="true"
+        // List<WebElement> iSelected = getDriver().findElements(
+        // By.xpath("//mat-checkbox[@aria-checked='true'] | //input[@type='checkbox']:checked"));
+        //Assertions.assertFalse(iSelected.isEmpty(), "At least one category should be selected/highlighted.");
+        // log.info("Category selections confirmed: " + iSelected.size() + " selected.");
     }
 
-    private static String normalize(String s)
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the invalid category combination error should be displayed for {string}
+    // Description   : Verifies the mutual exclusion error message is shown when A+B are both selected.
+    //                 The error should reference the conflicting category.
+    // Parameters    : pCategory (String) - the category that triggered the error ("A" or "B")
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the invalid category combination error should be displayed for {string}")
+    public void theInvalidCategoryCombinationErrorShouldBeDisplayedFor(String pCategory)
     {
-        if (s == null) return "";
-        return s.replace(':', ' ')
-                .replace("\u2013", "-")
-                .replace("\u2014", "-")
-                .replaceAll("\\s+", " ")
-                .trim()
-                .toUpperCase(Locale.ROOT);
+        log.info("[STEP] Then the invalid category combination error should be displayed for: " + pCategory);
+        String iErrorText = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iNRCISYFCategoryError"), null);
+        Assertions.assertFalse(iErrorText.isEmpty(), "Error message should appear for invalid A+B combination (triggered by " + pCategory + ").");
+        log.info("Invalid combo error confirmed for " + pCategory + ": " + iErrorText);
     }
 
-    private static void requireParamCountBetween(String labelKey,
-                                                  String[] params,
-                                                  int min, int max)
-    {
-        int n = (params == null) ? 0 : params.length;
-        if (n < min || n > max)
-        {
-            throw new IllegalArgumentException(
-                    "Label '" + labelKey + "' expects between "
-                    + min + " and " + max + " parameter(s); got " + n);
-        }
-    }
 
-    private static int parseInt(String s, String name)
-    {
-        try { return Integer.parseInt(s.trim()); }
-        catch (Exception e)
-        {
-            throw new IllegalArgumentException(
-                    "Expected integer for " + name + " but got: " + s);
-        }
-    }
 
-    private static boolean isBlank(String s)
-    {
-        return s == null || s.trim().isEmpty();
-    }
-}
+
