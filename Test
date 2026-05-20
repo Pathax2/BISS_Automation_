@@ -1,21 +1,30 @@
-SELECT YFS_ENTRY_COMPLETE_IND, 
-       YFS_TAO_COMPLETE_IND,
-       YFS_APPLICATION_YEAR, 
-       COUNT(*)
-FROM TDSP_YOUNG_FARMER_SUMMARY
-WHERE YFS_APPLICATION_YEAR = 2026
-GROUP BY YFS_ENTRY_COMPLETE_IND, 
-         YFS_TAO_COMPLETE_IND,
-         YFS_APPLICATION_YEAR
-ORDER BY 1, 2;
-
-SELECT t.SPH_SPS_HOLDING_ID, 
-       v.APH_CUST_ID, 
-       v.APP_CUST_ID,
-       v.APP_HERD_NO, 
-       v.APP_YEAR
-FROM TDSP_YOUNG_FARMER_SUMMARY t
-JOIN vwbs_application_herd v 
-  ON v.APH_CUST_ID = t.SPH_SPS_HOLDING_ID
-WHERE v.APP_YEAR = 2026
-AND ROWNUM <= 5;
+SELECT app_herd_no, app_year, aph_herd_type
+FROM vwbs_application_herd
+WHERE mde_abbrev     = 'I'
+AND   app_herd_no    LIKE 'J%'
+AND   applicant_type = 'I'
+AND   app_year       = 2026
+AND EXISTS (
+    SELECT 1 FROM tdbs_application_land x
+    WHERE x.apl_year        = app_year
+    AND   x.apl_aph_id      = aph_id
+    AND   x.apl_app_id      = aph_app_id
+    AND   x.apl_deleted_ind = 'N'
+)
+AND NOT EXISTS (
+    SELECT 1 FROM tdbs_payment_application x
+    WHERE x.pap_app_id      = aph_app_id
+    AND   x.pap_payment_ind = 'Y'
+)
+AND NVL(pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3), 'N') = 'Y'
+AND SUBSTR(app_herd_no, 1, 1) > 'A'
+-- Exclude herds that already have an NR/CISYF application for this year
+AND NOT EXISTS (
+    SELECT 1 FROM TDSP_YOUNG_FARMER_SUMMARY yfs
+    JOIN vwbs_application_herd h2
+      ON h2.aph_cust_id = yfs.sph_sps_holding_id
+    WHERE h2.app_herd_no       = app_herd_no
+    AND   yfs.yfs_application_year = app_year
+)
+AND ROWNUM <= 50
+ORDER BY app_herd_no DESC;
