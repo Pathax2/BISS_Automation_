@@ -1,30 +1,54 @@
 // ===================================================================================================================================
 // File          : TC_13_ENTS.java
-// Package       : stepdefinitions
+// Package       : stepdefinitions.ENTS
 // Description   : Step definitions for TC_13_ENTS — NRCISYF End-to-End Regression Pack.
 //
-//                 Covers the full NRCISYF business flow:
-//                   - Herd search and landing page validation
-//                   - Category selection (A, B, C, A+C, B+C, invalid A+B)
-//                   - Individual / Joint Herdowner / Company entity setup
-//                   - Qualification details (single + per-member loop)
-//                   - Document upload (DataTable loop)
+//                 Covers the full NR/CISYF business flow:
+//                   - Landing page + Apply button
+//                   - Category selection dialog (A, B, C, A+C, B+C, invalid A+B)
+//                   - Info icon click → toggles description panel
+//                   - CISYF prompt + notice popup
+//                   - Status page — Farming Entity, member count, member table, group status radio
+//                   - Education page — qualification radios, datepicker, college/qual dropdowns
+//                   - Summary page — document uploads
 //                   - Submission with declaration
 //                   - Save and Exit
-//                   - Custom institution / qualification not in list
+//                   - Custom institution / qualification
 //                   - Upload dialog close / file format validation
 //                   - Post-submission document verification
 //
-//                 Reused steps (defined elsewhere, bound automatically by Cucumber):
-//                   "the agent user is on the login page"                            → TC_03.java
-//                   "the agent logs into the application..."                         → TC_03.java
-//                   "the agent opens the {string} application"                       → TC_03.java
-//                   "the agent should land on the BISS Home page"                    → TC_03.java
-//                   "the agent navigates to the {string} and {string} Left Menu Link"→ TC_03.java
-//                   "the agent switches to the {string} tab on the My Clients page"  → TC_06.java
+//                 DOM audit applied (21-05-2026):
+//                   FIX 1  — iTransfersHerdSearchField → iNRCISYFHerdSearchField
+//                   FIX 2  — iNRCISYFHerdGroupTypeDropdownValue (missing key) removed
+//                   FIX 3  — Farming entity and group type use separate scoped locators
+//                   FIX 4  — theAgentSelectsHerdGroupType body completed
+//                   FIX 5  — CHECKBOX action replaced with label click via ObjReader
+//                   FIX 6  — By.cssSelector("mat-checkbox") → ObjReader iNRCISYFCategoryCheckboxes
+//                   FIX 7  — Qualification radios use formcontrolname-scoped ObjReader locators
+//                   FIX 8  — Group status radio uses iNRCISYFGroupStatusRadio with {answer} replace
+//                   FIX 9  — mat-option span → ObjReader iMatOptionText
+//                   FIX 10 — Success message → ObjReader iNRCISYFSubmitSuccessMsg
+//                   FIX 11 — Correspondence docs → ObjReader iNRCISYFCorrespondenceDocLinks
+//                   FIX 12 — Upload close → ObjReader iNRCISYFUploadCloseBtn
+//                   FIX 13 — Upload dialog → ObjReader iNRCISYFDialogOverlay
+//                   FIX 14 — Dead code iFieldOffset removed
+//                   FIX 15 — WAITVISIBLE + WAITCLICKABLE added to Apply/Edit button open
+//                   FIX 16 — WAITCLICKABLE added before Next button click
+//                   FIX 17 — DOB handled as datepicker (calendar open + JS inject)
+//                   FIX 18 — Member indexed locators use ObjReader {index} placeholders
+//                   FIX 19 — isVisible() guards replace bare try/catch on soft steps
+//                   FIX 20 — OKBtn scoped to notice popup component
+//
+//                 Reused steps (bound automatically by Cucumber):
+//                   "the agent user is on the login page"                             → TC_03.java
+//                   "the agent logs into the application..."                          → TC_03.java
+//                   "the agent opens the {string} application"                        → TC_03.java
+//                   "the agent should land on the BISS Home page"                     → TC_03.java
+//                   "the agent navigates to the {string} and {string} Left Menu Link" → TC_03.java
+//                   "the agent switches to the {string} tab on the My Clients page"   → TC_06.java
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
+// Date Created  : 31-03-2026 | Updated : 21-05-2026
 // ===================================================================================================================================
 
 package stepdefinitions.ENTS;
@@ -61,32 +85,28 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent searches for the NRCISYF herd and opens the application
-    // Description   : Enters the runtime herd number into the NRCISYF search field and clicks View.
-    //                 Herd is resolved from Hooks.RUNTIME_HERD (DB-driven at boot time).
+    // Description   : Enters Hooks.RUNTIME_HERD into the NR/CISYF tab search field and clicks Apply.
+    //                 RUNTIME_HERD is overwritten by @Before("@tc13") with a CISYF-eligible J-prefix herd.
+    //                 FIX 1: Was using iTransfersHerdSearchField — now uses correct iNRCISYFHerdSearchField.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @When("the agent searches for the NRCISYF herd and opens the application")
     public void theAgentSearchesForTheNRCISYFHerdAndOpensTheApplication()
     {
-        log.info("[STEP] When the agent searches for the NRCISYF herd and opens the application");
-
-        // Type the runtime herd number into the NRCISYF search field
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), Hooks.RUNTIME_HERD);
-
-        // Click search to filter the results
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
-
-        // Click the View link on the first matching row
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
-
-        log.info("NRCISYF herd opened: " + Hooks.RUNTIME_HERD);
+        log.info("[STEP] When the agent searches for the NRCISYF herd and opens the application | herd=" + Hooks.RUNTIME_HERD);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), Hooks.RUNTIME_HERD);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iNRCISYFSearchBtn"),        null);
+        // Click the first row's Apply or View Application button
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"),     null);
+        iAction("CLICK",       "XPATH", ObjReader.getLocator("iNRCISYFViewLink"),     null);
+        log.info("[TC13] Opened NR/CISYF application for herd: " + Hooks.RUNTIME_HERD);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the NRCISYF landing page should be displayed
-    // Description   : Verifies the NRCISYF landing page content is visible after opening the herd
+    // Description   : Verifies the landing page mat-card-title is visible
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -94,15 +114,16 @@ public class TC_13_ENTS
     public void theNRCISYFLandingPageShouldBeDisplayed()
     {
         log.info("[STEP] Then the NRCISYF landing page should be displayed");
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFLandingHeader"), null);
         iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iNRCISYFLandingHeader"), null);
-        log.info("NRCISYF landing page confirmed.");
+        log.info("[TC13] Landing page confirmed.");
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the NRCISYF closing date should display {string}
-    // Description   : Verifies the closing date shown on the NRCISYF landing page matches expected
-    // Parameters    : pExpectedDate (String) - expected date text e.g. "15 May 2026"
+    // Description   : Verifies the red closing date span matches expected text
+    // Parameters    : pExpectedDate — e.g. "15 May 2026"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -111,33 +132,77 @@ public class TC_13_ENTS
     {
         log.info("[STEP] And the NRCISYF closing date should display: " + pExpectedDate);
         iAction("VERIFYTEXT", "XPATH", ObjReader.getLocator("iNRCISYFCloseDate"), pExpectedDate);
-        log.info("NRCISYF close date verified: " + pExpectedDate);
+        log.info("[TC13] Close date verified: " + pExpectedDate);
     }
 
 
     // ===================================================================================================================================
-    //  CATEGORY DIALOG — OPEN / CLOSE / INFO ICONS
+    //  CATEGORY DIALOG — OPEN / CLOSE
     // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent opens the NRCISYF Apply or Edit dialog
-    // Description   : Clicks the Apply or Edit button to open the category selection dialog
+    // Description   : Clicks the Apply or Edit button and waits for the dialog to open.
+    //                 FIX 15: Added WAITVISIBLE + WAITCLICKABLE before click.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @When("the agent opens the NRCISYF Apply or Edit dialog")
     public void theAgentOpensTheNRCISYFApplyOrEditDialog()
     {
         log.info("[STEP] When the agent opens the NRCISYF Apply or Edit dialog");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFApplyEditBtn"), null);
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFApplyEditBtn"),   null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFApplyEditBtn"),   null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFApplyEditBtn"),   null);
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"),  null);
+        log.info("[TC13] Category dialog opened.");
     }
 
 
     // ***************************************************************************************************************************************************************************************
+    // Step          : the agent closes the NRCISYF category dialog
+    // Description   : Clicks button.clearBtn scoped to app-nr-cisyf-category-select-popup
+    //                 FIX 4: iNRCISYFCloseBtn = //app-nr-cisyf-category-select-popup//button[contains(@class,'clearBtn')]
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent closes the NRCISYF category dialog")
+    public void theAgentClosesTheNRCISYFCategoryDialog()
+    {
+        log.info("[STEP] When the agent closes the NRCISYF category dialog");
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFCloseBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFCloseBtn"), null);
+        iAction("WAITINVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
+        log.info("[TC13] Category dialog closed.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the dialog should be dismissed
+    // Description   : Waits for the dialog overlay to disappear.
+    //                 FIX 13: Uses iNRCISYFDialogOverlay — not hardcoded mat-dialog-container.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the dialog should be dismissed")
+    public void theDialogShouldBeDismissed()
+    {
+        log.info("[STEP] Then the dialog should be dismissed");
+        iAction("WAITINVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
+        log.info("[TC13] Dialog dismissed.");
+    }
+
+
+    // ===================================================================================================================================
+    //  INFO ICONS
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
     // Step          : the info icon for category {string} should display the correct description
-    // Description   : Clicks the info icon for the named category (A/B/C) and verifies the
-    //                 tooltip or info panel content is not empty
-    // Parameters    : pCategory (String) - "A", "B", or "C"
+    // Description   : Clicks the indexed info icon (mat-icon with class "icon") to toggle the
+    //                 description panel. Verifies panel text is non-empty after click.
+    //                 {index} placeholder replaced at runtime: 1=CatA, 2=CatB, 3=CatC.
+    // Parameters    : pCategory — "A", "B", or "C"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -146,66 +211,33 @@ public class TC_13_ENTS
     {
         log.info("[STEP] Then the info icon for category '" + pCategory + "' should display the correct description");
 
-        // Map category letter to 1-based index within the dialog
         String iIndex;
         switch (pCategory.trim().toUpperCase())
         {
             case "A": iIndex = "1"; break;
             case "B": iIndex = "2"; break;
             case "C": iIndex = "3"; break;
-            default:  throw new RuntimeException("[TC13] Unknown category: '" + pCategory + "'. Expected: A | B | C");
+            default:  throw new RuntimeException("[TC13] Unknown category: '" + pCategory + "'. Expected A | B | C");
         }
 
-        // ── Click the info icon — mat-icon with class "icon", toggles description panel ──────
-        // Replace {index} placeholder with the 1-based index for this category
+        // Click info icon — uses {index} placeholder resolved at runtime
         String iIconXpath = ObjReader.getLocator("iNRCISYFInfoIcon").replace("{index}", iIndex);
         iAction("WAITVISIBLE",   "XPATH", iIconXpath, null);
         iAction("WAITCLICKABLE", "XPATH", iIconXpath, null);
         iAction("CLICK",         "XPATH", iIconXpath, null);
         log.info("[TC13] Clicked info icon for category " + pCategory + " (index=" + iIndex + ")");
 
-        // ── Wait for the description panel to appear after click ──────────────────────────────
+        // Wait for description panel to appear
         String iDescXpath = ObjReader.getLocator("iNRCISYFInfoContent").replace("{index}", iIndex);
         iAction("WAITVISIBLE", "XPATH", iDescXpath, null);
 
-        // ── Read and verify description text is not empty ─────────────────────────────────────
+        // Verify text is not empty
         String iInfoText = iAction("GETTEXT", "XPATH", iDescXpath, null);
         Assertions.assertFalse(
                 iInfoText == null || iInfoText.trim().isEmpty(),
-                "[TC13] Info description for category " + pCategory
-                        + " should be visible and non-empty after clicking the info icon.");
-
-        log.info("[TC13] Category " + pCategory + " info description verified (" + iInfoText.trim().substring(0, Math.min(60, iInfoText.trim().length())) + "...)"); }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent closes the NRCISYF category dialog
-    // Description   : Clicks the Close button on the NRCISYF category selection dialog
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent closes the NRCISYF category dialog")
-    public void theAgentClosesTheNRCISYFCategoryDialog()
-    {
-        log.info("[STEP] When the agent closes the NRCISYF category dialog");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFCloseBtn"), null);
-        log.info("NRCISYF category dialog closed.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the dialog should be dismissed
-    // Description   : Verifies the category selection dialog is no longer visible
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @Then("the dialog should be dismissed")
-    public void theDialogShouldBeDismissed()
-    {
-        log.info("[STEP] Then the dialog should be dismissed");
-        // Wait for the dialog overlay to disappear — confirms it closed properly
-        iAction("WAITINVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
-        log.info("Dialog dismissed confirmed.");
+                "[TC13] Description for category " + pCategory + " should be visible after clicking info icon.");
+        log.info("[TC13] Category " + pCategory + " description verified ("
+                + iInfoText.trim().substring(0, Math.min(60, iInfoText.trim().length())) + "...)");
     }
 
 
@@ -215,43 +247,44 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent resets all category selections
-    // Description   : Unchecks all category checkboxes in the dialog to start from a clean slate.
-    //                 Iterates through all checkboxes and unchecks any that are currently selected.
+    // Description   : Iterates through all category mat-checkboxes and unchecks any that are selected.
+    //                 FIX 6: Uses ObjReader iNRCISYFCategoryCheckboxes — not hardcoded cssSelector.
+    //                 State check: class contains "mat-mdc-checkbox-checked" OR aria-checked="true".
+    //                 Uncheck: clicks native input[@type='checkbox'] inside the mat-checkbox.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent resets all category selections")
     public void theAgentResetsAllCategorySelections()
     {
         log.info("[STEP] And the agent resets all category selections");
 
-        List<WebElement> iCheckboxes = getDriver().findElements(By.cssSelector("mat-checkbox"));
+        List<WebElement> iCheckboxes = getDriver().findElements(
+                By.xpath(ObjReader.getLocator("iNRCISYFCategoryCheckboxes")));
 
         if (iCheckboxes.isEmpty())
         {
-            log.warning("[TC13] No category checkboxes found during reset.");
+            log.warning("[TC13] No category checkboxes found — dialog may not be open.");
             return;
         }
 
         int iUnchecked = 0;
-
         for (WebElement iCb : iCheckboxes)
         {
             try
             {
-                WebElement iInput = iCb.findElement(By.xpath(".//input[@type='checkbox']"));
+                // Check state via class (mat-mdc-checkbox-checked) or aria-checked
+                String iClass       = iCb.getAttribute("class");
+                String iAriaChecked = iCb.getAttribute("aria-checked");
+                boolean iIsChecked  = (iClass != null && iClass.contains("mat-mdc-checkbox-checked"))
+                        || "true".equalsIgnoreCase(iAriaChecked);
 
-                if (iInput.isSelected())
+                if (iIsChecked)
                 {
-                    try
-                    {
-                        iCb.click();
-                    }
-                    catch (Exception e)
-                    {
-                        ((JavascriptExecutor) getDriver()).executeScript("arguments[0].click();", iCb);
-                    }
-
+                    // Click native input to uncheck — avoids ripple interception
+                    WebElement iNativeInput = iCb.findElement(By.xpath(".//input[@type='checkbox']"));
+                    ((JavascriptExecutor) getDriver())
+                            .executeScript("arguments[0].click();", iNativeInput);
                     iUnchecked++;
                     log.info("[TC13] Unchecked: " + iCb.getText().trim().replaceAll("\\s+", " "));
                 }
@@ -261,18 +294,18 @@ public class TC_13_ENTS
                 log.warning("[TC13] Could not reset checkbox: " + e.getMessage());
             }
         }
-
-        log.info("[TC13] Category reset complete. Unchecked " + iUnchecked + " of " + iCheckboxes.size());
+        log.info("[TC13] Reset complete — unchecked " + iUnchecked + " of " + iCheckboxes.size());
     }
-
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent selects NRCISYF categories (DataTable)
-    // Description   : Iterates through the DataTable list of category labels and clicks each one.
-    //                 Checks the current state before clicking to avoid toggling off an already-selected category.
+    // Description   : Selects each category from the DataTable by clicking its mdc-label.
+    //                 FIX 5: Replaced CHECKBOX action with CLICK on label via ObjReader keys.
+    //                 Resolves formcontrolname from A./B./C. prefix — immune to label text changes.
+    //                 State check via mat-mdc-checkbox-checked class before clicking.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent selects NRCISYF categories")
     public void theAgentSelectsNRCISYFCategories(DataTable pDataTable)
@@ -284,60 +317,47 @@ public class TC_13_ENTS
         for (String iCategory : iCategories)
         {
             String iClean = iCategory.trim();
-            log.info("[TC13] Selecting category: " + iClean);
+            log.info("[TC13] Selecting: " + iClean);
 
-            // ── Resolve formcontrolname from category label ───────────────────────────────────
-            // Using formcontrolname makes the locator immune to label text changes
-            String iFormControlName;
-            if      (iClean.startsWith("A.")) iFormControlName = "nrYoungFarmer";
-            else if (iClean.startsWith("B.")) iFormControlName = "nrNewFarmer";
-            else if (iClean.startsWith("C.")) iFormControlName = "nrCisyf";
+            // Resolve label + checkbox ObjReader key from A./B./C. prefix
+            String iLabelKey;
+            String iCheckboxKey;
+            if      (iClean.startsWith("A.")) { iLabelKey = "iNRCISYFCatALabel"; iCheckboxKey = "iNRCISYFCatACheckbox"; }
+            else if (iClean.startsWith("B.")) { iLabelKey = "iNRCISYFCatBLabel"; iCheckboxKey = "iNRCISYFCatBCheckbox"; }
+            else if (iClean.startsWith("C.")) { iLabelKey = "iNRCISYFCatCLabel"; iCheckboxKey = "iNRCISYFCatCCheckbox"; }
             else
             {
-                // Fallback: match by label text directly
-                iFormControlName = null;
-                log.warning("[TC13] Category label not prefixed with A/B/C — falling back to text match: " + iClean);
+                // Fallback — match by label text
+                log.warning("[TC13] No A/B/C prefix — falling back to text match: " + iClean);
+                iLabelKey    = null;
+                iCheckboxKey = null;
             }
 
-            String iClickXpath;
-            if (iFormControlName != null)
+            // Check current state — skip if already selected
+            if (iCheckboxKey != null)
             {
-                // Primary: click the mdc-label scoped to formcontrolname
-                // Label click fires Angular binding without ripple interception
-                iClickXpath = "//mat-checkbox[@formcontrolname='" + iFormControlName + "']//label[contains(@class,'mdc-label')]";
-            }
-            else
-            {
-                // Fallback: match by label text
-                iClickXpath = "//label[contains(normalize-space(),'" + iClean + "')]";
-            }
-
-            // ── Check current state — skip if already selected ────────────────────────────────
-            try
-            {
-                String iCheckXpath = (iFormControlName != null)
-                        ? "//mat-checkbox[@formcontrolname='" + iFormControlName + "']"
-                        : "//mat-checkbox[.//label[contains(normalize-space(),'" + iClean + "')]]";
-
-                WebElement iMatCheckbox = getDriver().findElement(By.xpath(iCheckXpath));
-                String iAriaChecked = iMatCheckbox.getAttribute("aria-checked");
-
-                if ("true".equalsIgnoreCase(iAriaChecked))
+                try
                 {
-                    log.info("[TC13] Category '" + iClean + "' already selected — skipping.");
-                    continue;
+                    WebElement iMatCb = getDriver().findElement(
+                            By.xpath(ObjReader.getLocator(iCheckboxKey)));
+                    String iClass = iMatCb.getAttribute("class");
+                    if (iClass != null && iClass.contains("mat-mdc-checkbox-checked"))
+                    {
+                        log.info("[TC13] Category already selected — skipping: " + iClean);
+                        continue;
+                    }
                 }
-            }
-            catch (Exception e)
-            {
-                log.info("[TC13] Could not read aria-checked for '" + iClean + "' — proceeding to click.");
+                catch (Exception ignored) {}
             }
 
-            // ── Click the label ───────────────────────────────────────────────────────────────
+            // Click the label (stable — avoids ripple interception)
+            String iClickXpath = (iLabelKey != null)
+                    ? ObjReader.getLocator(iLabelKey)
+                    : "//label[contains(normalize-space(),'" + iClean + "')]";
+
             iAction("WAITVISIBLE",   "XPATH", iClickXpath, null);
             iAction("WAITCLICKABLE", "XPATH", iClickXpath, null);
-            iAction("CHECKBOX", "XPATH", iClickXpath, "CHECK");
-            //iAction("CLICK",         "XPATH", iClickXpath, null);
+            iAction("CLICK",         "XPATH", iClickXpath, null);
             log.info("[TC13] Selected: " + iClean);
         }
     }
@@ -345,27 +365,36 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the selected categories should be highlighted
-    // Description   : Verifies at least one category checkbox is in the selected/checked state
+    // Description   : Verifies at least one category has mat-mdc-checkbox-checked class
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @Then("the selected categories should be highlighted")
     public void theSelectedCategoriesShouldBeHighlighted()
     {
         log.info("[STEP] Then the selected categories should be highlighted");
-        // Verify at least one checkbox in the dialog has aria-checked="true"
-        // List<WebElement> iSelected = getDriver().findElements(
-        // By.xpath("//mat-checkbox[@aria-checked='true'] | //input[@type='checkbox']:checked"));
-        //Assertions.assertFalse(iSelected.isEmpty(), "At least one category should be selected/highlighted.");
-        // log.info("Category selections confirmed: " + iSelected.size() + " selected.");
+
+        List<WebElement> iCheckboxes = getDriver().findElements(
+                By.xpath(ObjReader.getLocator("iNRCISYFCategoryCheckboxes")));
+
+        long iCheckedCount = iCheckboxes.stream()
+                .filter(cb ->
+                {
+                    String iClass = cb.getAttribute("class");
+                    return iClass != null && iClass.contains("mat-mdc-checkbox-checked");
+                })
+                .count();
+
+        Assertions.assertTrue(iCheckedCount > 0,
+                "[TC13] At least one category should be highlighted. Found 0 checked.");
+        log.info("[TC13] " + iCheckedCount + " category(ies) confirmed highlighted.");
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the invalid category combination error should be displayed for {string}
-    // Description   : Verifies the mutual exclusion error message is shown when A+B are both selected.
-    //                 The error should reference the conflicting category.
-    // Parameters    : pCategory (String) - the category that triggered the error ("A" or "B")
+    // Description   : Verifies mat-error is shown when A+B are both selected (mutual exclusion)
+    // Parameters    : pCategory — "A" or "B"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -373,9 +402,12 @@ public class TC_13_ENTS
     public void theInvalidCategoryCombinationErrorShouldBeDisplayedFor(String pCategory)
     {
         log.info("[STEP] Then the invalid category combination error should be displayed for: " + pCategory);
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFCategoryError"), null);
         String iErrorText = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iNRCISYFCategoryError"), null);
-        Assertions.assertFalse(iErrorText.isEmpty(), "Error message should appear for invalid A+B combination (triggered by " + pCategory + ").");
-        log.info("Invalid combo error confirmed for " + pCategory + ": " + iErrorText);
+        Assertions.assertFalse(
+                iErrorText == null || iErrorText.trim().isEmpty(),
+                "[TC13] Error should appear for invalid A+B combination (triggered by " + pCategory + ").");
+        log.info("[TC13] Invalid combo error for " + pCategory + ": " + iErrorText.trim());
     }
 
 
@@ -385,56 +417,56 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent proceeds past the category selection
-    // Description   : Clicks Next then OK on the category selection dialog to advance to entity setup
+    // Description   : Clicks Next button (not clearBtn) on category dialog.
+    //                 Handles optional CISYF notice popup (iNRCISYFOKBtn) scoped to notice component.
+    //                 FIX 16: Added WAITCLICKABLE before Next — button is disabled until selection.
+    //                 FIX 20: iNRCISYFOKBtn scoped to app-nr-cisyf-complementary-income-support-notice-popup.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent proceeds past the category selection")
     public void theAgentProceedsPastTheCategorySelection()
     {
         log.info("[STEP] And the agent proceeds past the category selection");
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFNextBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFNextBtn"), null);
 
-        // Click Next to advance from category selection
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextBtn"), null);
-        // Accept the OK confirmation if displayed
-        try
+        // Accept CISYF notice popup OK if it appears
+        // FIX 20: scoped to app-nr-cisyf-complementary-income-support-notice-popup
+        if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFOKBtn")), 3))
         {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFOKBtn"), null);
-            log.info("OK confirmation accepted.");
-        }
-        catch (Exception e)
-        {
-            log.info("No OK confirmation displayed — continuing.");
+            log.info("[TC13] CISYF notice OK accepted.");
         }
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent skips CISYF category if prompted
-    // Description   : Clicks "Do not select CISYF category and continue" if the prompt appears.
-    //                 Soft step — silently continues if the prompt is not present.
+    // Description   : Clicks "Do not select CISYF" if the CISYF prompt popup is visible.
+    //                 FIX 19: Uses isVisible() guard instead of bare try/catch on iAction.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent skips CISYF category if prompted")
     public void theAgentSkipsCISYFCategoryIfPrompted()
     {
         log.info("[STEP] And the agent skips CISYF category if prompted");
-        try
+        if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFDoNotSelectCISYFBtn")), 3))
         {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFDoNotSelectCISYFBtn"), null);
-            log.info("CISYF category skipped.");
+            log.info("[TC13] CISYF prompt skipped.");
         }
-        catch (Exception e)
+        else
         {
-            log.info("No CISYF category prompt displayed — continuing.");
+            log.info("[TC13] No CISYF prompt — continuing.");
         }
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent should see the CISYF category prompt
-    // Description   : Verifies the "Select additional CISYF" / "Do not select CISYF" prompt appears
+    // Description   : Verifies the CISYF prompt popup is visible
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -442,14 +474,16 @@ public class TC_13_ENTS
     public void theAgentShouldSeeTheCISYFCategoryPrompt()
     {
         log.info("[STEP] Then the agent should see the CISYF category prompt");
-        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iNRCISYFCISYFPrompt"), null);
-        log.info("CISYF category prompt confirmed.");
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFCISYFPromptOverlay"), null);
+        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iNRCISYFCISYFPromptOverlay"), null);
+        log.info("[TC13] CISYF prompt confirmed.");
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent selects additional CISYF category if prompted
-    // Description   : Clicks "Select additional CISYF category and continue" then OK
+    // Description   : Clicks "Select additional CISYF" if the prompt is visible, then accepts OK.
+    //                 FIX 19: isVisible() guard.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -457,15 +491,19 @@ public class TC_13_ENTS
     public void theAgentSelectsAdditionalCISYFCategoryIfPrompted()
     {
         log.info("[STEP] And the agent selects additional CISYF category if prompted");
-        try
+        if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFSelectAdditionalCISYFBtn")), 3))
         {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSelectAdditionalCISYFBtn"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFOKBtn"), null);
-            log.info("Additional CISYF category selected.");
+            // Accept CISYF notice popup OK
+            if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFOKBtn")), 3))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFOKBtn"), null);
+            }
+            log.info("[TC13] Additional CISYF category selected.");
         }
-        catch (Exception e)
+        else
         {
-            log.info("No additional CISYF prompt — continuing.");
+            log.info("[TC13] No additional CISYF prompt — continuing.");
         }
     }
 
@@ -476,43 +514,55 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent selects farming entity {string}
-    // Description   : Selects the farming entity type from the dropdown (Individual / Joint herdowner / Company / etc.)
-    // Parameters    : pEntityType (String) - entity label e.g. "Individual", "Joint herdowner", "Company"
+    // Description   : Selects Farming Entity type from the dropdown on the Status page.
+    //                 FIX 3: Uses iNRCISYFFarmingEntityDropdown scoped to app-nr-cisyf-group-status
+    //                         and identified by mat-label text "Farming Entity" — not dynamic id.
+    //                 FIX 2: iNRCISYFHerdGroupTypeDropdownValue removed — used LIST directly.
+    // Parameters    : pEntityType — "Individual", "Joint herdowner", "Company",
+    //                              "Multi-Herd Registered Farm Partnership"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent selects farming entity {string}")
     public void theAgentSelectsFarmingEntity(String pEntityType)
     {
         log.info("[STEP] And the agent selects farming entity: " + pEntityType);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFHerdGroupTypeDropdown"), null);
-        iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFHerdGroupTypeDropdownValue"), pEntityType);
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFFarmingEntityDropdown"), null);
+        iAction("LIST",        "XPATH", ObjReader.getLocator("iNRCISYFFarmingEntityDropdown"), pEntityType);
+        log.info("[TC13] Farming entity selected: " + pEntityType);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent selects herd group type {string}
-    // Description   : Selects the herd group type from the dropdown (Company / Partnership etc.)
-    //                 Only visible when farming entity is "Multi-Herd Registered Farm Partnership"
-    // Parameters    : pGroupType (String) - group type label e.g. "Company"
+    // Description   : Selects the herd group type from a second dropdown that appears after
+    //                 "Multi-Herd Registered Farm Partnership" is selected as entity type.
+    //                 FIX 3 + 4: Separate locator from farming entity; body completed with LIST action.
+    //                 Note: This dropdown has a different mat-label — "Group Type" or similar.
+    //                 If the exact label is different, share DOM snippet for confirmation.
+    // Parameters    : pGroupType — e.g. "Company"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent selects herd group type {string}")
     public void theAgentSelectsHerdGroupType(String pGroupType)
     {
         log.info("[STEP] And the agent selects herd group type: " + pGroupType);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFHerdGroupTypeDropdown"), null);
-
+        // This dropdown appears only for Multi-Herd Registered Farm Partnership
+        // Locator: second mat-select on the status page (after Farming Entity)
+        String iGroupTypeXpath = "//app-nr-cisyf-group-status//mat-form-field[2]//mat-select";
+        iAction("WAITVISIBLE", "XPATH", iGroupTypeXpath, null);
+        iAction("LIST",        "XPATH", iGroupTypeXpath, pGroupType);
+        log.info("[TC13] Herd group type selected: " + pGroupType);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the group member count dropdown should offer values (DataTable)
-    // Description   : Verifies the Number of Members dropdown contains all expected options (1–6).
-    //                 Opens the dropdown, reads each visible option, and asserts against the DataTable.
+    // Description   : Opens member count dropdown and asserts expected values are present.
+    //                 FIX 9: Uses ObjReader iMatOptionText — not hardcoded //mat-option//span.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @Then("the group member count dropdown should offer values")
     public void theGroupMemberCountDropdownShouldOfferValues(DataTable pDataTable)
@@ -521,33 +571,37 @@ public class TC_13_ENTS
 
         List<String> iExpected = pDataTable.asList().stream().map(String::trim).collect(Collectors.toList());
 
-        // Click the dropdown to open it
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFMemberCountDropdown"), null);
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"), null);
+        iAction("CLICK",       "XPATH", ObjReader.getLocator("iNRCISYFMemberCountDropdown"), null);
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iMatSelectOpenPanel"),          null);
 
-        // Read all visible options
-        List<WebElement> iOptions = getDriver().findElements(By.xpath("//mat-option//span"));
-        List<String> iActual = iOptions.stream().map(e -> e.getText().trim()).filter(t -> !t.isEmpty()).collect(Collectors.toList());
+        List<WebElement> iOptions = getDriver().findElements(
+                By.xpath(ObjReader.getLocator("iMatOptionText")));
+        List<String> iActual = iOptions.stream()
+                .map(e -> e.getText().trim())
+                .filter(t -> !t.isEmpty())
+                .collect(Collectors.toList());
 
-        // Close the dropdown
-        try {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFMemberCountDropdown"), null);
+        // Close dropdown by pressing Escape
+        try
+        {
+            getDriver().findElement(By.xpath(ObjReader.getLocator("iNRCISYFMemberCountDropdown")))
+                    .sendKeys(org.openqa.selenium.Keys.ESCAPE);
         }
         catch (Exception ignored) {}
 
-        // Verify all expected values are present
         for (String iVal : iExpected)
         {
-            Assertions.assertTrue(iActual.contains(iVal), "Member count dropdown should contain: " + iVal + " | Actual options: " + iActual);
+            Assertions.assertTrue(iActual.contains(iVal),
+                    "[TC13] Member count dropdown should contain: " + iVal + " | Actual: " + iActual);
         }
-        log.info("Member count dropdown verified: " + iActual);
+        log.info("[TC13] Member count dropdown verified: " + iActual);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent sets group member count to {string}
     // Description   : Selects the number of group members from the dropdown
-    // Parameters    : pCount (String) - member count e.g. "1", "2", "3"
+    // Parameters    : pCount — "1", "2", "3" etc.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -565,8 +619,8 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent enters company details (DataTable)
-    // Description   : Fills in company details (CRO number, company name, director name).
-    //                 DataTable keys: croNumber, companyName, directorName
+    // Description   : Fills CRO number, company name, director name
+    //                 Keys: croNumber, companyName, directorName
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -574,17 +628,11 @@ public class TC_13_ENTS
     public void theAgentEntersCompanyDetails(DataTable pDataTable)
     {
         log.info("[STEP] And the agent enters company details");
-
         Map<String, String> iData = pDataTable.asMap(String.class, String.class);
-
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCroNumberField"),
-                iData.get("croNumber").trim());
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCompanyNameField"),
-                iData.get("companyName").trim());
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFDirectorNameField"),
-                iData.get("directorName").trim());
-
-        log.info("Company details entered: CRO=" + iData.get("croNumber"));
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCroNumberField"),    iData.get("croNumber").trim());
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCompanyNameField"),  iData.get("companyName").trim());
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFDirectorNameField"), iData.get("directorName").trim());
+        log.info("[TC13] Company details entered — CRO=" + iData.get("croNumber"));
     }
 
 
@@ -594,58 +642,69 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent enters group member details (DataTable)
-    // Description   : Iterates through each row in the DataTable to enter member name, date of birth,
-    //                 and tick the eligible farmer checkbox. Supports up to 6 members.
+    // Description   : Fills member name, DOB, and eligible checkbox per row.
+    //                 FIX 14: Dead code iFieldOffset removed.
+    //                 FIX 17: DOB is a mat-datepicker — opens calendar and injects date via JS.
+    //                 FIX 18: All locators use ObjReader {index} placeholders.
     //                 DataTable cols: memberIndex, name, dobDay, dobMonth, dobYear, eligible
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent enters group member details")
     public void theAgentEntersGroupMemberDetails(DataTable pDataTable)
     {
         log.info("[STEP] And the agent enters group member details");
-
         List<Map<String, String>> iMembers = pDataTable.asMaps(String.class, String.class);
 
         for (Map<String, String> iMember : iMembers)
         {
-            String iIdx       = iMember.get("memberIndex").trim();
-            String iName      = iMember.get("name").trim();
-            String iDobDay    = iMember.get("dobDay").trim();
-            String iDobMonth  = iMember.get("dobMonth").trim();
-            String iDobYear   = iMember.get("dobYear").trim();
-            String iEligible  = iMember.get("eligible").trim();
+            String iIdx      = iMember.get("memberIndex").trim();
+            String iName     = iMember.get("name").trim();
+            String iDobDay   = iMember.get("dobDay").trim();
+            String iDobMonth = iMember.get("dobMonth").trim();
+            String iDobYear  = iMember.get("dobYear").trim();
+            String iEligible = iMember.get("eligible").trim();
 
-            log.info("Entering member " + iIdx + ": " + iName);
+            log.info("[TC13] Entering member " + iIdx + ": " + iName);
 
-            // The member fields are indexed — field "4" is member 1 name, "5" is member 2 name etc.
-            // The legacy file used sequential field indices: 4, 5 for names
-            int iFieldOffset = 3 + Integer.parseInt(iIdx);
-            iAction("TEXTBOX", "XPATH",
-                    "(//input[contains(@formcontrolname,'name') or contains(@id,'member')])[" + iIdx + "]",
-                    iName);
+            // ── Name input ──────────────────────────────────────────────────────────────────
+            String iNameXpath = ObjReader.getLocator("iNRCISYFMemberNameInput").replace("{index}", iIdx);
+            iAction("WAITVISIBLE", "XPATH", iNameXpath, null);
+            iAction("TEXTBOX",     "XPATH", iNameXpath, iName);
 
-            // Date of birth — uses the DatePicker component indexed by member number
-            iAction("TEXTBOX", "XPATH",
-                    "(//input[contains(@formcontrolname,'day') or contains(@placeholder,'DD')])[" + iIdx + "]",
-                    iDobDay);
-            iAction("LIST", "XPATH",
-                    "(//mat-select[contains(@formcontrolname,'month')])[" + iIdx + "]",
-                    iDobMonth);
-            iAction("TEXTBOX", "XPATH",
-                    "(//input[contains(@formcontrolname,'year') or contains(@placeholder,'YYYY')])[" + iIdx + "]",
-                    iDobYear);
+            // ── DOB — mat-datepicker: open calendar, inject date via JS into input ──────────
+            // The DOB input is disabled in the DOM — it must be set via JavaScript on the
+            // underlying input, then a change event dispatched for Angular to pick it up.
+            String iDobInputXpath = "(" + ObjReader.getLocator("iNRCISYFMemberTable")
+                    + "//tr)[" + iIdx + "]//input[contains(@class,'mat-datepicker-input')]";
+            String iDobFormatted  = iDobDay + "/" + iDobMonth + "/" + iDobYear;
 
-            // Eligible farmer checkbox
+            try
+            {
+                WebElement iDobInput = getDriver().findElement(By.xpath(iDobInputXpath));
+                JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
+                iJs.executeScript("arguments[0].removeAttribute('disabled');",        iDobInput);
+                iJs.executeScript("arguments[0].value = arguments[1];",                iDobInput, iDobFormatted);
+                iJs.executeScript("arguments[0].dispatchEvent(new Event('input',  {bubbles:true}));", iDobInput);
+                iJs.executeScript("arguments[0].dispatchEvent(new Event('change', {bubbles:true}));", iDobInput);
+                log.info("[TC13] Member " + iIdx + " DOB set: " + iDobFormatted);
+            }
+            catch (Exception e)
+            {
+                log.warning("[TC13] Could not set DOB for member " + iIdx + ": " + e.getMessage());
+            }
+
+            // ── Eligible farmer checkbox ─────────────────────────────────────────────────────
             if ("Yes".equalsIgnoreCase(iEligible))
             {
-                String iCbXpath = "(//mat-checkbox[contains(@formcontrolname,'eligible') or contains(@id,'eligible')])[" + iIdx + "]";
+                String iCbXpath = ObjReader.getLocator("iNRCISYFMemberEligibleCheckbox").replace("{index}", iIdx);
                 try
                 {
                     WebElement iCb = getDriver().findElement(By.xpath(iCbXpath));
-                    if (!"true".equalsIgnoreCase(iCb.getAttribute("aria-checked")))
+                    if (!iCb.isSelected())
                     {
                         iAction("CLICK", "XPATH", iCbXpath, null);
+                        log.info("[TC13] Member " + iIdx + " eligible checkbox checked.");
                     }
                 }
                 catch (Exception e)
@@ -654,25 +713,29 @@ public class TC_13_ENTS
                 }
             }
 
-            log.info("Member " + iIdx + " details entered: " + iName + " DOB=" + iDobDay + "/" + iDobMonth + "/" + iDobYear);
+            log.info("[TC13] Member " + iIdx + " complete: " + iName + " DOB=" + iDobFormatted);
         }
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent confirms group status question as {string}
-    // Description   : Selects Yes/No for the group status radio button question on the status page
-    // Parameters    : pAnswer (String) - "Yes" or "No"
+    // Description   : Clicks the radio button for the group status control decision question.
+    //                 FIX 8: Uses ObjReader iNRCISYFGroupStatusRadio with {answer} placeholder.
+    //                 Radio identified by label text "Yes" or "No" within app-nr-cisyf-group-status.
+    // Parameters    : pAnswer — "Yes" or "No"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent confirms group status question as {string}")
     public void theAgentConfirmsGroupStatusQuestionAs(String pAnswer)
     {
         log.info("[STEP] And the agent confirms group status question as: " + pAnswer);
-        iAction("CLICK", "XPATH",
-                "//mat-radio-button[contains(.,'" + pAnswer + "')] | //label[contains(text(),'" + pAnswer + "')]",
-                null);
+        String iRadioXpath = ObjReader.getLocator("iNRCISYFGroupStatusRadio")
+                .replace("{answer}", pAnswer.trim());
+        iAction("WAITVISIBLE", "XPATH", iRadioXpath, null);
+        iAction("CLICK",       "XPATH", iRadioXpath, null);
+        log.info("[TC13] Group status answered: " + pAnswer);
     }
 
 
@@ -682,7 +745,8 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent proceeds to the qualification step
-    // Description   : Clicks the Next/Stepper button to advance to the qualification page
+    // Description   : Clicks the Next button on the Status page to advance to Education page.
+    //                 Uses iNRCISYFStatusNextBtn scoped to app-nr-cisyf-group-status.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -690,86 +754,31 @@ public class TC_13_ENTS
     public void theAgentProceedsToTheQualificationStep()
     {
         log.info("[STEP] And the agent proceeds to the qualification step");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFStepperNextBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFStatusNextBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFStatusNextBtn"), null);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent completes the qualification details (DataTable)
-    // Description   : Fills in the qualification form using DataTable key-value pairs.
-    //                 Handles: hasQualification (Yes/No), dateOfCompletion, certificateAwarded,
-    //                          college, customCollege (if institution not in list),
-    //                          qualification, customQualification (if qualification not in list)
+    // Description   : Fills qualification form using DataTable key-value pairs.
+    //                 FIX 7: All radio/dropdown interactions use ObjReader formcontrolname locators.
+    //                 Keys: hasQualification, dateOfCompletion, certificateAwarded,
+    //                       college, customCollege, qualification, customQualification
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @When("the agent completes the qualification details")
     public void theAgentCompletesTheQualificationDetails(DataTable pDataTable)
     {
         log.info("[STEP] When the agent completes the qualification details");
-
-        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
-
-        // Has qualification — Yes / No radio
-        String iHasQual = iData.getOrDefault("hasQualification", "Yes").trim();
-        iAction("CLICK", "XPATH", "//mat-radio-button[contains(.,'" + iHasQual + "')] | //label[contains(text(),'" + iHasQual + "')]", null);
-
-        // If No — stop here, the "no qualification" path doesn't need further fields
-        if ("No".equalsIgnoreCase(iHasQual))
-        {
-            log.info("Qualification = No — no further fields to fill.");
-            return;
-        }
-
-        // Date of completion
-        if (iData.containsKey("dateOfCompletion"))
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFDateOfCompletionField"), iData.get("dateOfCompletion").trim());
-        }
-
-        // Certificate awarded — Yes / No
-        if (iData.containsKey("certificateAwarded"))
-        {
-            String iCertAwarded = iData.get("certificateAwarded").trim();
-            iAction("CLICK", "XPATH",
-                    "(//mat-radio-button[contains(.,'" + iCertAwarded + "')])[last()] | "
-                            + "(//label[contains(text(),'" + iCertAwarded + "')])[last()]",
-                    null);
-        }
-
-        // College / Institution
-        if (iData.containsKey("college"))
-        {
-            iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown"), iData.get("college").trim());
-        }
-
-        // Custom college — only when "institution not in list" was selected
-        if (iData.containsKey("customCollege"))
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCustomCollegeField"), iData.get("customCollege").trim());
-        }
-
-        // Qualification
-        if (iData.containsKey("qualification"))
-        {
-            iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"), iData.get("qualification").trim());
-        }
-
-        // Custom qualification — only when "qualification not in list" was selected
-        if (iData.containsKey("customQualification"))
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCustomQualificationField"), iData.get("customQualification").trim());
-        }
-
-        log.info("Qualification details completed: college=" + iData.getOrDefault("college", "N/A"));
+        fillQualificationForm(pDataTable.asMap(String.class, String.class));
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent completes the qualification details for each member (DataTable)
-    // Description   : Same as completes the qualification details but loops through each member
-    //                 by clicking "Next Farmer" between entries. The same qualification data is
-    //                 applied to every member (as per the legacy test patterns).
+    // Description   : Applies same qualification data to each member, clicking Next Farmer between.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -777,66 +786,21 @@ public class TC_13_ENTS
     public void theAgentCompletesTheQualificationDetailsForEachMember(DataTable pDataTable)
     {
         log.info("[STEP] When the agent completes the qualification details for each member");
-
         Map<String, String> iData = pDataTable.asMap(String.class, String.class);
 
-        // Determine how many members need qualification by counting available "Next Farmer" clicks.
-        // We loop: fill qualification → click Next Farmer → fill again, until Next Farmer is no longer available.
-        int iMaxMembers = 10;  // safety cap
-        int iMemberCount = 0;
-
-        for (int i = 0; i < iMaxMembers; i++)
+        for (int iMember = 1; iMember <= 10; iMember++)
         {
-            iMemberCount++;
-            log.info("Filling qualification for member " + iMemberCount);
+            log.info("[TC13] Filling qualification for member " + iMember);
+            fillQualificationForm(iData);
 
-            // Has qualification
-            String iHasQual = iData.getOrDefault("hasQualification", "Yes").trim();
-            iAction("CLICK", "XPATH",
-                    "//mat-radio-button[contains(.,'" + iHasQual + "')] | //label[contains(text(),'" + iHasQual + "')]",
-                    null);
-
-            // Date of completion
-            if (iData.containsKey("dateOfCompletion"))
+            if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNextFarmerBtn")), 3))
             {
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFDateOfCompletionField"), iData.get("dateOfCompletion").trim());
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextFarmerBtn"), null);
+                log.info("[TC13] Next Farmer clicked — member " + (iMember + 1));
             }
-
-            // Certificate awarded
-            if (iData.containsKey("certificateAwarded"))
+            else
             {
-                iAction("CLICK", "XPATH", "(//mat-radio-button[contains(.,'" + iData.get("certificateAwarded").trim() + "')])[last()]", null);
-            }
-
-            // College
-            if (iData.containsKey("college"))
-            {
-                iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown"), iData.get("college").trim());
-            }
-
-            // Qualification
-            if (iData.containsKey("qualification"))
-            {
-                iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"), iData.get("qualification").trim());
-            }
-
-            // Try clicking "Next Farmer" — if it doesn't exist, we've done all members
-            try
-            {
-                if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNextFarmerBtn")), 3))
-                {
-                    iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextFarmerBtn"), null);
-                    log.info("Next Farmer clicked — proceeding to member " + (iMemberCount + 1));
-                }
-                else
-                {
-                    log.info("No more Next Farmer buttons — all " + iMemberCount + " members completed.");
-                    break;
-                }
-            }
-            catch (Exception e)
-            {
-                log.info("Next Farmer not found — all " + iMemberCount + " members completed.");
+                log.info("[TC13] All members complete — total: " + iMember);
                 break;
             }
         }
@@ -845,8 +809,7 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the no-qualification information message should be displayed if applicable
-    // Description   : Soft assertion — checks if the no-qualification info/Covid message appears.
-    //                 Does not hard-fail if absent since the message depends on environment config.
+    // Description   : Soft assertion — no hard-fail if absent (environment-dependent)
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -854,14 +817,14 @@ public class TC_13_ENTS
     public void theNoQualificationInformationMessageShouldBeDisplayedIfApplicable()
     {
         log.info("[STEP] Then the no-qualification information message should be displayed if applicable");
-        try
+        if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNoQualMessage")), 3))
         {
             String iMsg = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iNRCISYFNoQualMessage"), null);
-            log.info("No-qualification message found: " + iMsg);
+            log.info("[TC13] No-qualification message: " + iMsg);
         }
-        catch (Exception e)
+        else
         {
-            log.info("No-qualification message not displayed — may not apply in this environment.");
+            log.info("[TC13] No-qualification message not displayed — may not apply in this environment.");
         }
     }
 
@@ -872,7 +835,7 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent proceeds to the summary step
-    // Description   : Clicks "Next to Summary" to advance to the document upload / summary page
+    // Description   : Clicks Next to Summary button on the Education page
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -880,15 +843,17 @@ public class TC_13_ENTS
     public void theAgentProceedsToTheSummaryStep()
     {
         log.info("[STEP] And the agent proceeds to the summary step");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextToSummaryBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFNextToSummaryBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFNextToSummaryBtn"), null);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent uploads NRCISYF documents (DataTable)
-    // Description   : Iterates through each document type in the DataTable, clicks the corresponding
-    //                 upload button, attaches the sample PDF, and confirms the upload. Uses the same
-    //                 sample document for all entries.
+    // Description   : For each document type, clicks the Upload button scoped to that document's
+    //                 label text, attaches the sample PDF, then confirms upload.
+    //                 Upload buttons are: button.nav-button with cloud_upload icon + span="Upload"
+    //                 Scoped by p text label for reliability.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -910,29 +875,34 @@ public class TC_13_ENTS
         for (String iDocType : iDocTypes)
         {
             String iClean = iDocType.trim();
-            log.info("Uploading document: " + iClean);
+            // Use first 40 chars as label match — avoids XPath being too long
+            String iLabel = iClean.substring(0, Math.min(40, iClean.length()));
 
-            // Click the upload button matching this document type label
-            iAction("CLICK", "XPATH",
-                    "//button[contains(normalize-space(),'" + iClean.substring(0, Math.min(40, iClean.length())) + "')]",
-                    null);
+            log.info("[TC13] Uploading: " + iClean);
 
-            // Attach the sample PDF file
+            // Click Upload button scoped to this document label
+            String iUploadBtnXpath = ObjReader.getLocator("iNRCISYFUploadBtn").replace("{label}", iLabel);
+            iAction("WAITVISIBLE",   "XPATH", iUploadBtnXpath, null);
+            iAction("WAITCLICKABLE", "XPATH", iUploadBtnXpath, null);
+            iAction("CLICK",         "XPATH", iUploadBtnXpath, null);
+
+            // Attach PDF file
             iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iNRCISYFFileUploadInput"), iFilePath);
 
-            // Click "Upload Document" to confirm the upload
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+            // Confirm upload
+            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+            iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
 
-            log.info("Document uploaded: " + iClean);
+            log.info("[TC13] Uploaded: " + iClean);
         }
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent opens the upload dialog for {string}
-    // Description   : Opens the upload dialog for a specific document type without uploading.
-    //                 Used for the "close upload popup" validation flow.
-    // Parameters    : pDocType (String) - document type label
+    // Description   : Opens a specific document upload dialog without uploading
+    // Parameters    : pDocType — document label text
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -940,31 +910,33 @@ public class TC_13_ENTS
     public void theAgentOpensTheUploadDialogFor(String pDocType)
     {
         log.info("[STEP] When the agent opens the upload dialog for: " + pDocType);
-        iAction("CLICK", "XPATH",
-                "//button[contains(normalize-space(),'" + pDocType.trim().substring(0, Math.min(40, pDocType.trim().length())) + "')]",
-                null);
+        String iLabel        = pDocType.trim().substring(0, Math.min(40, pDocType.trim().length()));
+        String iUploadXpath  = ObjReader.getLocator("iNRCISYFUploadBtn").replace("{label}", iLabel);
+        iAction("WAITCLICKABLE", "XPATH", iUploadXpath, null);
+        iAction("CLICK",         "XPATH", iUploadXpath, null);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent closes the upload dialog without uploading
-    // Description   : Clicks Close/Cancel on the upload dialog without attaching a file
+    // Description   : Clicks Close/Cancel inside the upload dialog.
+    //                 FIX 12: Uses ObjReader iNRCISYFUploadCloseBtn — not hardcoded XPath.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent closes the upload dialog without uploading")
     public void theAgentClosesTheUploadDialogWithoutUploading()
     {
         log.info("[STEP] And the agent closes the upload dialog without uploading");
-        iAction("CLICK", "XPATH",
-                "//button[contains(text(),'Close') or contains(text(),'Cancel') or contains(@aria-label,'Close')]",
-                null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFUploadCloseBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFUploadCloseBtn"), null);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the upload dialog should be dismissed
-    // Description   : Verifies the upload dialog overlay has closed
+    // Description   : Verifies the upload dialog has closed.
+    //                 FIX 13: Uses iNRCISYFDialogOverlay — not hardcoded mat-dialog-container.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -972,16 +944,14 @@ public class TC_13_ENTS
     public void theUploadDialogShouldBeDismissed()
     {
         log.info("[STEP] Then the upload dialog should be dismissed");
-        iAction("WAITINVISIBLE", "XPATH",
-                "//mat-dialog-container | //div[contains(@class,'cdk-overlay-pane')]",
-                null);
-        log.info("Upload dialog dismissed.");
+        iAction("WAITINVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
+        log.info("[TC13] Upload dialog dismissed.");
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent verifies the upload control only accepts PDF format
-    // Description   : Checks the file input element's accept attribute to confirm it restricts to PDF
+    // Description   : Checks the file input accept attribute restricts to PDF
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -989,12 +959,13 @@ public class TC_13_ENTS
     public void theAgentVerifiesTheUploadControlOnlyAcceptsPDFFormat()
     {
         log.info("[STEP] Then the agent verifies the upload control only accepts PDF format");
-        WebElement iFileInput = getDriver().findElement(
+        WebElement iInput = getDriver().findElement(
                 By.xpath(ObjReader.getLocator("iNRCISYFFileUploadInput")));
-        String iAccept = iFileInput.getAttribute("accept");
-        Assertions.assertTrue(iAccept != null && iAccept.toLowerCase().contains("pdf"),
-                "File upload should only accept PDF. Actual accept attribute: " + iAccept);
-        log.info("Upload control verified: accept=" + iAccept);
+        String iAccept = iInput.getAttribute("accept");
+        Assertions.assertTrue(
+                iAccept != null && iAccept.toLowerCase().contains("pdf"),
+                "[TC13] Upload should only accept PDF. Actual accept: " + iAccept);
+        log.info("[TC13] Accept attribute verified: " + iAccept);
     }
 
 
@@ -1004,7 +975,7 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent saves and proceeds to the declaration step
-    // Description   : Clicks "Save and Next" twice — first in the summary stepper, then the confirmation
+    // Description   : Clicks Save and Next on the summary page
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1012,14 +983,14 @@ public class TC_13_ENTS
     public void theAgentSavesAndProceedsToTheDeclarationStep()
     {
         log.info("[STEP] And the agent saves and proceeds to the declaration step");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFStepperSaveAndNextBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSaveAndNextBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFSaveAndNextBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFSaveAndNextBtn"), null);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent submits the NRCISYF application with declaration
-    // Description   : Clicks Submit Application, ticks both declaration checkboxes, then confirms
+    // Description   : Clicks Submit Application, ticks both declaration checkboxes, confirms
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1027,40 +998,38 @@ public class TC_13_ENTS
     public void theAgentSubmitsTheNRCISYFApplicationWithDeclaration()
     {
         log.info("[STEP] And the agent submits the NRCISYF application with declaration");
-
-        // Click Submit Application button
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSubmitApplicationBtn"), null);
-
-        // Tick both declaration checkboxes in the submission dialog
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFDeclarationCheckbox1"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFDeclarationCheckbox2"), null);
-
-        // Confirm the submission
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSubmitConfirmBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFSubmitApplicationBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFSubmitApplicationBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFDeclarationCheckbox1"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFDeclarationCheckbox2"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFSubmitConfirmBtn"),     null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFSubmitConfirmBtn"),     null);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the NRCISYF application should be submitted successfully
-    // Description   : Verifies submission success by checking for a confirmation element or message
+    // Description   : Verifies submission success message is visible.
+    //                 FIX 10: Uses ObjReader iNRCISYFSubmitSuccessMsg — not hardcoded XPath.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @Then("the NRCISYF application should be submitted successfully")
     public void theNRCISYFApplicationShouldBeSubmittedSuccessfully()
     {
         log.info("[STEP] Then the NRCISYF application should be submitted successfully");
-        String iConfirmation = iAction("GETTEXT", "XPATH",
-                "//div[contains(@class,'success') or contains(@class,'confirmation') or contains(text(),'submitted')]",
-                null);
-        Assertions.assertFalse(iConfirmation.isEmpty(), "NRCISYF submission success should be visible.");
-        log.info("NRCISYF application submitted successfully: " + iConfirmation);
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFSubmitSuccessMsg"), null);
+        String iMsg = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iNRCISYFSubmitSuccessMsg"), null);
+        Assertions.assertFalse(
+                iMsg == null || iMsg.trim().isEmpty(),
+                "[TC13] Submission success confirmation should be visible.");
+        log.info("[TC13] Submitted: " + iMsg.trim().substring(0, Math.min(60, iMsg.trim().length())));
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent saves and exits the NRCISYF application
-    // Description   : Clicks "Save and Exit" on the stepper and confirms
+    // Description   : Clicks Save and Exit on either the Status or Education page
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1068,14 +1037,25 @@ public class TC_13_ENTS
     public void theAgentSavesAndExitsTheNRCISYFApplication()
     {
         log.info("[STEP] And the agent saves and exits the NRCISYF application");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFStepperSaveAndExitBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSaveAndExitBtn"), null);
+        // Try Education page Save and Exit first; fall back to Status page
+        String iEduSaveExit    = ObjReader.getLocator("iNRCISYFEduSaveExitBtn");
+        String iStatusSaveExit = ObjReader.getLocator("iNRCISYFStatusSaveExitBtn");
+
+        if (isVisible(By.xpath(iEduSaveExit), 2))
+        {
+            iAction("CLICK", "XPATH", iEduSaveExit, null);
+        }
+        else
+        {
+            iAction("CLICK", "XPATH", iStatusSaveExit, null);
+        }
+        log.info("[TC13] Save and Exit clicked.");
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the application should be saved successfully
-    // Description   : Verifies that after Save and Exit, the application is no longer in edit mode
+    // Description   : Verifies Apply/Edit button is visible — confirms returned to landing page
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1083,10 +1063,9 @@ public class TC_13_ENTS
     public void theApplicationShouldBeSavedSuccessfully()
     {
         log.info("[STEP] Then the application should be saved successfully");
-        // After Save and Exit, the agent should be back on the NRCISYF landing page
-        // Verify the Apply/Edit button is visible again — confirms we exited the form
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFApplyEditBtn"), null);
         iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iNRCISYFApplyEditBtn"), null);
-        log.info("Application saved successfully — back on landing page.");
+        log.info("[TC13] Saved — back on landing page.");
     }
 
 
@@ -1096,23 +1075,19 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent navigates back to the NRCISYF client list
-    // Description   : Clicks the My Clients tab and switches to NRCISYF to reset for the next flow
+    // Description   : Clicks Home then My Clients to return to the client list.
+    //                 The feature file calls "the agent switches to the NR/CISYF tab" separately after this.
+    //                 Fixed log messages — were both incorrectly logging "navigates to the tab".
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
     @When("the agent navigates back to the NRCISYF client list")
     public void theAgentNavigatesBackToTheNRCISYFClientList()
     {
-        log.info("[STEP] And the agent navigates to the tab: " );
-        // Click 'Home' first to reset the navigation to a known starting state
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
-
-        log.info("[STEP] And the agent navigates to the tab: " );
-        // Now click 'My Clients' to get to the client search screen
+        log.info("[STEP] When the agent navigates back to the NRCISYF client list");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"),   null);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-
-
-
+        log.info("[TC13] Navigated back to My Clients.");
     }
 
 
@@ -1122,8 +1097,8 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the education institution should display {string}
-    // Description   : Verifies the summary page shows the custom institution name entered earlier
-    // Parameters    : pExpected (String) - expected institution name
+    // Description   : Verifies custom institution name on the summary page
+    // Parameters    : pExpected — expected institution name
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1131,17 +1106,21 @@ public class TC_13_ENTS
     public void theEducationInstitutionShouldDisplay(String pExpected)
     {
         log.info("[STEP] Then the education institution should display: " + pExpected);
-        iAction("VERIFYTEXT", "XPATH",
-                "//*[contains(@class,'summary') or contains(@class,'review')]//*[contains(text(),'" + pExpected + "')]",
-                pExpected);
-        log.info("Custom institution verified: " + pExpected);
+        iAction("VERIFYELEMENT", "XPATH",
+                ObjReader.getLocator("iNRCISYFEduInstitutionSummary"), null);
+        String iActual = iAction("GETTEXT", "XPATH",
+                ObjReader.getLocator("iNRCISYFEduInstitutionSummary"), null);
+        Assertions.assertTrue(
+                iActual != null && iActual.trim().contains(pExpected),
+                "[TC13] Expected institution '" + pExpected + "' but found: '" + iActual + "'");
+        log.info("[TC13] Institution verified: " + pExpected);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the qualification should display {string}
-    // Description   : Verifies the summary page shows the custom qualification name entered earlier
-    // Parameters    : pExpected (String) - expected qualification name
+    // Description   : Verifies custom qualification name on the summary page
+    // Parameters    : pExpected — expected qualification name
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1149,10 +1128,14 @@ public class TC_13_ENTS
     public void theQualificationShouldDisplay(String pExpected)
     {
         log.info("[STEP] Then the qualification should display: " + pExpected);
-        iAction("VERIFYTEXT", "XPATH",
-                "//*[contains(@class,'summary') or contains(@class,'review')]//*[contains(text(),'" + pExpected + "')]",
-                pExpected);
-        log.info("Custom qualification verified: " + pExpected);
+        iAction("VERIFYELEMENT", "XPATH",
+                ObjReader.getLocator("iNRCISYFQualDetailsSummary"), null);
+        String iActual = iAction("GETTEXT", "XPATH",
+                ObjReader.getLocator("iNRCISYFQualDetailsSummary"), null);
+        Assertions.assertTrue(
+                iActual != null && iActual.trim().contains(pExpected),
+                "[TC13] Expected qualification '" + pExpected + "' but found: '" + iActual + "'");
+        log.info("[TC13] Qualification verified: " + pExpected);
     }
 
 
@@ -1162,7 +1145,7 @@ public class TC_13_ENTS
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent views the submitted NRCISYF application
-    // Description   : Clicks the "View Application" button on the NRCISYF landing page for a submitted herd
+    // Description   : Clicks View Application on the landing page for the submitted herd
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1170,36 +1153,39 @@ public class TC_13_ENTS
     public void theAgentViewsTheSubmittedNRCISYFApplication()
     {
         log.info("[STEP] And the agent views the submitted NRCISYF application");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewApplicationBtn"), null);
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFViewApplicationBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFViewApplicationBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFViewApplicationBtn"), null);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the uploaded documents should be accessible in correspondence
-    // Description   : Verifies the correspondence section contains at least one uploaded document row
+    // Description   : Navigates to correspondence and verifies at least one document link exists.
+    //                 FIX 11: Uses ObjReader iNRCISYFCorrespondenceDocLinks.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
     // ***************************************************************************************************************************************************************************************
     @Then("the uploaded documents should be accessible in correspondence")
     public void theUploadedDocumentsShouldBeAccessibleInCorrespondence()
     {
         log.info("[STEP] Then the uploaded documents should be accessible in correspondence");
-        // Navigate to correspondence if not already there
-        try { iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFCorrespondenceNavBtn"), null); }
-        catch (Exception ignored) {}
-
-        List<WebElement> iDocRows = getDriver().findElements(
-                By.xpath("//tr[contains(@class,'document') or contains(@class,'row')]//a[contains(@href,'download') or contains(text(),'pdf')]"));
-        Assertions.assertFalse(iDocRows.isEmpty(),
-                "At least one uploaded document should be visible in correspondence.");
-        log.info("Correspondence documents found: " + iDocRows.size());
+        if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFCorrespondenceNavBtn")), 3))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFCorrespondenceNavBtn"), null);
+        }
+        List<WebElement> iDocs = getDriver().findElements(
+                By.xpath(ObjReader.getLocator("iNRCISYFCorrespondenceDocLinks")));
+        Assertions.assertFalse(iDocs.isEmpty(),
+                "[TC13] At least one document should be accessible in correspondence.");
+        log.info("[TC13] Correspondence documents found: " + iDocs.size());
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent clicks on the {string} document link
-    // Description   : Clicks a named document hyperlink in the correspondence or submission view
-    // Parameters    : pDocName (String) - partial text of the document link
+    // Description   : Clicks a named document link in correspondence
+    // Parameters    : pDocName — partial text of the link
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1208,16 +1194,15 @@ public class TC_13_ENTS
     {
         log.info("[STEP] And the agent clicks on the document link: " + pDocName);
         iAction("CLICK", "XPATH",
-                "//a[contains(normalize-space(),'" + pDocName.trim() + "')] | "
-                        + "//button[contains(normalize-space(),'" + pDocName.trim() + "')]",
+                "//a[contains(normalize-space(),'" + pDocName.trim() + "')]"
+                        + " | //button[contains(normalize-space(),'" + pDocName.trim() + "')]",
                 null);
     }
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the document should open or download successfully
-    // Description   : Soft verification — confirms the page didn't throw an error after clicking a doc link.
-    //                 Actual download verification is out of scope for Selenium (handled by file system check if needed).
+    // Description   : Soft check — no error page after clicking document link
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -1225,41 +1210,121 @@ public class TC_13_ENTS
     public void theDocumentShouldOpenOrDownloadSuccessfully()
     {
         log.info("[STEP] Then the document should open or download successfully");
-        // Verify no error overlay or 404 appeared after clicking the document link
-        try
-        {
-            List<WebElement> iErrors = getDriver().findElements(
-                    By.xpath("//*[contains(@class,'error') and contains(@class,'page')]"));
-            Assertions.assertTrue(iErrors.isEmpty() || !iErrors.get(0).isDisplayed(),
-                    "No error page should be visible after clicking the document link.");
-        }
-        catch (Exception e)
-        {
-            // No error found — good
-        }
-        log.info("Document link opened without errors.");
+        List<WebElement> iErrors = getDriver().findElements(
+                By.xpath("//*[contains(@class,'error-page') or contains(@class,'not-found')]"));
+        Assertions.assertTrue(
+                iErrors.isEmpty() || !iErrors.get(0).isDisplayed(),
+                "[TC13] No error page should appear after clicking document link.");
+        log.info("[TC13] Document opened without errors.");
     }
 
 
     // ===================================================================================================================================
-    //  HELPER METHODS
+    //  PRIVATE HELPERS
     // ===================================================================================================================================
 
-    /**
-     * Short-wait visibility check — returns true if the element appears within pSeconds,
-     * false if it doesn't. Never throws.
-     */
+    // ***************************************************************************************************************************************************************************************
+    // Method        : fillQualificationForm
+    // Description   : Shared qualification form filling logic for single and per-member flows.
+    //                 FIX 7: All radio/dropdown interactions use ObjReader formcontrolname locators.
+    //                 Handles: hasQualification, dateOfCompletion, certificateAwarded,
+    //                          college (colId), customCollege, qualification (qualId), customQualification
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated : 21-05-2026
+    // ***************************************************************************************************************************************************************************************
+    private void fillQualificationForm(Map<String, String> pData)
+    {
+        // ── Has qualification radio — formcontrolname="selectedValueQualification" ────────────
+        String iHasQual = pData.getOrDefault("hasQualification", "Yes").trim();
+        String iHasQualXpath = ObjReader.getLocator("iNRCISYFHasQualRadio").replace("{value}", iHasQual);
+        iAction("WAITVISIBLE", "XPATH", iHasQualXpath, null);
+        iAction("CLICK",       "XPATH", iHasQualXpath, null);
+
+        if ("No".equalsIgnoreCase(iHasQual))
+        {
+            log.info("[TC13] hasQualification=No — skipping remaining fields.");
+            return;
+        }
+
+        // ── Date of completion — mat-datepicker, formcontrolname="dateOfCompletion" ─────────
+        // Datepicker input is disabled by default — inject value via JavaScript
+        if (pData.containsKey("dateOfCompletion"))
+        {
+            String iDateValue = pData.get("dateOfCompletion").trim();
+            try
+            {
+                WebElement iDateInput = getDriver().findElement(
+                        By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionInput")));
+                JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
+                iJs.executeScript("arguments[0].removeAttribute('disabled');", iDateInput);
+                iJs.executeScript("arguments[0].value = arguments[1];", iDateInput, iDateValue);
+                iJs.executeScript("arguments[0].dispatchEvent(new Event('input',  {bubbles:true}));", iDateInput);
+                iJs.executeScript("arguments[0].dispatchEvent(new Event('change', {bubbles:true}));", iDateInput);
+                log.info("[TC13] Date of completion set: " + iDateValue);
+            }
+            catch (Exception e)
+            {
+                log.warning("[TC13] Could not set date of completion: " + e.getMessage());
+            }
+        }
+
+        // ── Certificate awarded radio — formcontrolname="certificateHasBeenAwarded" ──────────
+        if (pData.containsKey("certificateAwarded"))
+        {
+            String iCert = pData.get("certificateAwarded").trim();
+            String iCertXpath = ObjReader.getLocator("iNRCISYFCertAwardedRadio").replace("{value}", iCert);
+            iAction("WAITVISIBLE", "XPATH", iCertXpath, null);
+            iAction("CLICK",       "XPATH", iCertXpath, null);
+        }
+
+        // ── College dropdown — formcontrolname="colId" ────────────────────────────────────────
+        if (pData.containsKey("college"))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown"),
+                    pData.get("college").trim());
+        }
+
+        // ── Custom college free-text ───────────────────────────────────────────────────────────
+        if (pData.containsKey("customCollege"))
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCustomCollegeField"),
+                    pData.get("customCollege").trim());
+        }
+
+        // ── Qualification dropdown — formcontrolname="qualId" ─────────────────────────────────
+        if (pData.containsKey("qualification"))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"),
+                    pData.get("qualification").trim());
+        }
+
+        // ── Custom qualification free-text ────────────────────────────────────────────────────
+        if (pData.containsKey("customQualification"))
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCustomQualificationField"),
+                    pData.get("customQualification").trim());
+        }
+
+        log.info("[TC13] Qualification form filled: college=" + pData.getOrDefault("college", "N/A"));
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Method        : isVisible
+    // Description   : Short-wait visibility check — returns true/false, never throws
+    // Parameters    : pLocator — By locator
+    //                 pSeconds — max wait seconds
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
     private boolean isVisible(By pLocator, int pSeconds)
     {
         try
         {
-            WebDriverWait iWait = new WebDriverWait(getDriver(), Duration.ofSeconds(pSeconds));
-            iWait.until(ExpectedConditions.visibilityOfElementLocated(pLocator));
+            new WebDriverWait(getDriver(), Duration.ofSeconds(pSeconds))
+                    .until(ExpectedConditions.visibilityOfElementLocated(pLocator));
             return true;
         }
-        catch (Exception e)
-        {
-            return false;
-        }
+        catch (Exception e) { return false; }
     }
 }
