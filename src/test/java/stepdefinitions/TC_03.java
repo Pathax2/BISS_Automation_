@@ -685,6 +685,9 @@ public class TC_03 {
         if (isVisible(By.xpath(ObjReader.getLocator("iContinueBtn")), 3)) {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iContinueBtn"), null);
         }
+
+
+
     }
 
 
@@ -781,6 +784,9 @@ public class TC_03 {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iDeleteDraftBtn"), null);
             iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"),null);
             log.info("Existing draft deleted.");
+            if (isVisible(By.xpath("//*[@id=\"mat-mdc-checkbox-2\"]"), 3)) {
+                iAction("CLICK", "XPATH", "//*[@id=\"mat-mdc-checkbox-2\"]", null);
+            }
         } catch (Exception e) {
             log.info("No existing draft found — continuing to start new application.");
         }
@@ -802,6 +808,9 @@ public class TC_03 {
         if (isVisible(By.xpath(ObjReader.getLocator("iContinueBtn")), 5))
         {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iContinueBtn"), null);
+        }
+        if (isVisible(By.xpath("//*[@id=\"mat-mdc-checkbox-2\"]"), 3)) {
+            iAction("CLICK", "XPATH", "//*[@id=\"mat-mdc-checkbox-2\"]", null);
         }
     }
 
@@ -832,7 +841,7 @@ public class TC_03 {
     public void theAgentSelectsInTheActiveFarmerStep(String pActivity)
     {
         log.info("[STEP] When the agent selects in the Active Farmer step: " + pActivity);
-        String iHay = String.format("//mat-checkbox[.//label[contains(normalize-space(.),'Making Hay/Silage/Haylage')]]//input", pActivity);
+        String iHay = String.format("//*[@id=\"mat-mdc-checkbox-2\"]", pActivity);
 
         if (isVisible(By.xpath(iHay), 3))
         {
@@ -2380,10 +2389,11 @@ public class TC_03 {
     // Description   : Checks the Terms and Conditions checkbox on the submission page
     // ***************************************************************************************************************************************************************************************
     @And("the agent accepts the Terms and Conditions")
-    public void theAgentAcceptsTheTermsAndConditions() {
+    public void theAgentAcceptsTheTermsAndConditions() throws InterruptedException {
         log.info("[STEP] And the agent accepts the Terms and Conditions");
         // The Submit button stays disabled until this checkbox is ticked —
         // the farmer is legally declaring the information they've provided is correct
+        Thread.sleep(3000);
         iAction("CHECKBOX", "XPATH", ObjReader.getLocator("termsAndConditions"), "CHECK");
     }
 
