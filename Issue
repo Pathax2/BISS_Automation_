@@ -1,7 +1,72 @@
-<mat-card-content _ngcontent-ng-c546099828="" class="mat-mdc-card-content center-vertically pt-2 row"><div _ngcontent-ng-c546099828="" style="width: 50%;"><p _ngcontent-ng-c546099828="" style="text-align: right; margin-right: 10px;"> Upload Invoice/Receipt </p></div><div _ngcontent-ng-c546099828="" style="width: 50%;"><button _ngcontent-ng-c546099828="" class="nav-button ng-star-inserted" style="margin-top: -10px;"><mat-icon _ngcontent-ng-c546099828="" role="img" class="mat-icon notranslate icon-white material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">cloud_upload</mat-icon><span _ngcontent-ng-c546099828="" style="color: white; margin-left: 5px;">Upload</span></button><!----><!----></div></mat-card-content>
+// ***************************************************************************************************************************************************************************************
+// Step          : the agent uploads NRCISYF documents (DataTable)
+// Description   : Iterates through each document type in the DataTable, clicks the corresponding
+//                 Upload button via JS (advisory notice div above Invoice/Bank Statement buttons
+//                 intercepts normal clicks), attaches the sample PDF, then confirms the upload.
+//
+//                 DOM: all 4 buttons share identical structure —
+//                   mat-card-content
+//                     div[width:50%] → p (label text)
+//                     div[width:50%] → button.nav-button → span "Upload"
+//                 Label is in the <p>, NOT in the button. Locator scopes button
+//                 to its parent mat-card-content via the label <p> text.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 31-03-2026
+// ***************************************************************************************************************************************************************************************
+@When("the agent uploads NRCISYF documents")
+public void theAgentUploadsNRCISYFDocuments(DataTable pDataTable)
+{
+   log.info("[STEP] When the agent uploads NRCISYF documents");
 
-<mat-card-content _ngcontent-ng-c546099828="" class="mat-mdc-card-content center-vertically row"><div _ngcontent-ng-c546099828="" style="width: 50%;"><p _ngcontent-ng-c546099828="" style="text-align: right; margin-right: 10px;"> Upload Bank Statement Extract with Invoice/Receipt Passing through </p></div><div _ngcontent-ng-c546099828="" style="width: 50%;"><button _ngcontent-ng-c546099828="" class="nav-button ng-star-inserted" style="margin-top: -10px;"><mat-icon _ngcontent-ng-c546099828="" role="img" class="mat-icon notranslate icon-white material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">cloud_upload</mat-icon><span _ngcontent-ng-c546099828="" style="color: white; margin-left: 5px;">Upload</span></button><!----><!----></div></mat-card-content>
+   String iFilePath = System.getProperty("nrcisyf.upload.path",
+           System.getProperty("user.dir")
+                   + java.io.File.separator + "src"
+                   + java.io.File.separator + "test"
+                   + java.io.File.separator + "resources"
+                   + java.io.File.separator + "Test_Data"
+                   + java.io.File.separator + "Cover_Letter.pdf");
 
-<mat-card-content _ngcontent-ng-c546099828="" class="mat-mdc-card-content center-vertically row"><div _ngcontent-ng-c546099828="" style="width: 50%;"><p _ngcontent-ng-c546099828="" style="text-align: right; margin-right: 10px;"> Please upload the relevant Agricultural Qualification at Level 6 or equivalent on the National Framework of Qualifications certificate or Confirmation of Education Form </p></div><div _ngcontent-ng-c546099828="" style="width: 50%;"><button _ngcontent-ng-c546099828="" class="nav-button ng-star-inserted" style="margin-top: -10px;"><mat-icon _ngcontent-ng-c546099828="" role="img" class="mat-icon notranslate icon-white material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">cloud_upload</mat-icon><span _ngcontent-ng-c546099828="" style="color: white; margin-left: 5px;">Upload</span></button><!----><!----></div></mat-card-content>
+   List<String> iDocTypes = pDataTable.asList();
 
-<mat-card-content _ngcontent-ng-c546099828="" class="mat-mdc-card-content center-vertically row"><div _ngcontent-ng-c546099828="" style="width: 50%;"><p _ngcontent-ng-c546099828="" style="text-align: right; margin-right: 10px;">Personal and Sensitive Documentation</p></div><div _ngcontent-ng-c546099828="" style="width: 50%;"><button _ngcontent-ng-c546099828="" class="nav-button mt-2 ng-star-inserted"><mat-icon _ngcontent-ng-c546099828="" role="img" class="mat-icon notranslate icon-white material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">cloud_upload</mat-icon><span _ngcontent-ng-c546099828="" style="color: white; margin-left: 5px;">Upload</span></button><!----><!----></div></mat-card-content>
+   for (String iDocType : iDocTypes)
+   {
+       String iClean = iDocType.trim();
+       // Use first 40 chars as the label match — avoids XPath being too long
+       // while still uniquely identifying each upload section
+       String iLabel = iClean.substring(0, Math.min(40, iClean.length()));
+
+       log.info("[TC13] Uploading: " + iClean);
+
+       // ── JS click the Upload button scoped to this document's label ────────────────────
+       // Invoice/Receipt and Bank Statement buttons are preceded by an advisory notice div
+       // which intercepts normal Selenium clicks. JS click bypasses this entirely.
+       // scrollIntoView first ensures the button is in the viewport before clicking.
+       String iUploadBtnXpath = ObjReader.getLocator("iNRCISYFUploadBtn")
+               .replace("{label}", iLabel);
+       iAction("WAITVISIBLE", "XPATH", iUploadBtnXpath, null);
+       WebElement iUploadBtn = getDriver().findElement(By.xpath(iUploadBtnXpath));
+       ((JavascriptExecutor) getDriver())
+               .executeScript("arguments[0].scrollIntoView({block:'center'});", iUploadBtn);
+       ((JavascriptExecutor) getDriver())
+               .executeScript("arguments[0].click();", iUploadBtn);
+
+       // ── Attach the PDF file (input type=file inside the upload dialog) ──────────────
+       iAction("UPLOADFILE", "XPATH",
+               ObjReader.getLocator("iNRCISYFFileUploadInput"), iFilePath);
+
+       // ── Confirm the upload ──────────────────────────────────────────────────────────
+       iAction("WAITVISIBLE",   "XPATH",
+               ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+       iAction("WAITCLICKABLE", "XPATH",
+               ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+       iAction("CLICK",         "XPATH",
+               ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+
+       // ── Wait for dialog to close before next upload ─────────────────────────────────
+       iAction("WAITINVISIBLE", "XPATH",
+               ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
+
+       log.info("[TC13] Uploaded: " + iClean);
+   }
+}
