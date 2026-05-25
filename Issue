@@ -5,7 +5,14 @@
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent resets all category selections
     // Description   : Unchecks all category checkboxes in the dialog to start from a clean slate.
-    //                 Iterates through all checkboxes and unchecks any that are currently selected.
+    //
+    //                 DOM: mat-checkbox host carries class "mat-mdc-checkbox-checked" when ticked.
+    //                      Native input carries class "mdc-checkbox--selected".
+    //                      A mat-mdc-checkbox-touch-target div covers the click area — clicking
+    //                      the host or label can be intercepted by it.
+    //                 Fix: JS click on the native input bypasses the touch-target entirely.
+    //                      State verified by rechecking mat-mdc-checkbox-checked on host after click.
+    //
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -14,38 +21,54 @@
     {
         log.info("[STEP] And the agent resets all category selections");
 
-        List<WebElement> iCheckboxes = getDriver().findElements(By.cssSelector("mat-checkbox"));
+        List<WebElement> iCheckboxes = getDriver().findElements(
+                By.xpath(ObjReader.getLocator("iNRCISYFCategoryCheckboxes")));
 
         if (iCheckboxes.isEmpty())
         {
-            log.warning("[TC13] No category checkboxes found during reset.");
+            log.warning("[TC13] No category checkboxes found — dialog may not be open.");
             return;
         }
 
+        JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
         int iUnchecked = 0;
 
-        for (WebElement iCb : iCheckboxes)
+        for (WebElement iHost : iCheckboxes)
         {
             try
             {
-                WebElement iInput = iCb.findElement(By.xpath(".//input[@type='checkbox']"));
+                // State check — mat-mdc-checkbox-checked class is the reliable Angular indicator.
+                // aria-checked is NOT present on the host in this DOM — class is the only signal.
+                String iClass    = iHost.getAttribute("class");
+                boolean iChecked = iClass != null && iClass.contains("mat-mdc-checkbox-checked");
 
-                if (iInput.isSelected())
+                if (!iChecked)
                 {
-                    try
-                    {
-                        Thread.sleep(500);
-                        iCb.click();
-                        Thread.sleep(500);
-                    }
-                    catch (Exception e)
-                    {
-                        ((JavascriptExecutor) getDriver()).executeScript("arguments[0].click();", iCb);
-                    }
-
-                    iUnchecked++;
-                    log.info("[TC13] Unchecked: " + iCb.getText().trim().replaceAll("\\s+", " "));
+                    log.info("[TC13] Already unchecked — skipping: "
+                            + iHost.getText().trim().replaceAll("\\s+", " "));
+                    continue;
                 }
+
+                // JS click on native input bypasses mat-mdc-checkbox-touch-target interception
+                WebElement iNative = iHost.findElement(
+                        By.xpath(".//input[@type='checkbox']"));
+                iJs.executeScript("arguments[0].click();", iNative);
+
+                // Verify state flipped — FluentWait up to 3s, poll every 300ms
+                new org.openqa.selenium.support.ui.FluentWait<>(getDriver())
+                        .withTimeout(java.time.Duration.ofSeconds(3))
+                        .pollingEvery(java.time.Duration.ofMillis(300))
+                        .ignoring(org.openqa.selenium.StaleElementReferenceException.class)
+                        .until(d ->
+                        {
+                            String iUpdatedClass = iHost.getAttribute("class");
+                            return iUpdatedClass != null
+                                    && !iUpdatedClass.contains("mat-mdc-checkbox-checked");
+                        });
+
+                iUnchecked++;
+                log.info("[TC13] Unchecked: "
+                        + iHost.getText().trim().replaceAll("\\s+", " "));
             }
             catch (Exception e)
             {
@@ -53,85 +76,116 @@
             }
         }
 
-        log.info("[TC13] Category reset complete. Unchecked " + iUnchecked + " of " + iCheckboxes.size());
+        log.info("[TC13] Reset complete — unchecked " + iUnchecked
+                + " of " + iCheckboxes.size());
     }
 
 
--------------------------
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent selects NRCISYF categories (DataTable)
-    // Description   : Iterates through the DataTable list of category labels and clicks each one.
-    //                 Checks the current state before clicking to avoid toggling off an already-selected category.
+    // Description   : Selects each category in the DataTable by clicking its native input via JS.
+    //
+    //                 DOM findings:
+    //                   - aria-checked does NOT exist on the mat-checkbox host — class is the signal.
+    //                   - CHECKBOX action on a label always returns isSelected()=false (label is not
+    //                     an input) — replaced with JS click on native input.
+    //                   - Touch-target div covers the click area — JS click bypasses it reliably.
+    //                   - State verified post-click via FluentWait on mat-mdc-checkbox-checked class.
+    //
+    //                 Resolves formcontrolname from A./B./C. prefix — immune to label text changes.
+    //
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent selects NRCISYF categories")
-    public void theAgentSelectsNRCISYFCategories(DataTable pDataTable) throws InterruptedException {
+    public void theAgentSelectsNRCISYFCategories(DataTable pDataTable)
+    {
         log.info("[STEP] And the agent selects NRCISYF categories");
 
+        JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
         List<String> iCategories = pDataTable.asList();
 
         for (String iCategory : iCategories)
         {
             String iClean = iCategory.trim();
-            log.info("[TC13] Selecting category: " + iClean);
+            log.info("[TC13] Selecting: " + iClean);
 
-            // ── Resolve formcontrolname from category label ───────────────────────────────────
-            // Using formcontrolname makes the locator immune to label text changes
-            String iFormControlName;
-            if      (iClean.startsWith("A.")) iFormControlName = "nrYoungFarmer";
-            else if (iClean.startsWith("B.")) iFormControlName = "nrNewFarmer";
-            else if (iClean.startsWith("C.")) iFormControlName = "nrCisyf";
+            // ── Resolve ObjReader keys from A./B./C. prefix ───────────────────────────────────
+            // formcontrolname-based keys are immune to label text changes in future releases
+            String iHostKey;
+            String iInputXpath;
+
+            if (iClean.startsWith("A."))
+            {
+                iHostKey    = "iNRCISYFCatACheckbox";
+                iInputXpath = ObjReader.getLocator("iNRCISYFCatAInput");
+            }
+            else if (iClean.startsWith("B."))
+            {
+                iHostKey    = "iNRCISYFCatBCheckbox";
+                iInputXpath = ObjReader.getLocator("iNRCISYFCatBInput");
+            }
+            else if (iClean.startsWith("C."))
+            {
+                iHostKey    = "iNRCISYFCatCCheckbox";
+                iInputXpath = ObjReader.getLocator("iNRCISYFCatCInput");
+            }
             else
             {
-                // Fallback: match by label text directly
-                iFormControlName = null;
-                log.warning("[TC13] Category label not prefixed with A/B/C — falling back to text match: " + iClean);
+                log.warning("[TC13] No A/B/C prefix — skipping unknown category: " + iClean);
+                continue;
             }
 
-            String iClickXpath;
-            if (iFormControlName != null)
-            {
-                // Primary: click the mdc-label scoped to formcontrolname
-                // Label click fires Angular binding without ripple interception
-                iClickXpath = "//mat-checkbox[@formcontrolname='" + iFormControlName + "']//label[contains(@class,'mdc-label')]";
-            }
-            else
-            {
-                // Fallback: match by label text
-                iClickXpath = "//label[contains(normalize-space(),'" + iClean + "')]";
-            }
+            String iHostXpath = ObjReader.getLocator(iHostKey);
 
-            // ── Check current state — skip if already selected ────────────────────────────────
+            // ── Wait for host to be present and visible ───────────────────────────────────────
+            iAction("WAITVISIBLE", "XPATH", iHostXpath, null);
+
+            // ── State check via mat-mdc-checkbox-checked class ────────────────────────────────
+            // aria-checked is NOT present in the DOM — class is the only reliable state signal
             try
             {
-                String iCheckXpath = (iFormControlName != null)
-                        ? "//mat-checkbox[@formcontrolname='" + iFormControlName + "']"
-                        : "//mat-checkbox[.//label[contains(normalize-space(),'" + iClean + "')]]";
+                WebElement iHost  = getDriver().findElement(By.xpath(iHostXpath));
+                String     iClass = iHost.getAttribute("class");
 
-                WebElement iMatCheckbox = getDriver().findElement(By.xpath(iCheckXpath));
-                String iAriaChecked = iMatCheckbox.getAttribute("aria-checked");
-
-                if ("true".equalsIgnoreCase(iAriaChecked))
+                if (iClass != null && iClass.contains("mat-mdc-checkbox-checked"))
                 {
-                    log.info("[TC13] Category '" + iClean + "' already selected — skipping.");
+                    log.info("[TC13] '" + iClean + "' already selected — skipping.");
                     continue;
                 }
             }
             catch (Exception e)
             {
-                log.info("[TC13] Could not read aria-checked for '" + iClean + "' — proceeding to click.");
+                log.info("[TC13] Could not read class for '" + iClean + "' — proceeding to click.");
             }
 
-            // ── Click the label ───────────────────────────────────────────────────────────────
-            iAction("WAITVISIBLE",   "XPATH", iClickXpath, null);
-            iAction("WAITCLICKABLE", "XPATH", iClickXpath, null);
-            Thread.sleep(500);
-            iAction("CHECKBOX", "XPATH", iClickXpath, "CHECK");
-            //iAction("CLICK",         "XPATH", iClickXpath, null);
-            log.info("[TC13] Selected: " + iClean);
+            // ── JS click on native input — bypasses mat-mdc-checkbox-touch-target ─────────────
+            // Clicking the label or host can be intercepted by the touch-target div.
+            // JS click on the native input fires Angular's change detection reliably.
+            WebElement iNative = getDriver().findElement(By.xpath(iInputXpath));
+            iJs.executeScript("arguments[0].scrollIntoView({block:'center'});", iNative);
+            iJs.executeScript("arguments[0].click();", iNative);
+
+            // ── Verify state flipped to checked within 3s ────────────────────────────────────
+            try
+            {
+                WebElement iHost = getDriver().findElement(By.xpath(iHostXpath));
+                new org.openqa.selenium.support.ui.FluentWait<>(getDriver())
+                        .withTimeout(java.time.Duration.ofSeconds(3))
+                        .pollingEvery(java.time.Duration.ofMillis(300))
+                        .ignoring(org.openqa.selenium.StaleElementReferenceException.class)
+                        .until(d ->
+                        {
+                            String iUpdatedClass = iHost.getAttribute("class");
+                            return iUpdatedClass != null
+                                    && iUpdatedClass.contains("mat-mdc-checkbox-checked");
+                        });
+                log.info("[TC13] Selected and verified: " + iClean);
+            }
+            catch (Exception e)
+            {
+                log.warning("[TC13] Could not verify selection for '" + iClean
+                        + "' — may not have registered: " + e.getMessage());
+            }
         }
     }
-----------------
-<div id="cdk-overlay-0" class="cdk-overlay-pane mat-mdc-dialog-panel" style="max-height: 90vh; position: static;"><div tabindex="0" class="cdk-visually-hidden cdk-focus-trap-anchor" aria-hidden="true"></div><mat-dialog-container tabindex="-1" class="mat-mdc-dialog-container mdc-dialog cdk-dialog-container mat-mdc-dialog-container-with-actions mdc-dialog--open" id="mat-mdc-dialog-0" role="dialog" aria-modal="true" aria-labelledby="mat-mdc-dialog-title-0" style="--mat-dialog-transition-duration: 150ms;"><div class="mat-mdc-dialog-inner-container mdc-dialog__container"><div class="mat-mdc-dialog-surface mdc-dialog__surface"><app-nr-cisyf-category-select-popup _nghost-ng-c3068956607="" class="mat-mdc-dialog-component-host ng-star-inserted"><mat-card-title _ngcontent-ng-c3068956607="" mat-dialog-title="" class="mat-mdc-card-title mat-mdc-dialog-title mdc-dialog__title header" id="mat-mdc-dialog-title-0"> Select Category
-</mat-card-title><hr _ngcontent-ng-c3068956607="" style="margin: 1em;"><div _ngcontent-ng-c3068956607="" mat-dialog-content="" class="mat-mdc-dialog-content mdc-dialog__content" style="overflow: visible;"><p _ngcontent-ng-c3068956607="" style="text-align: left; color: black;"> Please tick the appropriate box(es) to indicate the categories you wish to apply under. Helpful information on each category can be accessed by clicking the <mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate icon material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">info</mat-icon> icons below. Applicants who meet the definition of a 'Young Farmer' are eligible to apply under both 'A. National Reserve (as Young Farmer)' and 'C. Complementary Income Support for Young Farmers'. </p></div><div _ngcontent-ng-c3068956607="" class="pt-3" style="margin: 0px 20px;"><form _ngcontent-ng-c3068956607="" novalidate="" class="ng-untouched ng-pristine ng-valid"><div _ngcontent-ng-c3068956607="" class="center-vertically"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate icon material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">info</mat-icon><mat-checkbox _ngcontent-ng-c3068956607="" formcontrolname="nrYoungFarmer" class="mat-mdc-checkbox mat-accent ng-untouched ng-pristine ng-valid mat-mdc-checkbox-checked" id="mat-mdc-checkbox-1"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-checkbox"><div class="mat-mdc-checkbox-touch-target"></div><input type="checkbox" class="mdc-checkbox__native-control mdc-checkbox--selected" id="mat-mdc-checkbox-1-input" tabindex="0"><div class="mdc-checkbox__ripple"></div><div class="mdc-checkbox__background"><svg focusable="false" viewBox="0 0 24 24" aria-hidden="true" class="mdc-checkbox__checkmark"><path fill="none" d="M1.73,12.91 8.1,19.28 22.79,4.59" class="mdc-checkbox__checkmark-path"></path></svg><div class="mdc-checkbox__mixedmark"></div></div><div mat-ripple="" class="mat-ripple mat-mdc-checkbox-ripple mat-mdc-focus-indicator"></div></div><label class="mdc-label" for="mat-mdc-checkbox-1-input"> A. National Reserve (as Young Farmer) </label></div></mat-checkbox></div><!----><!----><div _ngcontent-ng-c3068956607="" class="center-vertically"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate icon material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">info</mat-icon><mat-checkbox _ngcontent-ng-c3068956607="" formcontrolname="nrNewFarmer" class="mat-mdc-checkbox mat-accent ng-untouched ng-pristine ng-valid" id="mat-mdc-checkbox-2"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-checkbox"><div class="mat-mdc-checkbox-touch-target"></div><input type="checkbox" class="mdc-checkbox__native-control" id="mat-mdc-checkbox-2-input" tabindex="0"><div class="mdc-checkbox__ripple"></div><div class="mdc-checkbox__background"><svg focusable="false" viewBox="0 0 24 24" aria-hidden="true" class="mdc-checkbox__checkmark"><path fill="none" d="M1.73,12.91 8.1,19.28 22.79,4.59" class="mdc-checkbox__checkmark-path"></path></svg><div class="mdc-checkbox__mixedmark"></div></div><div mat-ripple="" class="mat-ripple mat-mdc-checkbox-ripple mat-mdc-focus-indicator"></div></div><label class="mdc-label" for="mat-mdc-checkbox-2-input"> B. National Reserve (as New Farmer) </label></div></mat-checkbox></div><!----><!----><div _ngcontent-ng-c3068956607="" class="center-vertically"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate icon material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">info</mat-icon><mat-checkbox _ngcontent-ng-c3068956607="" formcontrolname="nrCisyf" class="mat-mdc-checkbox mat-accent ng-untouched ng-pristine ng-valid mat-mdc-checkbox-checked" id="mat-mdc-checkbox-3"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-checkbox"><div class="mat-mdc-checkbox-touch-target"></div><input type="checkbox" class="mdc-checkbox__native-control mdc-checkbox--selected" id="mat-mdc-checkbox-3-input" tabindex="0"><div class="mdc-checkbox__ripple"></div><div class="mdc-checkbox__background"><svg focusable="false" viewBox="0 0 24 24" aria-hidden="true" class="mdc-checkbox__checkmark"><path fill="none" d="M1.73,12.91 8.1,19.28 22.79,4.59" class="mdc-checkbox__checkmark-path"></path></svg><div class="mdc-checkbox__mixedmark"></div></div><div mat-ripple="" class="mat-ripple mat-mdc-checkbox-ripple mat-mdc-focus-indicator"></div></div><label class="mdc-label" for="mat-mdc-checkbox-3-input"> C. Complementary income Support for Young Farmers </label></div></mat-checkbox></div><!----><!----><!----><!----><div _ngcontent-ng-c3068956607="" mat-dialog-actions="" align="end" class="mat-mdc-dialog-actions mdc-dialog__actions mat-mdc-dialog-actions-align-end"><button _ngcontent-ng-c3068956607="" type="button" class="nav-button clearBtn"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">close</mat-icon><span _ngcontent-ng-c3068956607="">Close</span></button><button _ngcontent-ng-c3068956607="" type="button" class="nav-button"><mat-icon _ngcontent-ng-c3068956607="" role="img" class="mat-icon notranslate material-icons mat-ligature-font mat-icon-no-color" style="color: white;" aria-hidden="true" data-mat-icon-type="font"> navigate_next </mat-icon><span _ngcontent-ng-c3068956607="" style="color: white;"> Next </span></button></div></form></div><!----></app-nr-cisyf-category-select-popup><!----></div></div></mat-dialog-container><div tabindex="0" class="cdk-visually-hidden cdk-focus-trap-anchor" aria-hidden="true"></div></div>
