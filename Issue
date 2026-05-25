@@ -1,43 +1,100 @@
-// ***************************************************************************************************************************************************************************************
-// Step          : the agent enters company details (DataTable)
-// Description   : Fills in company details for Company entity type on the Status page.
-//                 DOM: no formcontrolname on any input — locators use mat-label ancestor traversal.
-//                 NOTE: Third field is "Company Secretary Name" in the DOM, not "Director Name".
-//                 DataTable keys: croNumber, companyName, secretaryName
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-@And("the agent enters company details")
-public void theAgentEntersCompanyDetails(DataTable pDataTable)
-{
-    log.info("[STEP] And the agent enters company details");
+ // ***************************************************************************************************************************************************************************************
+    // Step          : the agent sets group member count to {string}
+    // Description   : Selects the number of group members from the dropdown
+    // Parameters    : pCount (String) - member count e.g. "1", "2", "3"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent sets group member count to {string}")
+    public void theAgentSetsGroupMemberCountTo(String pCount)
+    {
+        log.info("[STEP] And the agent sets group member count to: " + pCount);
+        iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFMemberCountDropdown"), pCount);
+    }
 
-    Map<String, String> iData = pDataTable.asMap(String.class, String.class);
+    // ===================================================================================================================================
+    //  GROUP MEMBER DETAILS
+    // ===================================================================================================================================
 
-    iAction("TEXTBOX", "XPATH",
-            ObjReader.getLocator("iNRCISYFCroNumberInput"),
-            iData.get("croNumber").trim());
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent enters group member details (DataTable)
+    // Description   : Iterates through each row in the DataTable to enter member name, date of birth,
+    //                 and tick the eligible farmer checkbox. Supports up to 6 members.
+    //                 DataTable cols: memberIndex, name, dobDay, dobMonth, dobYear, eligible
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent enters group member details")
+    public void theAgentEntersGroupMemberDetails(DataTable pDataTable)
+    {
+        log.info("[STEP] And the agent enters group member details");
 
-    iAction("TEXTBOX", "XPATH",
-            ObjReader.getLocator("iNRCISYFCompanyNameInput"),
-            iData.get("companyName").trim());
+        List<Map<String, String>> iMembers = pDataTable.asMaps(String.class, String.class);
 
-    iAction("TEXTBOX", "XPATH",
-            ObjReader.getLocator("iNRCISYFCompanySecretaryNameInput"),
-            iData.get("secretaryName").trim());
+        for (Map<String, String> iMember : iMembers)
+        {
+            String iIdx       = iMember.get("memberIndex").trim();
+            String iName      = iMember.get("name").trim();
+            String iDobDay    = iMember.get("dobDay").trim();
+            String iDobMonth  = iMember.get("dobMonth").trim();
+            String iDobYear   = iMember.get("dobYear").trim();
+            String iEligible  = iMember.get("eligible").trim();
 
-    log.info("[TC13] Company details entered: CRO=" + iData.get("croNumber"));
-}
+            log.info("Entering member " + iIdx + ": " + iName);
+
+            // The member fields are indexed — field "4" is member 1 name, "5" is member 2 name etc.
+            // The legacy file used sequential field indices: 4, 5 for names
+            int iFieldOffset = 3 + Integer.parseInt(iIdx);
+            iAction("TEXTBOX", "XPATH", "(//input[contains(@formcontrolname,'name') or contains(@id,'member')])[" + iIdx + "]", iName);
+
+            // Date of birth — uses the DatePicker component indexed by member number
+            iAction("TEXTBOX", "XPATH", "(//input[contains(@formcontrolname,'day') or contains(@placeholder,'DD')])[" + iIdx + "]", iDobDay);
+            iAction("LIST", "XPATH", "(//mat-select[contains(@formcontrolname,'month')])[" + iIdx + "]", iDobMonth);
+            iAction("TEXTBOX", "XPATH", "(//input[contains(@formcontrolname,'year') or contains(@placeholder,'YYYY')])[" + iIdx + "]", iDobYear);
+
+            // Eligible farmer checkbox
+            if ("Yes".equalsIgnoreCase(iEligible))
+            {
+                String iCbXpath = "(//mat-checkbox[contains(@formcontrolname,'eligible') or contains(@id,'eligible')])[" + iIdx + "]";
+                try
+                {
+                    WebElement iCb = getDriver().findElement(By.xpath(iCbXpath));
+                    if (!"true".equalsIgnoreCase(iCb.getAttribute("aria-checked")))
+                    {
+                        iAction("CLICK", "XPATH", iCbXpath, null);
+                    }
+                }
+                catch (Exception e)
+                {
+                    iAction("CLICK", "XPATH", iCbXpath, null);
+                }
+            }
+
+            log.info("Member " + iIdx + " details entered: " + iName + " DOB=" + iDobDay + "/" + iDobMonth + "/" + iDobYear);
+        }
+    }
 
 
 
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent confirms group status question as {string}
+    // Description   : Selects Yes/No for the group status radio button question on the status page
+    // Parameters    : pAnswer (String) - "Yes" or "No"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent confirms group status question as {string}")
+    public void theAgentConfirmsGroupStatusQuestionAs(String pAnswer)
+    {
+        log.info("[STEP] And the agent confirms group status question as: " + pAnswer);
+        iAction("CLICK", "XPATH",
+                "//mat-radio-button[contains(.,'" + pAnswer + "')] | //label[contains(text(),'" + pAnswer + "')]",
+                null);
+    }
 
-# CRO Number input — Company entity, Status page
-# No formcontrolname in DOM — scoped via mat-label ancestor traversal
-iNRCISYFCroNumberInput              = //mat-label[normalize-space()='CRO Number']/ancestor::mat-form-field//input[@matinput]
 
-# Company Name input — Company entity, Status page
-iNRCISYFCompanyNameInput            = //mat-label[normalize-space()='Company Name']/ancestor::mat-form-field//input[@matinput]
 
-# Company Secretary Name input — DOM label is "Company Secretary Name" not "Director Name"
-iNRCISYFCompanySecretaryNameInput   = //mat-label[normalize-space()='Company Secretary Name']/ancestor::mat-form-field//input[@matinput]
+<table _ngcontent-ng-c1280833202=""><thead _ngcontent-ng-c1280833202=""><tr _ngcontent-ng-c1280833202=""><th _ngcontent-ng-c1280833202="">Name</th><th _ngcontent-ng-c1280833202="">Date of Birth</th><th _ngcontent-ng-c1280833202="">Eligible Farmer</th></tr></thead><tbody _ngcontent-ng-c1280833202=""><tr _ngcontent-ng-c1280833202="" class="ng-star-inserted"><td _ngcontent-ng-c1280833202=""><mat-form-field _ngcontent-ng-c1280833202="" appearance="outline" class="mat-mdc-form-field mat-form-field-table ng-tns-c508571215-9 mat-mdc-form-field-type-mat-input mat-form-field-appearance-outline mat-primary ng-pristine ng-valid ng-star-inserted ng-touched"><!----><div class="mat-mdc-text-field-wrapper mdc-text-field ng-tns-c508571215-9 mdc-text-field--outlined mdc-text-field--no-label"><!----><div class="mat-mdc-form-field-flex ng-tns-c508571215-9"><div matformfieldnotchedoutline="" class="mdc-notched-outline ng-tns-c508571215-9 mdc-notched-outline--no-label ng-star-inserted"><div class="mat-mdc-notch-piece mdc-notched-outline__leading"></div><div class="mat-mdc-notch-piece mdc-notched-outline__notch"><!----><!----><!----></div><div class="mat-mdc-notch-piece mdc-notched-outline__trailing"></div></div><!----><!----><!----><div class="mat-mdc-form-field-infix ng-tns-c508571215-9"><!----><input _ngcontent-ng-c1280833202="" type="text" matinput="" maxlength="50" class="mat-mdc-input-element ng-tns-c508571215-9 mat-mdc-form-field-input-control mdc-text-field__input ng-pristine ng-valid cdk-text-field-autofill-monitored ng-touched" id="mat-input-3" aria-invalid="false" aria-required="false"></div><!----><!----></div><!----></div><div class="mat-mdc-form-field-subscript-wrapper mat-mdc-form-field-bottom-align ng-tns-c508571215-9"><!----><div class="mat-mdc-form-field-hint-wrapper ng-tns-c508571215-9 ng-trigger ng-trigger-transitionMessages ng-star-inserted" style="opacity: 1; transform: translateY(0%);"><!----><div class="mat-mdc-form-field-hint-spacer ng-tns-c508571215-9"></div></div><!----></div></mat-form-field><!----></td><td _ngcontent-ng-c1280833202=""><mat-form-field _ngcontent-ng-c1280833202="" appearance="outline" class="mat-mdc-form-field mat-form-field-table ng-tns-c508571215-10 mat-mdc-form-field-type-mat-input mat-mdc-form-field-has-icon-suffix mat-form-field-appearance-outline mat-primary ng-untouched ng-pristine ng-star-inserted mat-form-field-disabled"><!----><div class="mat-mdc-text-field-wrapper mdc-text-field ng-tns-c508571215-10 mdc-text-field--outlined mdc-text-field--no-label mdc-text-field--disabled"><!----><div class="mat-mdc-form-field-flex ng-tns-c508571215-10"><div matformfieldnotchedoutline="" class="mdc-notched-outline ng-tns-c508571215-10 mdc-notched-outline--no-label ng-star-inserted"><div class="mat-mdc-notch-piece mdc-notched-outline__leading"></div><div class="mat-mdc-notch-piece mdc-notched-outline__notch"><!----><!----><!----></div><div class="mat-mdc-notch-piece mdc-notched-outline__trailing"></div></div><!----><!----><!----><div class="mat-mdc-form-field-infix ng-tns-c508571215-10"><!----><input _ngcontent-ng-c1280833202="" matinput="" class="mat-mdc-input-element mat-datepicker-input ng-tns-c508571215-10 mat-mdc-form-field-input-control mdc-text-field__input ng-untouched ng-pristine cdk-text-field-autofill-monitored" style="color: black;" aria-describedby="mat-mdc-hint-6" id="mat-input-4" aria-invalid="false" aria-required="false" aria-haspopup="dialog" min="1906-01-01T00:00:00-00:25" max="2026-05-25T19:24:24+01:00" data-mat-calendar="mat-datepicker-0" disabled=""><mat-datepicker _ngcontent-ng-c1280833202="" disabled="false" class="ng-tns-c508571215-10"></mat-datepicker><!----></div><!----><div class="mat-mdc-form-field-icon-suffix ng-tns-c508571215-10 ng-star-inserted"><mat-datepicker-toggle _ngcontent-ng-c1280833202="" matsuffix="" class="mat-datepicker-toggle ng-tns-c508571215-10" data-mat-calendar="mat-datepicker-0"><button mat-icon-button="" type="button" mat-ripple-loader-class-name="mat-mdc-button-ripple" class="mdc-icon-button mat-mdc-icon-button mat-unthemed mat-mdc-button-base" mat-ripple-loader-centered="" aria-haspopup="dialog" aria-label="Open calendar" tabindex="0"><span class="mat-mdc-button-persistent-ripple mdc-icon-button__ripple"></span><svg viewBox="0 0 24 24" width="24px" height="24px" fill="currentColor" focusable="false" aria-hidden="true" class="mat-datepicker-toggle-default-icon ng-star-inserted"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"></path></svg><!----><span class="mat-mdc-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span><span class="mat-ripple mat-mdc-button-ripple"></span></button></mat-datepicker-toggle></div><!----></div><!----></div><div class="mat-mdc-form-field-subscript-wrapper mat-mdc-form-field-bottom-align ng-tns-c508571215-10"><!----><div class="mat-mdc-form-field-hint-wrapper ng-tns-c508571215-10 ng-trigger ng-trigger-transitionMessages ng-star-inserted" style="opacity: 1; transform: translateY(0%);"><!----><mat-hint _ngcontent-ng-c1280833202="" class="mat-mdc-form-field-hint mat-mdc-form-field-bottom-align ng-tns-c508571215-10" id="mat-mdc-hint-6">DD/MM/YYYY</mat-hint><div class="mat-mdc-form-field-hint-spacer ng-tns-c508571215-10"></div></div><!----></div></mat-form-field><!----></td><td _ngcontent-ng-c1280833202=""><mat-checkbox _ngcontent-ng-c1280833202="" class="mat-mdc-checkbox mat-accent ng-untouched ng-pristine ng-valid" id="mat-mdc-checkbox-4"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-checkbox"><div class="mat-mdc-checkbox-touch-target"></div><input type="checkbox" class="mdc-checkbox__native-control" id="mat-mdc-checkbox-4-input" tabindex="0"><div class="mdc-checkbox__ripple"></div><div class="mdc-checkbox__background"><svg focusable="false" viewBox="0 0 24 24" aria-hidden="true" class="mdc-checkbox__checkmark"><path fill="none" d="M1.73,12.91 8.1,19.28 22.79,4.59" class="mdc-checkbox__checkmark-path"></path></svg><div class="mdc-checkbox__mixedmark"></div></div><div mat-ripple="" class="mat-ripple mat-mdc-checkbox-ripple mat-mdc-focus-indicator"></div></div><label class="mdc-label" for="mat-mdc-checkbox-4-input"></label></div></mat-checkbox><br _ngcontent-ng-c1280833202=""><!----></td></tr><!----><!----><!----><!----><!----><!----></tbody></table>
+
+
+<div _ngcontent-ng-c1280833202="" style="text-align: center;"><label _ngcontent-ng-c1280833202=""> Has the Applicant effective control and decision making power within the group? </label><mat-radio-group _ngcontent-ng-c1280833202="" role="radiogroup" class="mat-mdc-radio-group ng-valid ng-dirty ng-touched" style="display: flex; flex-direction: column;"><mat-radio-button _ngcontent-ng-c1280833202="" class="mat-mdc-radio-button mat-accent" id="mat-radio-2"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-radio"><div class="mat-mdc-radio-touch-target"></div><input type="radio" class="mdc-radio__native-control" id="mat-radio-2-input" name="mat-radio-group-0" value="false" tabindex="-1"><div class="mdc-radio__background"><div class="mdc-radio__outer-circle"></div><div class="mdc-radio__inner-circle"></div></div><div mat-ripple="" class="mat-ripple mat-radio-ripple mat-mdc-focus-indicator"><div class="mat-ripple-element mat-radio-persistent-ripple"></div></div></div><label class="mdc-label" for="mat-radio-2-input">No</label></div></mat-radio-button><mat-radio-button _ngcontent-ng-c1280833202="" class="mat-mdc-radio-button mat-accent mat-mdc-radio-checked" id="mat-radio-3"><div mat-internal-form-field="" class="mdc-form-field mat-internal-form-field"><div class="mdc-radio"><div class="mat-mdc-radio-touch-target"></div><input type="radio" class="mdc-radio__native-control" id="mat-radio-3-input" name="mat-radio-group-0" value="true" tabindex="0"><div class="mdc-radio__background"><div class="mdc-radio__outer-circle"></div><div class="mdc-radio__inner-circle"></div></div><div mat-ripple="" class="mat-ripple mat-radio-ripple mat-mdc-focus-indicator"><div class="mat-ripple-element mat-radio-persistent-ripple"></div></div></div><label class="mdc-label" for="mat-radio-3-input">Yes</label></div></mat-radio-button></mat-radio-group><!----><br _ngcontent-ng-c1280833202=""></div>
