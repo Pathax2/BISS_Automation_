@@ -1,181 +1,50 @@
-# Member table — name input, indexed by row {index}
-# Replace {index} at runtime with 1-based row number
-iNRCISYFMemberNameInput             = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[1]//input[@matinput]
+Audit complete — zero occurrences of ''' found across all project files. Clean.
 
-# Member table — DOB datepicker input, indexed by row {index}
-# Input is disabled by default — inject via JS removeAttribute + sendKeys (DD/MM/YYYY)
-iNRCISYFMemberDOBInput              = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[2]//input[@matinput]
+Now, your GitLab remote is at:
+git@rhosgitlab1.agriculture.gov.ie:automation/biss-automation.git
 
-# Member table — Eligible Farmer checkbox host, indexed by row {index}
-# State check via mat-mdc-checkbox-checked class; click via JS on native input
-iNRCISYFMemberEligibleCheckboxHost  = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[3]//mat-checkbox
+Since your project already exists locally (not a fresh clone), use the “Push an existing folder” path from your screen.
 
-# Member table — Eligible Farmer native input, indexed by row {index}
-# JS click on this to bypass mat-mdc-checkbox-touch-target interception
-iNRCISYFMemberEligibleInput         = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[3]//mat-checkbox//input[@type='checkbox']
+Step-by-step — run these in IntelliJ Terminal or any terminal inside your project root:
+
+1. Configure your Git identity (one-time, local to this project)
+
+git config --local user.name "Pathare Aniket"
+git config --local user.email "aniket.pathare@agriculture.gov.ie"
 
 
-# Member table — name input, indexed by row {index}
-# Replace {index} at runtime with 1-based row number
-iNRCISYFMemberNameInput             = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[1]//input[@matinput]
+2. Initialise Git in your project folder
 
-# Member table — DOB datepicker input, indexed by row {index}
-# Input is disabled by default — inject via JS removeAttribute + sendKeys (DD/MM/YYYY)
-iNRCISYFMemberDOBInput              = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[2]//input[@matinput]
-
-# Member table — Eligible Farmer checkbox host, indexed by row {index}
-# State check via mat-mdc-checkbox-checked class; click via JS on native input
-iNRCISYFMemberEligibleCheckboxHost  = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[3]//mat-checkbox
-
-# Member table — Eligible Farmer native input, indexed by row {index}
-# JS click on this to bypass mat-mdc-checkbox-touch-target interception
-iNRCISYFMemberEligibleInput         = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[3]//mat-checkbox//input[@type='checkbox']
+git init --initial-branch=main --object-format=sha1
 
 
-And the agent enters group member details
-  | memberIndex | name         | dob        | eligible |
-  | 1           | John Smith   | 15/06/1995 | Yes      |
-  | 2           | Mary Jones   | 22/03/1998 | No       |
+3. Add the remote pointing to your GitLab repo
+
+git remote add origin git@rhosgitlab1.agriculture.gov.ie:automation/biss-automation.git
 
 
+4. Stage all files
 
-// ***************************************************************************************************************************************************************************************
-// Step          : the agent sets group member count to {string}
-// Description   : Selects the number of group members from the dropdown
-// Parameters    : pCount — "1", "2" ... "6"
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-@And("the agent sets group member count to {string}")
-public void theAgentSetsGroupMemberCountTo(String pCount)
-{
-    log.info("[STEP] And the agent sets group member count to: " + pCount);
-    iAction("LIST", "XPATH",
-            ObjReader.getLocator("iNRCISYFMemberCountDropdown"), pCount);
-}
+git add .
 
 
-// ***************************************************************************************************************************************************************************************
-// Step          : the agent enters group member details (DataTable)
-// Description   : Fills each member row in the table — name, DOB (single DD/MM/YYYY datepicker),
-//                 and Eligible Farmer checkbox.
-//
-//                 DOM findings:
-//                   - Name: plain input in td[1], no formcontrolname — row-indexed via tbody//tr
-//                   - DOB:  single mat-datepicker input in td[2], disabled by default — JS inject
-//                           (NOT split day/month/year — those fields do not exist in the DOM)
-//                   - Eligible: mat-checkbox in td[3], touch-target present — JS click on native input
-//
-//                 DataTable cols: memberIndex | name | dob | eligible
-//                 dob format: DD/MM/YYYY (e.g. "15/06/1995")
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-@And("the agent enters group member details")
-public void theAgentEntersGroupMemberDetails(DataTable pDataTable)
-{
-    log.info("[STEP] And the agent enters group member details");
+5. Create your initial commit
 
-    JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
-    List<Map<String, String>> iMembers = pDataTable.asMaps(String.class, String.class);
-
-    for (Map<String, String> iMember : iMembers)
-    {
-        String iIdx      = iMember.get("memberIndex").trim();
-        String iName     = iMember.get("name").trim();
-        String iDob      = iMember.get("dob").trim();
-        String iEligible = iMember.get("eligible").trim();
-
-        log.info("[TC13] Entering member " + iIdx + ": " + iName);
-
-        // ── Name — td[1] input, row-indexed ──────────────────────────────────────────────
-        String iNameXpath = ObjReader.getLocator("iNRCISYFMemberNameInput")
-                .replace("{index}", iIdx);
-        iAction("WAITVISIBLE", "XPATH", iNameXpath, null);
-        iAction("TEXTBOX",     "XPATH", iNameXpath, iName);
-
-        // ── DOB — td[2] mat-datepicker, disabled by default — JS inject ──────────────────
-        // DOM has ONE single datepicker input (not split day/month/year fields).
-        // Same pattern as qualification date: removeAttribute + click + sendKeys + TAB.
-        String iDobXpath = ObjReader.getLocator("iNRCISYFMemberDOBInput")
-                .replace("{index}", iIdx);
-        try
-        {
-            WebElement iDobInput = getDriver().findElement(By.xpath(iDobXpath));
-            iJs.executeScript("arguments[0].removeAttribute('disabled');", iDobInput);
-            iJs.executeScript("arguments[0].click();",                     iDobInput);
-            iDobInput.clear();
-            iDobInput.sendKeys(iDob);
-            iDobInput.sendKeys(org.openqa.selenium.Keys.TAB);
-            log.info("[TC13] DOB set for member " + iIdx + ": " + iDob);
-        }
-        catch (Exception e)
-        {
-            log.warning("[TC13] Could not set DOB for member " + iIdx
-                    + ": " + e.getMessage());
-        }
-
-        // ── Eligible Farmer checkbox — td[3], JS click on native input ───────────────────
-        // touch-target div covers click area — JS click on native input bypasses it.
-        // Only tick if "Yes"; leave unticked for "No".
-        if ("Yes".equalsIgnoreCase(iEligible))
-        {
-            String iHostXpath  = ObjReader.getLocator("iNRCISYFMemberEligibleCheckboxHost")
-                    .replace("{index}", iIdx);
-            String iInputXpath = ObjReader.getLocator("iNRCISYFMemberEligibleInput")
-                    .replace("{index}", iIdx);
-
-            // State check — only click if not already checked
-            try
-            {
-                WebElement iHost  = getDriver().findElement(By.xpath(iHostXpath));
-                String     iClass = iHost.getAttribute("class");
-                if (iClass != null && iClass.contains("mat-mdc-checkbox-checked"))
-                {
-                    log.info("[TC13] Member " + iIdx + " already eligible — skipping.");
-                }
-                else
-                {
-                    WebElement iNative = getDriver().findElement(By.xpath(iInputXpath));
-                    iJs.executeScript("arguments[0].scrollIntoView({block:'center'});", iNative);
-                    iJs.executeScript("arguments[0].click();", iNative);
-                    log.info("[TC13] Eligible ticked for member " + iIdx);
-                }
-            }
-            catch (Exception e)
-            {
-                log.warning("[TC13] Could not tick eligible for member "
-                        + iIdx + ": " + e.getMessage());
-            }
-        }
-
-        log.info("[TC13] Member " + iIdx + " complete: " + iName + " DOB=" + iDob);
-    }
-}
+git commit -m "Initial commit"
 
 
-// ***************************************************************************************************************************************************************************************
-// Step          : the agent confirms group status question as {string}
-// Description   : Clicks the Yes or No radio for the group status question.
-//                 DOM: mat-radio-group has no formcontrolname — matched via label text.
-//                 Uses ObjReader iNRCISYFGroupStatusRadio with {answer} replace.
-//                 Touch-target present — CLICK action uses performClick() JS fallback if intercepted.
-// Parameters    : pAnswer — "Yes" or "No"
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-@And("the agent confirms group status question as {string}")
-public void theAgentConfirmsGroupStatusQuestionAs(String pAnswer)
-{
-    log.info("[STEP] And the agent confirms group status question as: " + pAnswer);
-    String iRadioXpath = ObjReader.getLocator("iNRCISYFGroupStatusRadio")
-            .replace("{answer}", pAnswer);
-    iAction("WAITVISIBLE", "XPATH", iRadioXpath, null);
-    iAction("CLICK",       "XPATH", iRadioXpath, null);
-    log.info("[TC13] Group status confirmed: " + pAnswer);
-}
+6. Push to GitLab
+
+git push --set-upstream origin main
 
 
+Before step 4 — make sure your .gitignore is in place so you don’t accidentally push:
 
+	•	target/ (Maven build output)
+	•	*.class files
+	•	Test reports / screenshots
+	•	Any local config with credentials
 
+Your project already has a _gitignore / GITIGNORE.gitignore file — rename whichever is correct to .gitignore if not already done.
+
+SSH key prerequisite: The remote uses SSH (git@...). If your SSH key isn’t already registered in GitLab, go to your profile → SSH Keys and add your public key (~/.ssh/id_rsa.pub or ~/.ssh/id_ed25519.pub) before pushing, otherwise step 6 will be rejected.
