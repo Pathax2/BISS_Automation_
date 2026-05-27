@@ -1,27 +1,26 @@
-iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
-iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
-iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
-iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
+    // ===================================================================================================================================
+    //  SECTION 2 : CATEGORY DIALOG — OPEN / CLOSE / INFO ICONS
+    // ===================================================================================================================================
 
-// ── Account Expired check ─────────────────────────────────────────────────────
-By iExpiredBy = By.xpath(ObjReader.getLocator("iAccountExpiredError"));
-if (isVisible(iExpiredBy, 3))
-{
-    String iErrText = getDriver().findElement(iExpiredBy).getText().trim();
-    if (iErrText.toLowerCase().contains("account expired")
-            || iErrText.toLowerCase().contains("account has expired"))
-    {
-        log.warning("[TC13-LOGIN] Account Expired for: " + pUsername + " — marking and retrying.");
-        Hooks.markAgentExpired(pUsername);
-
-        // Just hit the URL — lands straight on username field, no logout needed
-        getDriver().navigate().to(Hooks.iUrl);
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iUsernametxtbox"), null);
-    }
-}
-// ── End Account Expired check ─────────────────────────────────────────────────
-
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent opens the NRCISYF Apply or Edit dialog
+    // Description   : Clicks the Apply or Edit button to open the category selection dialog.
+    //
+    //                 SUBMITTED HERD RECOVERY (up to 15 attempts):
+    //                   When the current herd shows "View Application" (already submitted),
+    //                   Apply and Edit buttons are absent. The step recovers automatically:
+    //                     1. Navigate: My Clients left menu → NR/CISYF tab
+    //                     2. Re-query BISS_DATA for a fresh CISYF-eligible herd (shuffled pool)
+    //                     3. INET-validate — skip BLACKLISTED + EXPIRED_AGENTS
+    //                     4. Update Hooks.RUNTIME_HERD + RUNTIME_USERNAME + CISYF fields
+    //                     5. Type new herd into search → click search → wait for row
+    //                     6. Click iNRCISYFViewLink to open landing page
+    //                     7. Loop back to check Apply/Edit again
+    //                   No logout — same session stays active throughout.
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
     @When("the agent opens the NRCISYF Apply or Edit dialog")
     public void theAgentOpensTheNRCISYFApplyOrEditDialog()
     {
@@ -168,3 +167,84 @@ if (isVisible(iExpiredBy, 3))
 
         throw new RuntimeException("[TC13-APPLY] Could not find Apply or Edit button after " + MAX_RETRIES + " attempts." + " Last herd: " + Hooks.RUNTIME_HERD + ". All candidates were submitted or exhausted.");
     }
+
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogin
+    // Description   : Logs in as the specified agent — handles PIN+TOTP and OTP-only flows.
+    //                 Detects Account Expired error and marks the agent via Hooks.markAgentExpired().
+    //                 Mirrors TC_03 and TC_18 login patterns exactly.
+    //                 Called by theAgentOpensTheNRCISYFApplyOrEditDialog after logout.
+    // Parameters    : pUsername — agent username to log in as
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026
+    // ***************************************************************************************************************************************************************************************
+    private void performLogin(String pUsername)
+    {
+        log.info("[TC13-RELOGIN] Logging in as: " + pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
+
+        // ── Account Expired detection ─────────────────────────────────────────────────────
+        By iExpiredBy = By.xpath(ObjReader.getLocator("iAccountExpiredError"));
+        if (isVisible(iExpiredBy, 3))
+        {
+            String iErrText = getDriver().findElement(iExpiredBy).getText().trim();
+            if (iErrText.toLowerCase().contains("account expired") || iErrText.toLowerCase().contains("account has expired")|| iErrText.contains("Invalid username or password."))
+            {
+                log.warning("[TC13-RELOGIN] Account Expired for: " + pUsername + " — marking expired.");
+                Hooks.markAgentExpired(pUsername);
+                // Just hit the URL — lands straight on username field, no logout needed
+                getDriver().navigate().to(Hooks.iUrl);
+                iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iUsernametxtbox"), null);
+               // return;
+            }
+        }
+
+        // ── PIN + TOTP flow ───────────────────────────────────────────────────────────────
+        By iPinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+        if (isVisible(iPinFormBy, 3))
+        {
+            log.info("[TC13-RELOGIN] PIN screen — filling slots 1-7.");
+            for (int iIdx = 1; iIdx <= 7; iIdx++)
+            {
+                By iPinBy = By.xpath(ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(iIdx)));
+                if (isVisible(iPinBy, 1))
+                {
+                    WebElement iInput = getDriver().findElement(iPinBy);
+                    if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+                    {
+                        iInput.clear();
+                        iInput.sendKeys("1");
+                    }
+                }
+            }
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info("[TC13-RELOGIN] PIN + TOTP submitted.");
+        }
+        else
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info("[TC13-RELOGIN] OTP-only login submitted.");
+        }
+
+        // ── Accept Terms if shown ─────────────────────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info("[TC13-RELOGIN] Terms accepted.");
+        }
+        log.info("[TC13-RELOGIN] Login complete: " + pUsername);
+    }
+
+
