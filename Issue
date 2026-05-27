@@ -1,250 +1,272 @@
-    // ===================================================================================================================================
-    //  SECTION 2 : CATEGORY DIALOG — OPEN / CLOSE / INFO ICONS
-    // ===================================================================================================================================
+// ***************************************************************************************************************************************************************************************
+// Step          : the agent opens the NRCISYF Apply or Edit dialog
+// Description   : Clicks the Apply or Edit button to open the category selection dialog.
+//
+//                 SUBMITTED HERD RECOVERY (up to 15 attempts):
+//                   When the current herd shows "View Application" (already submitted),
+//                   Apply and Edit buttons are absent. The step recovers automatically:
+//                     1. Re-query BISS_DATA for a fresh CISYF-eligible herd (shuffled pool)
+//                     2. INET-validate — skip BLACKLISTED + EXPIRED_AGENTS
+//                     3. Update Hooks.RUNTIME_HERD + RUNTIME_USERNAME + CISYF fields
+//                     4. Login as new agent via performLogin() — navigate().to() resets session
+//                     5. Navigate to BISS → My Clients → NR/CISYF tab
+//                     6. Search new herd → open landing page
+//                     7. Loop back to check Apply/Edit again
+//                   No explicit logout needed — performLogin() handles session reset.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 31-03-2026
+// ***************************************************************************************************************************************************************************************
+@When("the agent opens the NRCISYF Apply or Edit dialog")
+public void theAgentOpensTheNRCISYFApplyOrEditDialog()
+{
+    log.info("[STEP] When the agent opens the NRCISYF Apply or Edit dialog");
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent opens the NRCISYF Apply or Edit dialog
-    // Description   : Clicks the Apply or Edit button to open the category selection dialog.
-    //
-    //                 SUBMITTED HERD RECOVERY (up to 15 attempts):
-    //                   When the current herd shows "View Application" (already submitted),
-    //                   Apply and Edit buttons are absent. The step recovers automatically:
-    //                     1. Navigate: My Clients left menu → NR/CISYF tab
-    //                     2. Re-query BISS_DATA for a fresh CISYF-eligible herd (shuffled pool)
-    //                     3. INET-validate — skip BLACKLISTED + EXPIRED_AGENTS
-    //                     4. Update Hooks.RUNTIME_HERD + RUNTIME_USERNAME + CISYF fields
-    //                     5. Type new herd into search → click search → wait for row
-    //                     6. Click iNRCISYFViewLink to open landing page
-    //                     7. Loop back to check Apply/Edit again
-    //                   No logout — same session stays active throughout.
-    //
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent opens the NRCISYF Apply or Edit dialog")
-    public void theAgentOpensTheNRCISYFApplyOrEditDialog()
+    final int    MAX_RETRIES      = 15;
+    final String YEAR             = System.getProperty("herd.year", "2026").trim();
+    final String APPLY_EDIT_XPATH = ObjReader.getLocator("iNRCISYFApplyEditBtn");
+    final String VIEW_APP_XPATH   = ObjReader.getLocator("iNRCISYFViewApplicationBtn");
+    final String NRCISYF_TAB      = "NR/CISYF";
+    final String RESULT_ROW_XPATH = ObjReader.getLocator("iNRCISYFViewLink");
+
+    for (int iAttempt = 1; iAttempt <= MAX_RETRIES; iAttempt++)
     {
-        log.info("[STEP] When the agent opens the NRCISYF Apply or Edit dialog");
+        log.info("[TC13-APPLY] Attempt " + iAttempt + "/" + MAX_RETRIES
+                + " | herd=" + Hooks.RUNTIME_HERD);
 
-        final int    MAX_RETRIES      = 15;
-        final String YEAR             = System.getProperty("herd.year", "2026").trim();
-        final String APPLY_EDIT_XPATH = ObjReader.getLocator("iNRCISYFApplyEditBtn");
-        final String VIEW_APP_XPATH   = ObjReader.getLocator("iNRCISYFViewApplicationBtn");
-        final String NRCISYF_TAB      = "NR/CISYF";
-        final String RESULT_ROW_XPATH = ObjReader.getLocator("iNRCISYFViewLink");
+        // ── Check if Apply or Edit button is present ──────────────────────────────────
+        boolean iApplyEditPresent = isVisible(By.xpath(APPLY_EDIT_XPATH), 3);
 
-        for (int iAttempt = 1; iAttempt <= MAX_RETRIES; iAttempt++)
+        if (iApplyEditPresent)
         {
-            log.info("[TC13-APPLY] Attempt " + iAttempt + "/" + MAX_RETRIES + " | herd=" + Hooks.RUNTIME_HERD);
+            String iBtnText = getDriver()
+                    .findElement(By.xpath(APPLY_EDIT_XPATH))
+                    .findElement(By.xpath(".//span"))
+                    .getText().trim();
+            log.info("[TC13-APPLY] Button '" + iBtnText + "' found on attempt " + iAttempt);
 
-            // ── Check if Apply or Edit button is present ──────────────────────────────────
-            boolean iApplyEditPresent = isVisible(By.xpath(APPLY_EDIT_XPATH), 3);
-
-            if (iApplyEditPresent)
-            {
-                // Valid state — click and open dialog
-                String iBtnText = getDriver().findElement(By.xpath(APPLY_EDIT_XPATH)).findElement(By.xpath(".//span")).getText().trim();
-                log.info("[TC13-APPLY] Button '" + iBtnText + "' found on attempt " + iAttempt);
-
-                iAction("WAITCLICKABLE", "XPATH", APPLY_EDIT_XPATH, null);
-                iAction("CLICK",         "XPATH", APPLY_EDIT_XPATH, null);
-                iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
-                log.info("[TC13-APPLY] Category dialog opened.");
-                return;
-            }
-
-            // ── Apply/Edit absent — check if it's submitted ───────────────────────────────
-            boolean iViewAppPresent = isVisible(By.xpath(VIEW_APP_XPATH), 2);
-            log.warning("[TC13-APPLY] Attempt " + iAttempt + " | herd=" + Hooks.RUNTIME_HERD
-                    + (iViewAppPresent
-                    ? " — herd is Submitted ('View Application'). Recovering..."
-                    : " — neither Apply nor Edit nor View Application found. Recovering..."));
-
-            // ── Step 1: Re-query BISS_DATA for a fresh CISYF candidate ───────────────────
-            int iLimit = 50 + (iAttempt * 25);
-            database.DBRouter.runDB("DATA", "List of individual herds with CISYF scheme", YEAR, String.valueOf(iLimit));
-            List<java.util.Map<String, Object>> iDbRows = database.DBRouter.getRows();
-
-            if (iDbRows == null || iDbRows.isEmpty())
-            {
-                log.warning("[TC13-APPLY] BISS_DATA returned 0 rows at limit=" + iLimit + " — cannot recover on attempt " + iAttempt);
-                continue;
-            }
-
-            // ── Step 2: Shuffle + INET-validate ──────────────────────────────────────────
-            List<String> iCandidates = new java.util.ArrayList<>();
-            for (java.util.Map<String, Object> iRow : iDbRows)
-            {
-                String iH = java.util.Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
-                if (!iH.isEmpty()) iCandidates.add(iH);
-            }
-            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
-
-            String iNextHerd     = null;
-            String iNextUsername = null;
-
-            for (String iCandidate : iCandidates)
-            {
-                if (Hooks.BLACKLISTED_HERDS.contains(iCandidate))
-                {
-                    log.warning("[TC13-APPLY] " + iCandidate + " is blacklisted — skipping.");
-                    continue;
-                }
-
-                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
-                String iUser = database.DBRouter.getValue("USERNAME");
-
-                if (iUser == null || iUser.isBlank())
-                {
-                    log.warning("[TC13-APPLY] No INET agent for " + iCandidate + " — skipping.");
-                    continue;
-                }
-                iUser = iUser.trim();
-
-                if (Hooks.EXPIRED_AGENTS.contains(iUser))
-                {
-                    log.warning("[TC13-APPLY] Agent " + iUser + " is EXPIRED for herd=" + iCandidate + " — skipping.");
-                    continue;
-                }
-
-                iNextHerd     = iCandidate;
-                iNextUsername = iUser;
-                log.info("[TC13-APPLY] Valid candidate: herd=" + iNextHerd + " | agent=" + iNextUsername);
-                break;
-            }
-
-            if (iNextHerd == null)
-            {
-                log.warning("[TC13-APPLY] All candidates exhausted at attempt " + iAttempt + " — retrying with larger limit next round.");
-                continue;
-            }
-
-            // ── Step 3: Update Hooks ──────────────────────────────────────────────────────
-            Hooks.RUNTIME_HERD     = iNextHerd;
-            Hooks.RUNTIME_USERNAME = iNextUsername;
-            Hooks.CISYF_HERD       = iNextHerd;
-            Hooks.CISYF_USERNAME   = iNextUsername;
-            log.info("[TC13-APPLY] Hooks updated: herd=" + iNextHerd + " | agent=" + iNextUsername);
-
-            // ── Step 4: Logout + Login as new agent ───────────────────────────────────────
-            // The new herd belongs to a different agent — the current session will not
-            // have access to it. Logout the current agent and log in as the new one.
-            performLogout();
-            performLogin(iNextUsername);
-
-            // Abort if Account Expired was detected during login
-            if (Hooks.EXPIRED_AGENTS.contains(iNextUsername))
-            {
-                log.warning("[TC13-APPLY] Agent " + iNextUsername + " expired during login — retrying with next candidate.");
-                continue;
-            }
-
-            // ── Step 5: Navigate to BISS → My Clients → NR/CISYF tab ─────────────────────
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
-            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
-            iAction("CLICK",         "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
-            log.info("[TC13-APPLY] Re-logged in and navigated to NR/CISYF tab.");
-
-            // ── Step 6: Search new herd ───────────────────────────────────────────────────
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), "");
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), iNextHerd);
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iNRCISYFSearchBtn"), null);
-
-            // ── Step 7: Wait for result row then open landing page ────────────────────────
-            if (!isVisible(By.xpath(RESULT_ROW_XPATH), 5))
-            {
-                log.warning("[TC13-APPLY] New herd " + iNextHerd + " returned no rows after search — retrying.");
-                continue;
-            }
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
-            log.info("[TC13-APPLY] Opened landing page for herd: " + iNextHerd);
-
-            // Step 8: Loop back — check for Apply/Edit on this landing page
+            iAction("WAITCLICKABLE", "XPATH", APPLY_EDIT_XPATH, null);
+            iAction("CLICK",         "XPATH", APPLY_EDIT_XPATH, null);
+            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
+            log.info("[TC13-APPLY] Category dialog opened.");
+            return;
         }
 
-        throw new RuntimeException("[TC13-APPLY] Could not find Apply or Edit button after " + MAX_RETRIES + " attempts." + " Last herd: " + Hooks.RUNTIME_HERD + ". All candidates were submitted or exhausted.");
+        // ── Apply/Edit absent — log reason ────────────────────────────────────────────
+        boolean iViewAppPresent = isVisible(By.xpath(VIEW_APP_XPATH), 2);
+        log.warning("[TC13-APPLY] Attempt " + iAttempt + " | herd=" + Hooks.RUNTIME_HERD
+                + (iViewAppPresent
+                ? " — herd is Submitted. Recovering..."
+                : " — neither Apply/Edit nor View Application found. Recovering..."));
+
+        // ── Step 1: Re-query BISS_DATA for a fresh CISYF candidate ───────────────────
+        int iLimit = 50 + (iAttempt * 25);
+        database.DBRouter.runDB("DATA", "List of individual herds with CISYF scheme",
+                YEAR, String.valueOf(iLimit));
+        List<java.util.Map<String, Object>> iDbRows = database.DBRouter.getRows();
+
+        if (iDbRows == null || iDbRows.isEmpty())
+        {
+            log.warning("[TC13-APPLY] BISS_DATA returned 0 rows at limit=" + iLimit
+                    + " — retrying next attempt.");
+            continue;
+        }
+
+        // ── Step 2: Shuffle + INET-validate ──────────────────────────────────────────
+        List<String> iCandidates = new java.util.ArrayList<>();
+        for (java.util.Map<String, Object> iRow : iDbRows)
+        {
+            String iH = java.util.Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
+            if (!iH.isEmpty()) iCandidates.add(iH);
+        }
+        java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
+
+        String iNextHerd     = null;
+        String iNextUsername = null;
+
+        for (String iCandidate : iCandidates)
+        {
+            if (Hooks.BLACKLISTED_HERDS.contains(iCandidate))
+            {
+                log.warning("[TC13-APPLY] " + iCandidate + " is blacklisted — skipping.");
+                continue;
+            }
+
+            database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
+            String iUser = database.DBRouter.getValue("USERNAME");
+
+            if (iUser == null || iUser.isBlank())
+            {
+                log.warning("[TC13-APPLY] No INET agent for " + iCandidate + " — skipping.");
+                continue;
+            }
+            iUser = iUser.trim();
+
+            if (Hooks.EXPIRED_AGENTS.contains(iUser))
+            {
+                log.warning("[TC13-APPLY] Agent " + iUser
+                        + " is expired for herd=" + iCandidate + " — skipping.");
+                continue;
+            }
+
+            iNextHerd     = iCandidate;
+            iNextUsername = iUser;
+            log.info("[TC13-APPLY] Valid candidate: herd=" + iNextHerd
+                    + " | agent=" + iNextUsername);
+            break;
+        }
+
+        if (iNextHerd == null)
+        {
+            log.warning("[TC13-APPLY] All candidates exhausted at attempt "
+                    + iAttempt + " — retrying with larger limit.");
+            continue;
+        }
+
+        // ── Step 3: Update Hooks ──────────────────────────────────────────────────────
+        Hooks.RUNTIME_HERD     = iNextHerd;
+        Hooks.RUNTIME_USERNAME = iNextUsername;
+        Hooks.CISYF_HERD       = iNextHerd;
+        Hooks.CISYF_USERNAME   = iNextUsername;
+        log.info("[TC13-APPLY] Hooks updated: herd=" + iNextHerd
+                + " | agent=" + iNextUsername);
+
+        // ── Step 4: Login as new agent ────────────────────────────────────────────────
+        // performLogin() calls navigate().to(Hooks.iUrl) internally which resets the
+        // session — no explicit logout needed before calling this.
+        performLogin(iNextUsername);
+
+        // If Account Expired was detected, performLogin() marked the agent and returned.
+        // Skip to next iteration to pick a different candidate.
+        if (Hooks.EXPIRED_AGENTS.contains(iNextUsername))
+        {
+            log.warning("[TC13-APPLY] Agent " + iNextUsername
+                    + " expired during login — skipping to next candidate.");
+            continue;
+        }
+
+        // ── Step 5: Navigate to BISS → My Clients → NR/CISYF tab ─────────────────────
+        iAction("TEXTBOX",       "XPATH", ObjReader.getLocator("iAppSearchBar"),
+                "Basic Income Support for Sustainability");
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iBissLink"),             null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"),   null);
+        iAction("WAITVISIBLE",   "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+        iAction("WAITCLICKABLE", "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+        iAction("CLICK",         "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+        log.info("[TC13-APPLY] Navigated to NR/CISYF tab as: " + iNextUsername);
+
+        // ── Step 6: Search new herd ───────────────────────────────────────────────────
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), "");
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), iNextHerd);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iNRCISYFSearchBtn"),       null);
+
+        // ── Step 7: Wait for result row then open landing page ────────────────────────
+        if (!isVisible(By.xpath(RESULT_ROW_XPATH), 5))
+        {
+            log.warning("[TC13-APPLY] Herd " + iNextHerd
+                    + " returned no rows after search — retrying.");
+            continue;
+        }
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
+        log.info("[TC13-APPLY] Landing page opened for: " + iNextHerd
+                + " — looping back to check Apply/Edit.");
+
+        // Loop back to top — attempt iAttempt+1 will now check Apply/Edit on this page
     }
 
-    // ***************************************************************************************************************************************************************************************
-    // Method        : performLogin
-    // Description   : Logs in as the specified agent — handles PIN+TOTP and OTP-only flows.
-    //                 Detects Account Expired error and marks the agent via Hooks.markAgentExpired().
-    //                 Mirrors TC_03 and TC_18 login patterns exactly.
-    //                 Called by theAgentOpensTheNRCISYFApplyOrEditDialog after logout.
-    // Parameters    : pUsername — agent username to log in as
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-05-2026
-    // ***************************************************************************************************************************************************************************************
-    private void performLogin(String pUsername)
+    throw new RuntimeException(
+            "[TC13-APPLY] Could not find Apply or Edit button after "
+                    + MAX_RETRIES + " attempts. Last herd: " + Hooks.RUNTIME_HERD
+                    + ". All candidates were submitted or exhausted.");
+}
+
+
+// ***************************************************************************************************************************************************************************************
+// Method        : performLogin
+// Description   : Logs in as the specified agent.
+//                 Calls navigate().to(Hooks.iUrl) first — this resets any active session
+//                 and lands directly on the username field, making explicit logout unnecessary.
+//                 Handles Account Expired detection, PIN+TOTP flow, and OTP-only flow.
+//                 If Account Expired is detected: marks agent via Hooks.markAgentExpired()
+//                 and returns immediately — caller checks EXPIRED_AGENTS to decide next action.
+// Parameters    : pUsername — agent username to log in as
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 22-05-2026
+// ***************************************************************************************************************************************************************************************
+private void performLogin(String pUsername)
+{
+    log.info("[TC13-RELOGIN] Logging in as: " + pUsername);
+
+    // Hit the URL — resets any active session, lands on username field directly
+    getDriver().navigate().to(Hooks.iUrl);
+    iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iUsernametxtbox"), null);
+
+    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+    iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+    iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
+
+    // ── Account Expired detection ─────────────────────────────────────────────────────
+    // Keycloak renders the error in kc-feedback-text immediately after the Login click
+    // when the account has lapsed. Detect it here before checking for PIN/OTP screens.
+    By iExpiredBy = By.xpath(ObjReader.getLocator("iAccountExpiredError"));
+    if (isVisible(iExpiredBy, 3))
     {
-        log.info("[TC13-RELOGIN] Logging in as: " + pUsername);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
-
-        // ── Account Expired detection ─────────────────────────────────────────────────────
-        By iExpiredBy = By.xpath(ObjReader.getLocator("iAccountExpiredError"));
-        if (isVisible(iExpiredBy, 3))
+        String iErrText = getDriver().findElement(iExpiredBy).getText().trim();
+        if (iErrText.toLowerCase().contains("account expired")
+                || iErrText.toLowerCase().contains("account has expired"))
         {
-            String iErrText = getDriver().findElement(iExpiredBy).getText().trim();
-            if (iErrText.toLowerCase().contains("account expired") || iErrText.toLowerCase().contains("account has expired")|| iErrText.contains("Invalid username or password."))
-            {
-                log.warning("[TC13-RELOGIN] Account Expired for: " + pUsername + " — marking expired.");
-                Hooks.markAgentExpired(pUsername);
-                // Just hit the URL — lands straight on username field, no logout needed
-                getDriver().navigate().to(Hooks.iUrl);
-                iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iUsernametxtbox"), null);
-               // return;
-            }
+            log.warning("[TC13-RELOGIN] Account Expired for: " + pUsername
+                    + " — marking and returning to caller.");
+            Hooks.markAgentExpired(pUsername);
+            return; // caller checks EXPIRED_AGENTS and skips to next candidate
         }
-
-        // ── PIN + TOTP flow ───────────────────────────────────────────────────────────────
-        By iPinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
-        if (isVisible(iPinFormBy, 3))
-        {
-            log.info("[TC13-RELOGIN] PIN screen — filling slots 1-7.");
-            for (int iIdx = 1; iIdx <= 7; iIdx++)
-            {
-                By iPinBy = By.xpath(ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(iIdx)));
-                if (isVisible(iPinBy, 1))
-                {
-                    WebElement iInput = getDriver().findElement(iPinBy);
-                    if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
-                    {
-                        iInput.clear();
-                        iInput.sendKeys("1");
-                    }
-                }
-            }
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
-            log.info("[TC13-RELOGIN] PIN + TOTP submitted.");
-        }
-        else
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
-            log.info("[TC13-RELOGIN] OTP-only login submitted.");
-        }
-
-        // ── Accept Terms if shown ─────────────────────────────────────────────────────────
-        if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
-            log.info("[TC13-RELOGIN] Terms accepted.");
-        }
-        log.info("[TC13-RELOGIN] Login complete: " + pUsername);
     }
 
+    // ── PIN + TOTP flow ───────────────────────────────────────────────────────────────
+    By iPinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+    if (isVisible(iPinFormBy, 3))
+    {
+        log.info("[TC13-RELOGIN] PIN screen detected — filling slots 1-7.");
+        for (int iIdx = 1; iIdx <= 7; iIdx++)
+        {
+            By iPinBy = By.xpath(
+                    ObjReader.getLocator("iPinInputIndex")
+                            .replace("{idx}", String.valueOf(iIdx)));
+            if (isVisible(iPinBy, 1))
+            {
+                WebElement iInput = getDriver().findElement(iPinBy);
+                if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+                {
+                    iInput.clear();
+                    iInput.sendKeys("1");
+                }
+            }
+        }
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+        log.info("[TC13-RELOGIN] PIN + TOTP submitted.");
+    }
+    else
+    {
+        // OTP-only path — username/password already submitted above,
+        // page is now on the OTP screen
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+        log.info("[TC13-RELOGIN] OTP-only login submitted.");
+    }
 
+    // ── Accept Terms if shown ─────────────────────────────────────────────────────────
+    if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+    {
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+        log.info("[TC13-RELOGIN] Terms accepted.");
+    }
+
+    log.info("[TC13-RELOGIN] Login complete: " + pUsername);
+}
