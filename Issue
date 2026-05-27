@@ -1,153 +1,56 @@
-// ***************************************************************************************************************************************************************************************
-// Step          : the agent enters company details (DataTable)
-// Description   : Fills in company details — CRO number, company name, company secretary name.
-//                 DataTable keys: croNumber | companyName | secretaryName
-//                 DOM: three plain matinput fields anchored by mat-label text inside
-//                      app-nr-cisyf-group-status. No formcontrolname on any of the three.
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-@And("the agent enters company details")
-public void theAgentEntersCompanyDetails(DataTable pDataTable)
-{
-    log.info("[STEP] And the agent enters company details");
+# ------------------------------------------------------------------------------------------------NRCISYF Company Details------------------------------------------------------------------------------------------------
 
-    Map<String, String> iData = pDataTable.asMap(String.class, String.class);
+# Farming Entity dropdown — mat-select scoped to app-nr-cisyf-group-status component
+# Hint: "Please select the type of Farming entity under which you operate"
+iNRCISYFFarmingEntityDropdown = //app-nr-cisyf-group-status//mat-select[@id='mat-select-0']
 
-    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCRONumberInput"),
-            iData.get("croNumber").trim());
+# Farming Entity dropdown option — CDK overlay portal, matched by visible span text
+# Replace {value} at runtime e.g. "Individual", "Company", "Joint herdowner"
+iNRCISYFFarmingEntityOption = //mat-option[.//span[normalize-space()='{value}']]
 
-    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCompanyNameInput"),
-            iData.get("companyName").trim());
+# CRO Number input — anchored by mat-label "CRO Number", avoids fragile mat-input-N id dependency
+iNRCISYFCRONumberInput = //app-nr-cisyf-group-status//mat-label[normalize-space()='CRO Number']/ancestor::mat-form-field//input[@matinput]
 
-    iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCompanySecretaryNameInput"),
-            iData.get("secretaryName").trim());
+# Company Name input — anchored by mat-label "Company Name"
+iNRCISYFCompanyNameInput = //app-nr-cisyf-group-status//mat-label[normalize-space()='Company Name']/ancestor::mat-form-field//input[@matinput]
 
-    log.info("[TC13] Company details entered: CRO=" + iData.get("croNumber"));
-}
+# Company Secretary Name input — anchored by mat-label "Company Secretary Name"
+iNRCISYFCompanySecretaryNameInput = //app-nr-cisyf-group-status//mat-label[normalize-space()='Company Secretary Name']/ancestor::mat-form-field//input[@matinput]
 
-----------------
-// ***************************************************************************************************************************************************************************************
-// Step          : the agent enters group member details (DataTable)
-// Description   : Fills each member row — name, DOB (single DD/MM/YYYY datepicker), Eligible checkbox.
-//                 DOM findings:
-//                   - Name    : plain matinput in td[1], no formcontrolname — row-indexed
-//                   - DOB     : mat-datepicker input in td[2], disabled by default — JS inject
-//                               removeAttribute('disabled') + sendKeys(DD/MM/YYYY) + TAB
-//                   - Eligible: mat-checkbox in td[3], touch-target present — JS click on native input
-//                 DataTable cols: memberIndex | name | dob | eligible
-//                 dob format: DD/MM/YYYY (e.g. "15/06/1995")
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-@And("the agent enters group member details")
-public void theAgentEntersGroupMemberDetails(DataTable pDataTable)
-{
-    log.info("[STEP] And the agent enters group member details");
+# Number of group members dropdown — mat-select anchored by mat-label text
+# Hint: "Please select the number of members within the group"
+iNRCISYFMemberCountDropdown = //app-nr-cisyf-group-status//mat-label[normalize-space()='Number of group members']/ancestor::mat-form-field//mat-select
 
-    JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
-    List<Map<String, String>> iMembers = pDataTable.asMaps(String.class, String.class);
-
-    for (Map<String, String> iMember : iMembers)
-    {
-        String iIdx      = iMember.get("memberIndex").trim();
-        String iName     = iMember.get("name").trim();
-        String iDob      = iMember.get("dob").trim();
-        String iEligible = iMember.get("eligible").trim();
-
-        log.info("[TC13] Entering member " + iIdx + ": " + iName);
-
-        // ── Name — td[1] matinput, row-indexed ───────────────────────────────────────────
-        String iNameXpath = ObjReader.getLocator("iNRCISYFMemberNameInput")
-                .replace("{index}", iIdx);
-        iAction("WAITVISIBLE", "XPATH", iNameXpath, null);
-        iAction("TEXTBOX",     "XPATH", iNameXpath, iName);
-
-        // ── DOB — td[2] mat-datepicker, disabled by default — JS inject ──────────────────
-        String iDobXpath = ObjReader.getLocator("iNRCISYFMemberDOBInput")
-                .replace("{index}", iIdx);
-        try
-        {
-            WebElement iDobInput = getDriver().findElement(By.xpath(iDobXpath));
-            iJs.executeScript("arguments[0].removeAttribute('disabled');", iDobInput);
-            iJs.executeScript("arguments[0].click();",                     iDobInput);
-            iDobInput.clear();
-            iDobInput.sendKeys(iDob);
-            iDobInput.sendKeys(org.openqa.selenium.Keys.TAB);
-            log.info("[TC13] DOB set for member " + iIdx + ": " + iDob);
-        }
-        catch (Exception e)
-        {
-            log.warning("[TC13] Could not set DOB for member " + iIdx + ": " + e.getMessage());
-        }
-
-        // ── Eligible Farmer checkbox — td[3], JS click on native input ───────────────────
-        if ("Yes".equalsIgnoreCase(iEligible))
-        {
-            String iHostXpath  = ObjReader.getLocator("iNRCISYFMemberEligibleCheckboxHost")
-                    .replace("{index}", iIdx);
-            String iInputXpath = ObjReader.getLocator("iNRCISYFMemberEligibleInput")
-                    .replace("{index}", iIdx);
-            try
-            {
-                WebElement iHost  = getDriver().findElement(By.xpath(iHostXpath));
-                String     iClass = iHost.getAttribute("class");
-                if (iClass != null && iClass.contains("mat-mdc-checkbox-checked"))
-                {
-                    log.info("[TC13] Member " + iIdx + " already eligible — skipping.");
-                }
-                else
-                {
-                    WebElement iNative = getDriver().findElement(By.xpath(iInputXpath));
-                    iJs.executeScript("arguments[0].scrollIntoView({block:'center'});", iNative);
-                    iJs.executeScript("arguments[0].click();", iNative);
-                    log.info("[TC13] Eligible ticked for member " + iIdx);
-                }
-            }
-            catch (Exception e)
-            {
-                log.warning("[TC13] Could not tick eligible for member " + iIdx
-                        + ": " + e.getMessage());
-            }
-        }
-
-        log.info("[TC13] Member " + iIdx + " complete: " + iName + " DOB=" + iDob);
-    }
-}
----------
+# Number of group members dropdown option — CDK overlay portal
+# Replace {value} at runtime e.g. "1", "2", "3"
+iNRCISYFMemberCountOption = //mat-option[.//span[normalize-space()='{value}']]
 
 
-// ***************************************************************************************************************************************************************************************
-// Step          : the agent confirms group status question as {string}
-// Description   : Clicks the Yes or No radio for the group status question.
-//                 DOM: mat-radio-group with no formcontrolname — native input matched by
-//                      value attribute ("true" for Yes, "false" for No).
-//                 pAnswer "Yes"/"No" is mapped to value="true"/"false" before XPath replace.
-// Parameters    : pAnswer — "Yes" or "No"
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-@And("the agent confirms group status question as {string}")
-public void theAgentConfirmsGroupStatusQuestionAs(String pAnswer)
-{
-    log.info("[STEP] And the agent confirms group status question as: " + pAnswer);
+# ------------------------------------------------------------------------------------------------NRCISYF Member Table------------------------------------------------------------------------------------------------
 
-    // DOM uses value="true"/"false" — map from human-readable Yes/No
-    String iValue      = "Yes".equalsIgnoreCase(pAnswer.trim()) ? "true" : "false";
-    String iRadioXpath = ObjReader.getLocator("iNRCISYFGroupStatusRadio")
-            .replace("{answer}", iValue);
+# Member table — Name input, indexed by 1-based row number {index}
+# Plain matinput in td[1], no formcontrolname — row-scoped via tbody tr position
+# Replace {index} at runtime with 1-based member row number
+iNRCISYFMemberNameInput = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[1]//input[@matinput]
 
-    iAction("WAITVISIBLE", "XPATH", iRadioXpath, null);
-    iAction("CLICK",       "XPATH", iRadioXpath, null);
-    log.info("[TC13] Group status confirmed: " + pAnswer + " (DOM value=" + iValue + ")");
-}
+# Member table — DOB datepicker input, indexed by row {index}
+# Disabled by default — JS removeAttribute('disabled') + sendKeys(DD/MM/YYYY) + TAB required
+# Confirmed by data-mat-calendar attribute and mat-form-field-disabled class in DOM
+iNRCISYFMemberDOBInput = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[2]//input[@matinput]
+
+# Member table — Eligible Farmer mat-checkbox host element, indexed by row {index}
+# State detection via mat-mdc-checkbox-checked class on this host before clicking
+iNRCISYFMemberEligibleCheckboxHost = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[3]//mat-checkbox
+
+# Member table — Eligible Farmer native checkbox input, indexed by row {index}
+# JS click on this native input bypasses mat-mdc-checkbox-touch-target interception
+iNRCISYFMemberEligibleInput = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[3]//mat-checkbox//input[@type='checkbox']
 
 
---------------
-And the agent enters company details
-  | croNumber     | 23315673    |
-  | companyName   | Company 1   |
-  | secretaryName | Mary Donald |
+# ------------------------------------------------------------------------------------------------NRCISYF Group Status Radio------------------------------------------------------------------------------------------------
 
-
-
+# Group status question — "Has the Applicant effective control and decision making power within the group?"
+# mat-radio-group has no formcontrolname — matched via native input value attribute
+# Java maps "Yes" → value="true" and "No" → value="false" before calling replace("{answer}", iValue)
+# Never pass "Yes"/"No" directly into this XPath — always map first in the step definition
+iNRCISYFGroupStatusRadio = //app-nr-cisyf-group-status//mat-radio-group//input[@type='radio' and @value='{answer}']
