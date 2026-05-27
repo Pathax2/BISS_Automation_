@@ -61,7 +61,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "NR/CISYF" tab on the My Clients page
 
-  @regression @nrcisyf @e2e
+  @regression @nrcisyf @e2e @tc13
   Scenario: AT-ENTS-E2E - Agent completes the end-to-end NRCISYF regression flow
 
     # ===========================================
@@ -147,8 +147,10 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
       | A. National Reserve (as Young Farmer) |
       | B. National Reserve (as New Farmer)   |
     Then the invalid category combination error should be displayed for "B"
+    And the agent closes the NRCISYF category dialog
 
     # --- B then A — mutual exclusion error ---
+    When the agent opens the NRCISYF Apply or Edit dialog
     When the agent resets all category selections
     And the agent selects NRCISYF categories
       | B. National Reserve (as New Farmer)   |
@@ -167,18 +169,12 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds past the category selection
     Then the agent should see the CISYF category prompt
     And the agent selects additional CISYF category if prompted
-    And the agent closes the NRCISYF category dialog
+
 
     # ===========================================
     # SECTION 7 : Joint Herdowner — member count
     # Covers: TC08, TC09, TC10, TC11, TC12, TC13
     # ===========================================
-    When the agent opens the NRCISYF Apply or Edit dialog
-    And the agent resets all category selections
-    And the agent selects NRCISYF categories
-      | A. National Reserve (as Young Farmer) |
-    And the agent proceeds past the category selection
-    And the agent skips CISYF category if prompted
     And the agent selects farming entity "Joint herdowner"
     Then the group member count dropdown should offer values
       | 1 |
@@ -190,6 +186,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
 
     # --- Navigate back for the next flow ---
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
 
     # ===========================================
     # SECTION 8 : Individual Cat A only — full submit
@@ -207,7 +204,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -226,6 +223,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC06, TC15
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -238,7 +236,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -258,7 +256,9 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # SECTION 10 : Individual Cat B only — full submit
     # Covers: TC04, TC16
     # ===========================================
+
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -270,7 +270,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                                |
-      | dateOfCompletion   | 1                                  |
+      | dateOfCompletion   | 01/01/2026                         |
       | certificateAwarded | Yes                                |
       | college            | Dundalk Institute of Technology    |
       | qualification      | Teagasc Diploma in Pig Production  |
@@ -289,6 +289,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC07, TC17
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -301,7 +302,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -322,6 +323,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC05, TC18
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -333,7 +335,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -354,6 +356,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC35
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -369,8 +372,8 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
       | directorName | Mary Donald  |
     And the agent sets group member count to "1"
     And the agent enters group member details
-      | memberIndex | name    | dobDay | dobMonth | dobYear | eligible |
-      | 1           | Member1 | 1      | FEB      | 2003    | Yes      |
+      | memberIndex | name         | dob        | eligible |
+      | 1           | John Smith   | 15/06/1995 | Yes      |
     And the agent confirms group status question as "Yes"
     And the agent proceeds to the qualification step
 
