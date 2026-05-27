@@ -1,56 +1,220 @@
-# ------------------------------------------------------------------------------------------------NRCISYF Company Details------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------TC_13------------------------------------------------------------------------------------- 
+// ===================================================================================================================================
+    //  HELPERS
+    // ===================================================================================================================================
 
-# Farming Entity dropdown — mat-select scoped to app-nr-cisyf-group-status component
-# Hint: "Please select the type of Farming entity under which you operate"
-iNRCISYFFarmingEntityDropdown = //app-nr-cisyf-group-status//mat-select[@id='mat-select-0']
-
-# Farming Entity dropdown option — CDK overlay portal, matched by visible span text
-# Replace {value} at runtime e.g. "Individual", "Company", "Joint herdowner"
-iNRCISYFFarmingEntityOption = //mat-option[.//span[normalize-space()='{value}']]
-
-# CRO Number input — anchored by mat-label "CRO Number", avoids fragile mat-input-N id dependency
-iNRCISYFCRONumberInput = //app-nr-cisyf-group-status//mat-label[normalize-space()='CRO Number']/ancestor::mat-form-field//input[@matinput]
-
-# Company Name input — anchored by mat-label "Company Name"
-iNRCISYFCompanyNameInput = //app-nr-cisyf-group-status//mat-label[normalize-space()='Company Name']/ancestor::mat-form-field//input[@matinput]
-
-# Company Secretary Name input — anchored by mat-label "Company Secretary Name"
-iNRCISYFCompanySecretaryNameInput = //app-nr-cisyf-group-status//mat-label[normalize-space()='Company Secretary Name']/ancestor::mat-form-field//input[@matinput]
-
-# Number of group members dropdown — mat-select anchored by mat-label text
-# Hint: "Please select the number of members within the group"
-iNRCISYFMemberCountDropdown = //app-nr-cisyf-group-status//mat-label[normalize-space()='Number of group members']/ancestor::mat-form-field//mat-select
-
-# Number of group members dropdown option — CDK overlay portal
-# Replace {value} at runtime e.g. "1", "2", "3"
-iNRCISYFMemberCountOption = //mat-option[.//span[normalize-space()='{value}']]
-
-
-# ------------------------------------------------------------------------------------------------NRCISYF Member Table------------------------------------------------------------------------------------------------
-
-# Member table — Name input, indexed by 1-based row number {index}
-# Plain matinput in td[1], no formcontrolname — row-scoped via tbody tr position
-# Replace {index} at runtime with 1-based member row number
-iNRCISYFMemberNameInput = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[1]//input[@matinput]
-
-# Member table — DOB datepicker input, indexed by row {index}
-# Disabled by default — JS removeAttribute('disabled') + sendKeys(DD/MM/YYYY) + TAB required
-# Confirmed by data-mat-calendar attribute and mat-form-field-disabled class in DOM
-iNRCISYFMemberDOBInput = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[2]//input[@matinput]
-
-# Member table — Eligible Farmer mat-checkbox host element, indexed by row {index}
-# State detection via mat-mdc-checkbox-checked class on this host before clicking
-iNRCISYFMemberEligibleCheckboxHost = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[3]//mat-checkbox
-
-# Member table — Eligible Farmer native checkbox input, indexed by row {index}
-# JS click on this native input bypasses mat-mdc-checkbox-touch-target interception
-iNRCISYFMemberEligibleInput = (//app-nr-cisyf-group-status//table//tbody//tr)[{index}]//td[3]//mat-checkbox//input[@type='checkbox']
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogout
+    // Description   : Logs out the current session by clicking the Exit link then the Logout button.
+    //                 Falls back to navigating to the base URL if UI logout fails.
+    //                 Called by theAgentOpensTheNRCISYFApplyOrEditDialog when the new herd belongs
+    //                 to a different agent — the current session must be terminated first.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026
+    // ***************************************************************************************************************************************************************************************
+    private void performLogout()
+    {
+        log.info("[TC13-RELOGIN] Logging out current session...");
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),   null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"),  null);
+            By iSadPOPup = By.xpath(ObjReader.getLocator("iLogoutPopup"));
+            if (isVisible(iSadPOPup, 1)) {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"),  null);
+            }
 
 
-# ------------------------------------------------------------------------------------------------NRCISYF Group Status Radio------------------------------------------------------------------------------------------------
+           // iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+            log.info("[TC13-RELOGIN] Logout complete.");
+        }
+        catch (Exception e)
+        {
+            log.warning("[TC13-RELOGIN] UI logout failed (" + e.getMessage() + ") — navigating to base URL as fallback.");
+            getDriver().navigate().to(Hooks.iUrl);
+            //iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+        }
+    }
 
-# Group status question — "Has the Applicant effective control and decision making power within the group?"
-# mat-radio-group has no formcontrolname — matched via native input value attribute
-# Java maps "Yes" → value="true" and "No" → value="false" before calling replace("{answer}", iValue)
-# Never pass "Yes"/"No" directly into this XPath — always map first in the step definition
-iNRCISYFGroupStatusRadio = //app-nr-cisyf-group-status//mat-radio-group//input[@type='radio' and @value='{answer}']
+
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogin
+    // Description   : Logs in as the specified agent — handles PIN+TOTP and OTP-only flows.
+    //                 Detects Account Expired error and marks the agent via Hooks.markAgentExpired().
+    //                 Mirrors TC_03 and TC_18 login patterns exactly.
+    //                 Called by theAgentOpensTheNRCISYFApplyOrEditDialog after logout.
+    // Parameters    : pUsername — agent username to log in as
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026
+    // ***************************************************************************************************************************************************************************************
+    private void performLogin(String pUsername)
+    {
+        log.info("[TC13-RELOGIN] Logging in as: " + pUsername);
+        //iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+        getDriver().navigate().to(Hooks.iUrl);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
+
+        // ── Account Expired detection ─────────────────────────────────────────────────────
+        By iExpiredBy = By.xpath(ObjReader.getLocator("iAccountExpiredError"));
+        if (isVisible(iExpiredBy, 3))
+        {
+            String iErrText = getDriver().findElement(iExpiredBy).getText().trim();
+            if (iErrText.toLowerCase().contains("account expired") || iErrText.toLowerCase().contains("account has expired")|| iErrText.contains("Invalid username or password."))
+            {
+                log.warning("[TC13-RELOGIN] Account Expired for: " + pUsername + " — marking expired.");
+                Hooks.markAgentExpired(pUsername);
+                return;
+            }
+        }
+
+        // ── PIN + TOTP flow ───────────────────────────────────────────────────────────────
+        By iPinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+        if (isVisible(iPinFormBy, 3))
+        {
+            log.info("[TC13-RELOGIN] PIN screen — filling slots 1-7.");
+            for (int iIdx = 1; iIdx <= 7; iIdx++)
+            {
+                By iPinBy = By.xpath(ObjReader.getLocator("iPinInputIndex")
+                        .replace("{idx}", String.valueOf(iIdx)));
+                if (isVisible(iPinBy, 1))
+                {
+                    WebElement iInput = getDriver().findElement(iPinBy);
+                    if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+                    {
+                        iInput.clear();
+                        iInput.sendKeys("1");
+                    }
+                }
+            }
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info("[TC13-RELOGIN] PIN + TOTP submitted.");
+        }
+        else
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info("[TC13-RELOGIN] OTP-only login submitted.");
+        }
+
+        // ── Accept Terms if shown ─────────────────────────────────────────────────────────
+        if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info("[TC13-RELOGIN] Terms accepted.");
+        }
+        log.info("[TC13-RELOGIN] Login complete: " + pUsername);
+    }
+
+-----------------------------------------------------------------------TC_03------------------------------------------------------------------------------------- 
+    // ===================================================================================================================================
+    //  PRIVATE HELPERS — Login / Logout / Navigation (reused by herd retry loop)
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performLogout
+    // Description   : Clicks the logout icon and waits for the landing page to confirm
+    //                 the session has been terminated. Safe to call at any point when
+    //                 the agent is inside the BISS portal.
+    // Parameters    : none
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date          : 17-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private void performLogout()
+    {
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),   null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"),  null);
+            By iSadPOPup = By.xpath(ObjReader.getLocator("iLogoutPopup"));
+            if (isVisible(iSadPOPup, 1)) {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"),  null);
+            }
+
+
+            // iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+            log.info("[TC13-RELOGIN] Logout complete.");
+        }
+        catch (Exception e)
+        {
+            log.warning("[TC13-RELOGIN] UI logout failed (" + e.getMessage() + ") — navigating to base URL as fallback.");
+            getDriver().navigate().to(Hooks.iUrl);
+            //iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+        }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : performLogin
+    // Description   : Executes the full Keycloak login sequence for the given username.
+    //                 Handles PIN screen (slots 1–7) and TOTP, same as the Background
+    //                 login step — extracted here so the herd retry loop can call it
+    //                 without duplicating logic.
+    //                 Password is always read from TD:Password (same for all agents
+    //                 in the test environment).
+    //                 Terms & Conditions acceptance is handled if the screen appears.
+    // Parameters    : pUsername (String) — Keycloak username of the agent to log in as
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date          : 17-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private void performLogin(String pUsername)
+    {
+        log.info("[RELOGIN] Logging in as: " + pUsername);
+
+        // Keycloak entry point
+        getDriver().navigate().to(Hooks.iUrl);
+       // iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),    null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),     pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"),null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),     "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),           null);
+
+        // PIN screen (appears for some accounts — safe to skip if not present)
+        By iPinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+        if (isVisible(iPinFormBy, 3))
+        {
+            log.info("[RELOGIN] PIN screen detected.");
+            for (int idx = 1; idx <= 7; idx++)
+            {
+                String iDynXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+                By iPinInputBy   = By.xpath(iDynXpath);
+                if (isVisible(iPinInputBy, 1))
+                {
+                    org.openqa.selenium.WebElement iInput = getDriver().findElement(iPinInputBy);
+                    if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+                    {
+                        iInput.clear();
+                        iInput.sendKeys("1");
+                        log.info("[RELOGIN] PIN slot " + idx + " filled.");
+                    }
+                }
+            }
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info("[RELOGIN] PIN + TOTP submitted.");
+        }
+        else
+        {
+            // OTP-only path
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info("[RELOGIN] OTP-only login submitted.");
+        }
+
+        // Terms & Conditions (appears rarely — accept silently if shown)
+        if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info("[RELOGIN] Terms & Conditions accepted.");
+        }
+
+        log.info("[RELOGIN] Login complete for: " + pUsername);
+    }
+
