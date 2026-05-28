@@ -1,38 +1,1297 @@
-// REMOVE this line:
-"AND   app_herd_no    LIKE 'J%' " +
+package database;
 
-// REPLACE with this:
-"AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.sql.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.Date;
+import java.util.logging.*;
+
+// =====================================================================================================================================
+// File          : DBRouter.java
+// Package       : database
+// Description   : Multi-database query router for the BISS Automation Framework.
+//                 Provides a single entry point for all SQL execution across BISS_DATA
+//                 and BISS_INET Oracle databases. All queries are identified by a logical
+//                 label string and resolved to parameterised SQL internally, keeping
+//                 step definitions and hooks free of SQL syntax.
+//
+//                 Supports two execution modes:
+//                   1. runDB()     — label-based execution (predefined queries only)
+//                   2. runRawSQL() — raw SQL execution (utility tools and ad-hoc queries)
+//
+//                 Connection properties are loaded once at class initialisation from:
+//                   src/test/resources/db.properties
+//
+//                 Usage:
+//                   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "25");
+//                   String herd = DBRouter.getValue("APP_HERD_NO");
+//
+//                   DBRouter.runDB("INET", "Get Login Id for herd", herd);
+//                   String username = DBRouter.getValue("USERNAME");
+//
+//                   DBRouter.runDB("DATA", "List of individual herds with CISYF scheme", "2026", "25");
+//                   DBRouter.runDB("DATA", "List of not started individual herds eligible for CISYF", "2026", "25");
+//                   String herd = DBRouter.getValue("APP_HERD_NO");
+//
+//                   DBRouter.runRawSQL("DATA", "SELECT app_herd_no FROM vwbs_application WHERE ...");
+//                   List<Map<String, Object>> rows = DBRouter.getRows();
+//
+//                 db.properties keys:
+//                   db.url              — BISS_DATA JDBC connection URL
+//                   db.username         — BISS_DATA username
+//                   db.password         — BISS_DATA password
+//                   db.inet.url         — BISS_INET JDBC connection URL
+//                   db.inet.username    — BISS_INET username
+//                   db.inet.password    — BISS_INET password
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 27-04-2026
+// =====================================================================================================================================
+
+public class DBRouter
+{
+    // =====================================================================
+    // STATIC RESULT STORE
+    // =====================================================================
+    public static List<Map<String, Object>> lastRows   = new ArrayList<>();
+    public static Object                    lastScalar = null;
+    public static String                    lastLabel  = "";
+
+    // =====================================================================
+    // DB CONFIGURATION
+    // =====================================================================
+    private static final Logger log             = Logger.getLogger(DBRouter.class.getName());
+    private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
+
+    // BISS_DATA connection
+    private static String DB_URL;
+    private static String DB_USER;
+    private static String DB_PASSWORD;
+
+    // BISS_INET connection
+    private static String DB_INET_URL;
+    private static String DB_INET_USER;
+    private static String DB_INET_PASSWORD;
+
+    static
+    {
+        setupLogger();
+        loadDBProperties();
+    }
+
+    // =====================================================================
+    // PUBLIC API — LABEL-BASED EXECUTION
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : runDB
+    // Description   : Executes a predefined SQL query identified by a logical label string.
+    //                 The label is normalised (trimmed, uppercased, special characters replaced)
+    //                 and matched in a switch block to the corresponding parameterised SQL.
+    //                 Results are stored in lastRows and lastScalar for caller access via
+    //                 getValue(), getRows(), and hasRows().
+    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
+    //                 label  — logical query label e.g. "List of herds with no errors at all"
+    //                 params — bind parameter values for the selected query (varies per label)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void runDB(String dbKey, String label, String... params)
+    {
+        Objects.requireNonNull(dbKey,  "dbKey cannot be null");
+        Objects.requireNonNull(label,  "label cannot be null");
+
+        final String which = normalizeDb(dbKey);
+        final String key   = normalize(label);
+
+        lastLabel = label;
+
+        String   sql        = null;
+        Object[] jdbcParams = new Object[0];
+
+        switch (key)
+        {
+            // ----------------------------------------------------------------
+            // DATA DB: Not Started individual herds (A prefix) with no errors
+            //
+            // Confirmed final query (27-04-2026) after full DB investigation.
+            //
+            // Selection criteria:
+            //   app_mde_code = 1        → RI status (Renewal iNet preprint / Not Started)
+            //   app_herd_no LIKE 'A%'   → Individual herds only. Excludes D/Z/C prefix
+            //                             herds which belong to other agent portfolios
+            //                             and cause BISS_INET mismatch.
+            //   EXISTS land parcel      → Herd must have at least one non-deleted land parcel.
+            //   NOT EXISTS mde_code IN  → Excludes herds with any of the following statuses:
+            //     (3, 4, 6, 8)              3 = D  (Draft)
+            //                               4 = I  (iNet / Submitted)
+            //                               6 = H  (Helpdesk)
+            //                               8 = DD (Draft Dept)
+            //
+            // Expired herd handling:
+            //   Herd expiry is not stored in vwbs_application — confirmed by column-by-column
+            //   comparison of A1010096 (valid) vs A1010070 (expired). Expiry is in Keycloak
+            //   SSO only. Expired agents are handled at runtime by Hooks.markAgentExpired()
+            //   which detects the "Account Expired" screen and re-resolves a fresh herd+agent.
+            //
+            // Column returned: APP_HERD_NO
+            //   executeQuery() uppercases all column labels so Hooks.java r.get("APP_HERD_NO")
+            //   works without any additional mapping.
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH NO ERRORS AT ALL":
+            {
+                requireParamCountBetween(key, params, 1, 3);
+
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 150;
+                // params[2] accepted for backward compatibility — not used in current query
+
+                sql =
+                        "SELECT ap_ri.app_herd_no " +
+                                "FROM vwbs_application ap_ri " +
+                                "WHERE ap_ri.app_mde_code = 1 " +
+                                "AND ap_ri.app_year = ? " +
+                                "AND ap_ri.app_herd_no LIKE 'B%' " +
+                                "AND EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM tdbs_application_land x " +
+                                "    WHERE x.apl_year        = ap_ri.app_year " +
+                                "    AND   x.apl_app_id      = ap_ri.app_id " +
+                                "    AND   x.apl_deleted_ind = 'N' " +
+                                ") " +
+                                "AND NOT EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM vwbs_application app " +
+                                "    WHERE app.app_year     = ap_ri.app_year " +
+                                "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
+                                "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
+                                ") " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY ap_ri.app_herd_no";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Herds by scheme year
+            // ----------------------------------------------------------------
+            case "HERDS BY SCHEME YEAR":
+            {
+                requireParamCountBetween(key, params, 1, 1);
+                sql =
+                        "SELECT h.hld_herd_no " +
+                                "FROM tddp_application a " +
+                                "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
+                                "WHERE a.app_syr_code = ? " +
+                                "ORDER BY h.hld_herd_no";
+                jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Resolve holding ID for a given herd number
+            // ----------------------------------------------------------------
+            case "GET HOLD ID FOR HERD":
+            {
+                requireParamCountBetween(key, params, 1, 1);
+                sql        = "SELECT get_hold(?) AS holding_id FROM dual";
+                jdbcParams = new Object[]{ params[0] };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // INET DB: Get agent username for a given herd number
+            //
+            // Source: Query 19 from BISS test data reference document.
+            //
+            // Uses a correlated subquery with ROWNUM = 1 to return the first
+            // available agent login for the given herd. Works for any herd
+            // regardless of how many agents are associated.
+            //
+            // ORDER BY ca.ca_start_date DESC returns the most recently associated
+            // agent first — most likely to be the current active/primary agent.
+            //
+            // Expired agent handling:
+            //   SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date filters
+            //   expired herd registrations at the DB level. If the returned agent
+            //   has an expired SSO account, the TC_03 login step detects
+            //   "Account Expired" on screen and calls Hooks.markAgentExpired()
+            //   which re-resolves a fresh herd+agent pair automatically.
+            //
+            // Column returned: USERNAME
+            //   Aliased as LoginId in the original query but uppercased to USERNAME
+            //   by executeQuery() so getValue("USERNAME") works consistently.
+            // ----------------------------------------------------------------
+            case "GET LOGIN ID FOR HERD":
+            {
+                requireParamCountBetween(key, params, 1, 1);
+                sql =
+                        "SELECT hbcus.bcus_bus_id AS HERDNO, " +
+                                "       (SELECT ui.uri_username " +
+                                "          FROM tdcr_user_info ui " +
+                                "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
+                                "           AND ROWNUM = 1) AS USERNAME " +
+                                "  FROM tdco_customer_asscs ca, " +
+                                "       tdco_business_customers abcus, " +
+                                "       tdco_business_customers hbcus " +
+                                " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
+                                "   AND ca.ca_cac_code     = 194 " +
+                                "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
+                                "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
+                                "   AND hbcus.bcus_bus_id  = ? " +
+                                " ORDER BY ca.ca_start_date DESC";
+                jdbcParams = new Object[]{ params[0] };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with active Preliminary Checks (year)
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIMINARY CHECKS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
+                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with Dual Claims or Overlap findings (year)
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH DUAL CLAIMS CHECK":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT * " +
+                                "FROM vwbs_preliminary_check_dc_ol " +
+                                "WHERE scheme_year = ? " +
+                                "AND ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with Overclaim findings (year)
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH OVERCLAIMS CHECK":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT * " +
+                                "FROM vwbs_preliminary_check_oc " +
+                                "WHERE scheme_year = ? " +
+                                "AND ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with Preliminary Checks on commonage parcels
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
+                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND lvl_commonage_id IS NOT NULL " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with Preliminary Checks filtered by response status
+            //
+            // params[0] = year
+            // params[1] = status e.g. "Pending", "Accepted", "Rejected"
+            // params[2] = limit (optional)
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS":
+            {
+                requireParamCountBetween(key, params, 2, 3);
+                int    year     = parseInt(params[0], "year");
+                String status   = params[1].trim();
+                int    maxRows  = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
+                sql =
+                        "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND lvs_desc = ? " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, status, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: One herd per Preliminary Check type (offset-based retry)
+            //
+            // Returns one herd per check type (Overclaim, Dual claim, Agricultural
+            // Activity) using ROW_NUMBER() OVER (PARTITION BY LVC_DESC).
+            // The offset parameter increments on each retry so a different herd
+            // is returned if the previous candidate fails INET validation.
+            //
+            // params[0] = year
+            // params[1] = offset (0 on first call, increment on each retry)
+            // ----------------------------------------------------------------
+            case "PRELIMINARY CHECKS HERDS":
+            {
+                requireParamCountBetween(key, params, 2, 2);
+                int year     = parseInt(params[0], "year");
+                int offset   = parseInt(params[1], "offset");
+                int targetRn = offset + 1;
+
+                sql =
+                        "SELECT * FROM ( " +
+                                "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
+                                "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
+                                "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
+                                "         ROW_NUMBER() OVER ( " +
+                                "             PARTITION BY LVC_DESC " +
+                                "             ORDER BY LVL_HERD_NO " +
+                                "         ) AS RN " +
+                                "  FROM vwbs_land_validation " +
+                                "  WHERE LVL_YEAR = ? " +
+                                "  AND LVT_DESC = 'Preliminary Check' " +
+                                "  AND LVS_DESC = 'Pending' " +
+                                "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
+                                ") WHERE RN = ?";
+                jdbcParams = new Object[]{ year, targetRn };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Individual herds with CISYF scheme applied (TC_13 ENTS)
+            //
+            // Returns individual herds (applicant_type = 'I') where:
+            //   - Application status is Submitted (mde_abbrev = 'I')
+            //   - Herd prefix is 'J%' (intentional for TC_13 ENTS scenarios)
+            //   - At least one non-deleted land parcel exists
+            //   - No payment has been processed yet (pap_payment_ind = 'Y' absent)
+            //   - CISYF scheme is applied — fn_GetSchemeApplied(aph_app_id, 3) = 'Y'
+            //     (scheme code 3 = CISYF in pkbs_payment_utils)
+            //   - substr(app_herd_no, 1, 1) > 'A' excludes TRNs as an additional guard
+            //
+            // J% prefix is intentional — TC_13 ENTS transfer scenarios require
+            // J-prefix herds specifically. Do not generalise to other prefixes
+            // without confirming TC_13 test data requirements.
+            //
+            // params[0] = year  (required)
+            // params[1] = limit (optional — defaults to 50)
+            // ----------------------------------------------------------------
+            case "LIST OF INDIVIDUAL HERDS WITH CISYF SCHEME":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
+                sql =
+                        "SELECT app_herd_no, app_year, aph_herd_type " +
+                                "FROM vwbs_application_herd " +
+                                "WHERE mde_abbrev     = 'I' " +
+                                "AND   app_herd_no    LIKE 'A%' " +
+                                "AND   applicant_type = 'I' " +
+                                "AND EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM tdbs_application_land x " +
+                                "    WHERE x.apl_year        = app_year " +
+                                "    AND   x.apl_aph_id      = aph_id " +
+                                "    AND   x.apl_app_id      = aph_app_id " +
+                                "    AND   x.apl_deleted_ind = 'N' " +
+                                ") " +
+                                "AND NOT EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM tdbs_payment_application x " +
+                                "    WHERE x.pap_app_id      = aph_app_id " +
+                                "    AND   x.pap_payment_ind = 'Y' " +
+                                ") " +
+                                "AND app_year = ? " +
+                                "AND NVL(pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3), 'N') = 'Y' " +
+                                "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY app_herd_no DESC";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Not Started individual herds eligible for CISYF (TC_13 ENTS)
+            //
+            // Returns J-prefix individual herds where the CURRENT year application
+            // is Not Started (mde_abbrev = 'RI') but the PREVIOUS year's submitted
+            // application had CISYF applied — meaning the herd is eligible for
+            // NR/CISYF in the current year but hasn't started yet.
+            //
+            // Use case: TC_13 full submission flow from scratch — herd appears on
+            // the NR/CISYF tab with no existing application, allowing a fresh Apply.
+            //
+            // Selection criteria:
+            //   curr.mde_abbrev = 'RI'                → Not Started (current year)
+            //   curr.app_herd_no LIKE 'J%'             → J-prefix individual herds
+            //   curr.applicant_type = 'I'              → Individual only
+            //   EXISTS land parcel (current year)      → Herd has active land
+            //   EXISTS prev year submitted with CISYF  → CISYF-eligible based on
+            //                                            previous year application
+            //   SUBSTR > 'A'                           → Excludes TRNs
+            //
+            // params[0] = year  (required — current scheme year)
+            // params[1] = limit (optional — defaults to 50)
+            // ----------------------------------------------------------------
+            case "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
+                sql =
+                        "SELECT curr.app_herd_no, curr.app_year, curr.aph_herd_type " +
+                                "FROM vwbs_application_herd curr " +
+                                "WHERE curr.mde_abbrev     = 'RI' " +
+                                "AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "AND   curr.applicant_type = 'I' " +
+                                "AND   curr.app_year       = ? " +
+                                "AND EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM tdbs_application_land x " +
+                                "    WHERE x.apl_year        = curr.app_year " +
+                                "    AND   x.apl_aph_id      = curr.aph_id " +
+                                "    AND   x.apl_app_id      = curr.aph_app_id " +
+                                "    AND   x.apl_deleted_ind = 'N' " +
+                                ") " +
+                                "AND EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM vwbs_application_herd prev " +
+                                "    WHERE prev.app_herd_no = curr.app_herd_no " +
+                                "    AND   prev.app_year    = curr.app_year - 1 " +
+                                "    AND   prev.mde_abbrev  = 'I' " +
+                                "    AND   NVL(pkbs_payment_utils.fn_GetSchemeApplied(prev.aph_app_id, 3), 'N') = 'Y' " +
+                                ") " +
+                                "AND SUBSTR(curr.app_herd_no, 1, 1) > 'A' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY curr.app_herd_no DESC";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            default:
+                throw new RuntimeException("Unknown DB label: " + label);
+        }
+
+        executeQuery(which, sql, jdbcParams);
+    }
+
+    // =====================================================================
+    // PUBLIC API — RAW SQL EXECUTION
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : runRawSQL
+    // Description   : Executes a user-supplied raw SQL string directly on the chosen database,
+    //                 bypassing the label switch in runDB(). Used by utility tools such as
+    //                 HerdAgentExtractor where the SQL is composed at runtime and does not
+    //                 correspond to a predefined label.
+    //                 Results are stored identically to runDB() — accessible via getValue(),
+    //                 getRows(), and hasRows().
+    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
+    //                 sql    — raw SQL string to execute
+    //                 params — optional bind parameters matching '?' placeholders in sql
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 05-05-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void runRawSQL(String dbKey, String sql, Object... params)
+    {
+        Objects.requireNonNull(dbKey, "dbKey cannot be null");
+        Objects.requireNonNull(sql,   "sql cannot be null");
+        lastLabel = "RAW_SQL";
+        executeQuery(normalizeDb(dbKey), sql, params);
+    }
+
+    // =====================================================================
+    // EXECUTE SQL (internal — shared by runDB and runRawSQL)
+    // =====================================================================
+    private static void executeQuery(String whichDb, String sql, Object... params)
+    {
+        lastRows   = new ArrayList<>();
+        lastScalar = null;
+
+        try (Connection conn = "INET".equals(whichDb)
+                ? getInetConnection() : getDataConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql))
+        {
+            for (int i = 0; i < params.length; i++)
+            {
+                stmt.setObject(i + 1, params[i]);
+            }
+
+            try (ResultSet rs = stmt.executeQuery())
+            {
+                ResultSetMetaData md       = rs.getMetaData();
+                int               colCount = md.getColumnCount();
+
+                while (rs.next())
+                {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int c = 1; c <= colCount; c++)
+                    {
+                        String col = md.getColumnLabel(c);
+                        if (col == null || col.isEmpty()) col = md.getColumnName(c);
+                        // Always uppercase — callers use getValue("APP_HERD_NO") etc.
+                        row.put(col.toUpperCase(Locale.ROOT), rs.getObject(c));
+                    }
+                    lastRows.add(row);
+                }
+
+                if (!lastRows.isEmpty())
+                {
+                    lastScalar = lastRows.get(0).values().iterator().next();
+                }
+            }
+        }
+        catch (SQLException e)
+        {
+            throw new RuntimeException("DB (" + whichDb + ") execution failed: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    private static Connection getDataConnection() throws SQLException
+    {
+        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
+    }
+
+    private static Connection getInetConnection() throws SQLException
+    {
+        return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
+    }
+
+    // =====================================================================
+    // HELPER ACCESSORS
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getValue
+    // Description   : Returns the value of the specified column from the first row of the last
+    //                 query result. Column name matching is case-insensitive. Returns null if
+    //                 the result set is empty or the column is not found.
+    // Parameters    : column — column name e.g. "APP_HERD_NO" or "USERNAME"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static String getValue(String column)
+    {
+        if (lastRows.isEmpty()) return null;
+        Map<String, Object> first = lastRows.get(0);
+        for (String k : first.keySet())
+            if (k.equalsIgnoreCase(column))
+                return Objects.toString(first.get(k), null);
+        return null;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getRows
+    // Description   : Returns all rows from the last query result as a list of column-value maps.
+    //                 Column names are always stored in uppercase.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static List<Map<String, Object>> getRows()  { return lastRows; }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : hasRows
+    // Description   : Returns true if the last query returned at least one row.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean hasRows() { return !lastRows.isEmpty(); }
+
+    // =====================================================================
+    // PROPERTY LOADER
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : loadDBProperties
+    // Description   : Loads BISS_DATA and BISS_INET JDBC connection properties from
+    //                 src/test/resources/db.properties at class initialisation time.
+    //                 Throws RuntimeException if any required property is missing or blank.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void loadDBProperties()
+    {
+        Properties props = new Properties();
+        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE))
+        {
+            props.load(fis);
+
+            DB_URL      = props.getProperty("db.url");
+            DB_USER     = props.getProperty("db.username");
+            DB_PASSWORD = props.getProperty("db.password");
+            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD))
+            {
+                throw new RuntimeException(
+                        "Missing BISS_DATA properties (db.url / db.username / db.password)");
+            }
+
+            DB_INET_URL      = props.getProperty("db.inet.url");
+            DB_INET_USER     = props.getProperty("db.inet.username");
+            DB_INET_PASSWORD = props.getProperty("db.inet.password");
+            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD))
+            {
+                throw new RuntimeException(
+                        "Missing BISS_INET properties " +
+                                "(db.inet.url / db.inet.username / db.inet.password)");
+            }
+
+            log.info("[DBRouter] DATA and INET connection properties loaded successfully.");
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException("Cannot load db.properties at "
+                    + PROPERTIES_FILE + " : " + e.getMessage(), e);
+        }
+    }
+
+    // =====================================================================
+    // LOGGER SETUP
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setupLogger
+    // Description   : Configures a custom ConsoleHandler with a timestamped log format.
+    //                 Removes any default parent handlers to prevent duplicate log output.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void setupLogger()
+    {
+        try
+        {
+            Logger iRoot = Logger.getLogger(DBRouter.class.getName());
+            iRoot.setUseParentHandlers(false);
+            iRoot.setLevel(Level.ALL);
+
+            java.util.logging.Formatter iFmt = new java.util.logging.Formatter()
+            {
+                @Override
+                public String format(LogRecord r)
+                {
+                    return String.format("[%s] [%s] %s%n",
+                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+                                    .format(new Date(r.getMillis())),
+                            r.getLevel(),
+                            r.getMessage());
+                }
+            };
+
+            ConsoleHandler iConsole = new ConsoleHandler();
+            iConsole.setLevel(Level.ALL);
+            iConsole.setFormatter(iFmt);
+
+            for (Handler h : iRoot.getHandlers()) iRoot.removeHandler(h);
+            iRoot.addHandler(iConsole);
+        }
+        catch (Exception e)
+        {
+            System.err.println("Logger setup failed: " + e.getMessage());
+        }
+    }
+
+    // =====================================================================
+    // NORMALIZERS AND VALIDATORS
+    // =====================================================================
+
+    private static String normalizeDb(String s)
+    {
+        String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
+        if ("DATA".equals(v) || "INET".equals(v)) return v;
+        throw new IllegalArgumentException(
+                "dbKey must be 'DATA' or 'INET' (was: " + s + ")");
+    }
+
+    private static String normalize(String s)
+    {
+        if (s == null) return "";
+        return s.replace(':', ' ')
+                .replace("\u2013", "-")
+                .replace("\u2014", "-")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toUpperCase(Locale.ROOT);
+    }
+
+    private static void requireParamCountBetween(String labelKey,
+                                                 String[] params,
+                                                 int min, int max)
+    {
+        int n = (params == null) ? 0 : params.length;
+        if (n < min || n > max)
+        {
+            throw new IllegalArgumentException(
+                    "Label '" + labelKey + "' expects between "
+                            + min + " and " + max + " parameter(s); got " + n);
+        }
+    }
+
+    private static int parseInt(String s, String name)
+    {
+        try { return Integer.parseInt(s.trim()); }
+        catch (Exception e)
+        {
+            throw new IllegalArgumentException(
+                    "Expected integer for " + name + " but got: " + s);
+        }
+    }
+
+    private static boolean isBlank(String s)
+    {
+        return s == null || s.trim().isEmpty();
+    }
+}
 
 
-SELECT COUNT(*)
-FROM vwbs_application_herd
-WHERE mde_abbrev     = 'I'
-AND   applicant_type = 'I'
-AND   app_year       = 2026
-AND   app_herd_no    LIKE 'J%'
-AND   NVL(pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3), 'N') = 'Y'
-AND NOT EXISTS (
-   SELECT 1
-   FROM tdbs_payment_application x
-   WHERE x.pap_app_id      = aph_app_id
-   AND   x.pap_payment_ind = 'Y'
-)
-AND EXISTS (
-   SELECT 1
-   FROM tdbs_application_land x
-   WHERE x.apl_year        = app_year
-   AND   x.apl_aph_id      = aph_id
-   AND   x.apl_app_id      = aph_app_id
-   AND   x.apl_deleted_ind = 'N'
-)
-AND NOT EXISTS (
-   SELECT 1
-   FROM vwbs_application app
-   WHERE app.app_year     = app_year
-   AND   app.app_herd_no  = app_herd_no
-   AND   app.app_mde_code IN (3, 4, 6, 8)
-)
-AND SUBSTR(app_herd_no, 1, 1) > 'A'
-AND ROWNUM <= 50
-ORDER BY app_herd_no DESC
+-------------------
+C:\Users\Aniket.Pathare\.jdks\ms-21.0.10\bin\java.exe -agentlib:jdwp=transport=dt_socket,address=127.0.0.1:49876,suspend=y,server=n "-javaagent:C:\Users\Aniket.Pathare\AppData\Local\JetBrains\IntelliJIdea2025.3\captureAgent\debugger-agent.jar=file:///C:/Users/ANIKET~1.PAT/AppData/Local/Temp/capture17727833655139216789.props" -Dkotlinx.coroutines.debug.enable.creation.stack.trace=false -Ddebugger.agent.enable.coroutines=true -Dkotlinx.coroutines.debug.enable.flows.stack.trace=true -Dkotlinx.coroutines.debug.enable.mutable.state.flows.stack.trace=true -Ddebugger.async.stack.trace.for.all.threads=true -Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 -classpath "C:\Users\Aniket.Pathare\BISS_Automation\target\test-classes;C:\Users\Aniket.Pathare\BISS_Automation\target\classes;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-java\4.18.1\selenium-java-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-api\4.18.1\selenium-api-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-chrome-driver\4.18.1\selenium-chrome-driver-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\auto\service\auto-service-annotations\1.1.1\auto-service-annotations-1.1.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-chromium-driver\4.18.1\selenium-chromium-driver-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-json\4.18.1\selenium-json-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-manager\4.18.1\selenium-manager-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-devtools-v120\4.18.1\selenium-devtools-v120-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-devtools-v121\4.18.1\selenium-devtools-v121-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-devtools-v122\4.18.1\selenium-devtools-v122-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-devtools-v85\4.18.1\selenium-devtools-v85-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-edge-driver\4.18.1\selenium-edge-driver-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-firefox-driver\4.18.1\selenium-firefox-driver-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-http\4.18.1\selenium-http-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\dev\failsafe\failsafe\3.3.2\failsafe-3.3.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-ie-driver\4.18.1\selenium-ie-driver-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-remote-driver\4.18.1\selenium-remote-driver-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\guava\guava\33.0.0-jre\guava-33.0.0-jre.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\guava\failureaccess\1.0.2\failureaccess-1.0.2.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\guava\listenablefuture\9999.0-empty-to-avoid-conflict-with-guava\listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\code\findbugs\jsr305\3.0.2\jsr305-3.0.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\checkerframework\checker-qual\3.41.0\checker-qual-3.41.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\errorprone\error_prone_annotations\2.23.0\error_prone_annotations-2.23.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\j2objc\j2objc-annotations\2.8\j2objc-annotations-2.8.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\semconv\opentelemetry-semconv\1.23.1-alpha\opentelemetry-semconv-1.23.1-alpha.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-api\1.35.0\opentelemetry-api-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-context\1.35.0\opentelemetry-context-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-exporter-logging\1.35.0\opentelemetry-exporter-logging-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-sdk-common\1.35.0\opentelemetry-sdk-common-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-sdk-extension-autoconfigure-spi\1.35.0\opentelemetry-sdk-extension-autoconfigure-spi-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-sdk-extension-autoconfigure\1.35.0\opentelemetry-sdk-extension-autoconfigure-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-api-events\1.35.0-alpha\opentelemetry-api-events-1.35.0-alpha.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-sdk-trace\1.35.0\opentelemetry-sdk-trace-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-extension-incubator\1.35.0-alpha\opentelemetry-extension-incubator-1.35.0-alpha.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-sdk\1.35.0\opentelemetry-sdk-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-sdk-metrics\1.35.0\opentelemetry-sdk-metrics-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\opentelemetry\opentelemetry-sdk-logs\1.35.0\opentelemetry-sdk-logs-1.35.0.jar;C:\Users\Aniket.Pathare\.m2\repository\net\bytebuddy\byte-buddy\1.14.12\byte-buddy-1.14.12.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-os\4.18.1\selenium-os-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\commons\commons-exec\1.3\commons-exec-1.3.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-safari-driver\4.18.1\selenium-safari-driver-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\seleniumhq\selenium\selenium-support\4.18.1\selenium-support-4.18.1.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-java\7.15.0\cucumber-java-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-junit-platform-engine\7.15.0\cucumber-junit-platform-engine-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-engine\1.10.1\junit-platform-engine-1.10.1.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-core\7.15.0\cucumber-core-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-gherkin\7.15.0\cucumber-gherkin-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-gherkin-messages\7.15.0\cucumber-gherkin-messages-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\gherkin\26.2.0\gherkin-26.2.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\messages\22.0.0\messages-22.0.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\tag-expressions\6.0.0\tag-expressions-6.0.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-expressions\17.0.1\cucumber-expressions-17.0.1.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\datatable\7.15.0\datatable-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-plugin\7.15.0\cucumber-plugin-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\docstring\7.15.0\docstring-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\html-formatter\20.4.0\html-formatter-20.4.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\junit-xml-formatter\0.2.0\junit-xml-formatter-0.2.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\ci-environment\10.0.0\ci-environment-10.0.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.10.2\junit-jupiter-api-5.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-commons\1.10.2\junit-platform-commons-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.10.2\junit-jupiter-engine-5.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-suite\1.10.2\junit-platform-suite-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-suite-api\1.10.2\junit-platform-suite-api-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-suite-engine\1.10.2\junit-platform-suite-engine-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-suite-commons\1.10.2\junit-platform-suite-commons-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-launcher\1.10.2\junit-platform-launcher-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\poi\poi-ooxml\5.2.5\poi-ooxml-5.2.5.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\poi\poi\5.2.5\poi-5.2.5.jar;C:\Users\Aniket.Pathare\.m2\repository\commons-codec\commons-codec\1.16.0\commons-codec-1.16.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Aniket.Pathare\.m2\repository\com\zaxxer\SparseBitSet\1.3\SparseBitSet-1.3.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\poi\poi-ooxml-lite\5.2.5\poi-ooxml-lite-5.2.5.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\xmlbeans\xmlbeans\5.2.0\xmlbeans-5.2.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\commons\commons-compress\1.25.0\commons-compress-1.25.0.jar;C:\Users\Aniket.Pathare\.m2\repository\commons-io\commons-io\2.15.0\commons-io-2.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\github\virtuald\curvesapi\1.08\curvesapi-1.08.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\commons\commons-collections4\4.4\commons-collections4-4.4.jar;C:\Users\Aniket.Pathare\.m2\repository\com\zaxxer\HikariCP\5.1.0\HikariCP-5.1.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\sun\mail\javax.mail\1.6.2\javax.mail-1.6.2.jar;C:\Users\Aniket.Pathare\.m2\repository\javax\activation\activation\1.1\activation-1.1.jar;C:\Users\Aniket.Pathare\.m2\repository\ch\qos\logback\logback-classic\1.4.14\logback-classic-1.4.14.jar;C:\Users\Aniket.Pathare\.m2\repository\ch\qos\logback\logback-core\1.4.14\logback-core-1.4.14.jar;C:\Users\Aniket.Pathare\.m2\repository\org\slf4j\slf4j-api\2.0.12\slf4j-api-2.0.12.jar;C:\Users\Aniket.Pathare\.m2\repository\org\slf4j\jul-to-slf4j\2.0.12\jul-to-slf4j-2.0.12.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\logging\log4j\log4j-to-slf4j\2.23.1\log4j-to-slf4j-2.23.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\logging\log4j\log4j-api\2.23.1\log4j-api-2.23.1.jar;C:\Users\Aniket.Pathare\.m2\repository\com\oracle\database\jdbc\ojdbc11\21.9.0.0\ojdbc11-21.9.0.0.jar;C:\Program Files\JetBrains\IntelliJ IDEA 2025.3.3\lib\idea_rt.jar" runner.TestRunner
+Connected to the target VM, address: '127.0.0.1:49876', transport: 'socket'
+13:33:57,276 |-INFO in ch.qos.logback.classic.LoggerContext[default] - This is logback-classic version 1.4.14
+13:33:57,278 |-INFO in ch.qos.logback.classic.util.ContextInitializer@35a3d49f - No custom configurators were discovered as a service.
+13:33:57,278 |-INFO in ch.qos.logback.classic.util.ContextInitializer@35a3d49f - Trying to configure with ch.qos.logback.classic.joran.SerializedModelConfigurator
+13:33:57,279 |-INFO in ch.qos.logback.classic.util.ContextInitializer@35a3d49f - Constructed configurator of type class ch.qos.logback.classic.joran.SerializedModelConfigurator
+13:33:57,285 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Could NOT find resource [logback-test.scmo]
+13:33:57,285 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Could NOT find resource [logback.scmo]
+13:33:57,295 |-INFO in ch.qos.logback.classic.util.ContextInitializer@35a3d49f - ch.qos.logback.classic.joran.SerializedModelConfigurator.configure() call lasted 7 milliseconds. ExecutionStatus=INVOKE_NEXT_IF_ANY
+13:33:57,295 |-INFO in ch.qos.logback.classic.util.ContextInitializer@35a3d49f - Trying to configure with ch.qos.logback.classic.util.DefaultJoranConfigurator
+13:33:57,296 |-INFO in ch.qos.logback.classic.util.ContextInitializer@35a3d49f - Constructed configurator of type class ch.qos.logback.classic.util.DefaultJoranConfigurator
+13:33:57,296 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Could NOT find resource [logback-test.xml]
+13:33:57,300 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Found resource [logback.xml] at [file:/C:/Users/Aniket.Pathare/BISS_Automation/target/test-classes/logback.xml]
+13:33:57,463 |-INFO in ch.qos.logback.classic.model.processor.ConfigurationModelHandlerFull - Registering a new ReconfigureOnChangeTask ReconfigureOnChangeTask(born:1779971637461)
+13:33:57,465 |-INFO in ch.qos.logback.classic.model.processor.ConfigurationModelHandlerFull - Will scan for changes in [file:/C:/Users/Aniket.Pathare/BISS_Automation/target/test-classes/logback.xml] 
+13:33:57,465 |-INFO in ch.qos.logback.classic.model.processor.ConfigurationModelHandlerFull - Setting ReconfigureOnChangeTask scanning period to 30 seconds
+13:33:57,476 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - Processing appender named [CONSOLE]
+13:33:57,476 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - About to instantiate appender of type [ch.qos.logback.core.ConsoleAppender]
+13:33:57,561 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - Processing appender named [FILE_ALL]
+13:33:57,561 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - About to instantiate appender of type [ch.qos.logback.core.rolling.RollingFileAppender]
+13:33:57,579 |-INFO in c.q.l.core.rolling.TimeBasedRollingPolicy@949684105 - setting totalSizeCap to 500 MB
+13:33:57,582 |-INFO in c.q.l.core.rolling.TimeBasedRollingPolicy@949684105 - Will use gz compression
+13:33:57,583 |-INFO in c.q.l.core.rolling.TimeBasedRollingPolicy@949684105 - Will use the pattern target/logs/biss-execution.%d{yyyy-MM-dd}.%i.log for the active file
+13:33:57,619 |-INFO in ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP@13d9cbf5 - The date pattern is 'yyyy-MM-dd' from file name pattern 'target/logs/biss-execution.%d{yyyy-MM-dd}.%i.log.gz'.
+13:33:57,619 |-INFO in ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP@13d9cbf5 - Roll-over at midnight.
+13:33:57,633 |-INFO in ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP@13d9cbf5 - Setting initial period to 2026-03-28T11:29:09.446Z
+13:33:57,633 |-WARN in ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP@13d9cbf5 - SizeAndTimeBasedFNATP is deprecated. Use SizeAndTimeBasedRollingPolicy instead
+13:33:57,633 |-WARN in ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP@13d9cbf5 - For more information see http://logback.qos.ch/manual/appenders.html#SizeAndTimeBasedRollingPolicy
+13:33:57,637 |-INFO in c.q.l.core.rolling.TimeBasedRollingPolicy@949684105 - Cleaning on start up
+13:33:57,644 |-INFO in c.q.l.core.rolling.helper.TimeBasedArchiveRemover - first clean up after appender initialization
+13:33:57,645 |-INFO in c.q.l.core.rolling.helper.TimeBasedArchiveRemover - Multiple periods, i.e. 32 periods, seem to have elapsed. This is expected at application start.
+13:33:57,646 |-INFO in ch.qos.logback.core.rolling.RollingFileAppender[FILE_ALL] - Active log file name: target/logs/biss-execution.log
+13:33:57,646 |-INFO in ch.qos.logback.core.rolling.RollingFileAppender[FILE_ALL] - File property is set to [target/logs/biss-execution.log]
+13:33:57,648 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - Processing appender named [FILE_FAIL]
+13:33:57,648 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - About to instantiate appender of type [ch.qos.logback.core.rolling.RollingFileAppender]
+13:33:57,650 |-INFO in c.q.l.core.rolling.TimeBasedRollingPolicy@1200470358 - Will use gz compression
+13:33:57,650 |-INFO in c.q.l.core.rolling.TimeBasedRollingPolicy@1200470358 - Will use the pattern target/logs/biss-failures.%d{yyyy-MM-dd}.log for the active file
+13:33:57,651 |-INFO in c.q.l.core.rolling.DefaultTimeBasedFileNamingAndTriggeringPolicy - The date pattern is 'yyyy-MM-dd' from file name pattern 'target/logs/biss-failures.%d{yyyy-MM-dd}.log.gz'.
+13:33:57,651 |-INFO in c.q.l.core.rolling.DefaultTimeBasedFileNamingAndTriggeringPolicy - Roll-over at midnight.
+13:33:57,651 |-INFO in c.q.l.core.rolling.DefaultTimeBasedFileNamingAndTriggeringPolicy - Setting initial period to 2026-03-28T11:29:09.450Z
+13:33:57,652 |-INFO in ch.qos.logback.core.rolling.RollingFileAppender[FILE_FAIL] - Active log file name: target/logs/biss-failures.log
+13:33:57,652 |-INFO in ch.qos.logback.core.rolling.RollingFileAppender[FILE_FAIL] - File property is set to [target/logs/biss-failures.log]
+13:33:57,652 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - Processing appender named [ASYNC_FILE_ALL]
+13:33:57,652 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - About to instantiate appender of type [ch.qos.logback.classic.AsyncAppender]
+13:33:57,656 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [FILE_ALL] to ch.qos.logback.classic.AsyncAppender[ASYNC_FILE_ALL]
+13:33:57,656 |-INFO in ch.qos.logback.classic.AsyncAppender[ASYNC_FILE_ALL] - Attaching appender named [FILE_ALL] to AsyncAppender.
+13:33:57,658 |-INFO in ch.qos.logback.classic.AsyncAppender[ASYNC_FILE_ALL] - Setting discardingThreshold to 102
+13:33:57,658 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - Processing appender named [ASYNC_FILE_FAIL]
+13:33:57,658 |-INFO in ch.qos.logback.core.model.processor.AppenderModelHandler - About to instantiate appender of type [ch.qos.logback.classic.AsyncAppender]
+13:33:57,659 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [FILE_FAIL] to ch.qos.logback.classic.AsyncAppender[ASYNC_FILE_FAIL]
+13:33:57,659 |-INFO in ch.qos.logback.classic.AsyncAppender[ASYNC_FILE_FAIL] - Attaching appender named [FILE_FAIL] to AsyncAppender.
+13:33:57,659 |-INFO in ch.qos.logback.classic.AsyncAppender[ASYNC_FILE_FAIL] - Setting discardingThreshold to 51
+13:33:57,660 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [commonFunctions] to DEBUG
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting additivity of logger [commonFunctions] to false
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [CONSOLE] to Logger[commonFunctions]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_ALL] to Logger[commonFunctions]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_FAIL] to Logger[commonFunctions]
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [stepdefinitions] to DEBUG
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting additivity of logger [stepdefinitions] to false
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [CONSOLE] to Logger[stepdefinitions]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_ALL] to Logger[stepdefinitions]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_FAIL] to Logger[stepdefinitions]
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [utilities] to DEBUG
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting additivity of logger [utilities] to false
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [CONSOLE] to Logger[utilities]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_ALL] to Logger[utilities]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_FAIL] to Logger[utilities]
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [reporting] to DEBUG
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting additivity of logger [reporting] to false
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [CONSOLE] to Logger[reporting]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_ALL] to Logger[reporting]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_FAIL] to Logger[reporting]
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [runner] to DEBUG
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting additivity of logger [runner] to false
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [CONSOLE] to Logger[runner]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_ALL] to Logger[runner]
+13:33:57,664 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_FAIL] to Logger[runner]
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [database] to DEBUG
+13:33:57,664 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting additivity of logger [database] to false
+13:33:57,665 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [CONSOLE] to Logger[database]
+13:33:57,665 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_ALL] to Logger[database]
+13:33:57,665 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_FAIL] to Logger[database]
+13:33:57,665 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [org.openqa.selenium] to INFO
+13:33:57,665 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [org.openqa.selenium.remote] to WARN
+13:33:57,665 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [io.cucumber] to INFO
+13:33:57,665 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [com.zaxxer.hikari] to INFO
+13:33:57,665 |-INFO in ch.qos.logback.classic.model.processor.LoggerModelHandler - Setting level of logger [org.apache.poi] to WARN
+13:33:57,665 |-INFO in ch.qos.logback.classic.model.processor.RootLoggerModelHandler - Setting level of ROOT logger to INFO
+13:33:57,665 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [CONSOLE] to Logger[ROOT]
+13:33:57,665 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_ALL] to Logger[ROOT]
+13:33:57,665 |-INFO in ch.qos.logback.core.model.processor.AppenderRefModelHandler - Attaching appender named [ASYNC_FILE_FAIL] to Logger[ROOT]
+13:33:57,665 |-INFO in ch.qos.logback.core.model.processor.DefaultProcessor@6ca18a14 - End of configuration.
+13:33:57,666 |-INFO in ch.qos.logback.classic.joran.JoranConfigurator@c667f46 - Registering current configuration as safe fallback point
+13:33:57,666 |-INFO in ch.qos.logback.classic.util.ContextInitializer@35a3d49f - ch.qos.logback.classic.util.DefaultJoranConfigurator.configure() call lasted 370 milliseconds. ExecutionStatus=DO_NOT_INVOKE_NEXT_IF_ANY
+
+May 28, 2026 1:33:58 P.M. reporting.ReportManager startSuite
+INFO: [ReportManager] Suite started | Environment= | Browser=CHROME
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 1 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 2 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 3 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 4 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 5 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 6 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 7 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 8 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 9 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 10 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 11 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 12 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 13 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 14 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 15 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 16 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 17 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 18 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 19 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 20 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 21 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 22 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 23 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 24 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 25 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 26 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 27 skipped (Execution=N)
+May 28, 2026 1:33:58 P.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] Row 28 skipped (Execution=N)
+
+╔══════════════════════════════════════════════════════════════════╗
+║  STARTING   : TC_13_ENTS
+║  Environment: QA
+║  Browser    : CHROME
+║  Feature    : C:\Users\Aniket.Pathare\BISS_Automation\src\test\resources\Test_Cases\ENTS\TC_13_ENTS.feature
+╚══════════════════════════════════════════════════════════════════╝
+May 28, 2026 1:33:58 P.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : TC_13_ENTS
+May 28, 2026 1:33:58 P.M. io.cucumber.core.feature.GluePath warnWhenWellKnownProjectSourceDirectory
+WARNING: Consider replacing glue path 'src/test/java/stepdefinitions' with 'stepdefinitions'.
+'
+The current glue path points to a source directory in your project. However cucumber looks for glue (i.e. step definitions) on the classpath. By using a package name you can avoid this ambiguity.
+May 28, 2026 1:33:59 P.M. stepdefinitions.Hooks killProcessByName
+INFO: Cleaned up process: chrome
+May 28, 2026 1:33:59 P.M. stepdefinitions.Hooks killProcessByName
+INFO: Cleaned up process: chromedriver
+May 28, 2026 1:33:59 P.M. stepdefinitions.Hooks beforeAllExecution
+INFO: ========== EXECUTION START : TC_13_ENTS ==========
+May 28, 2026 1:33:59 P.M. commonFunctions.CommonFunctions loadDescriptionCache
+INFO: [2026-05-28 13:33:59.697] ExecutionControl description cache loaded. Total entries: 34
+May 28, 2026 1:33:59 P.M. commonFunctions.CommonFunctions clearStepLog
+INFO: [2026-05-28 13:33:59.698] Step log cleared for new test case.
+May 28, 2026 1:33:59 P.M. utilities.ExcelUtilities loadCurrentTestDataRow
+INFO: Test data loaded for TestCase_ID : 'TC_13_ENTS' | Columns loaded : 4
+[2026-05-28 13:33:59] [INFO] [DBRouter] DATA and INET connection properties loaded successfully.
+May 28, 2026 1:34:00 P.M. stepdefinitions.Hooks beforeAllExecution
+INFO: [BOOT] Attempt 1/3 — trying 25 randomized candidate(s) from DATA (year=2026, limit=25)
+May 28, 2026 1:34:00 P.M. stepdefinitions.Hooks beforeAllExecution
+INFO: [BOOT] Candidate [1/25] : B1070687
+May 28, 2026 1:34:00 P.M. stepdefinitions.Hooks beforeAllExecution
+WARNING: [BOOT] INET: no USERNAME for herd=B1070687 — next candidate...
+May 28, 2026 1:34:00 P.M. stepdefinitions.Hooks beforeAllExecution
+INFO: [BOOT] Candidate [2/25] : B1280223
+May 28, 2026 1:34:01 P.M. stepdefinitions.Hooks beforeAllExecution
+INFO: [BOOT] SELECTED Herd=B1280223 | Username=agr25185
+May 28, 2026 1:34:01 P.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Data' | Column='HerdNumber' | Row=29 | Value='B1280223'
+May 28, 2026 1:34:01 P.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Data' | Column='Username' | Row=29 | Value='agr25185'
+May 28, 2026 1:34:01 P.M. stepdefinitions.Hooks beforeAllExecution
+INFO: [BOOT→Excel] Data updated: HerdNumber=B1280223, Username=agr25185
+May 28, 2026 1:34:03 P.M. org.openqa.selenium.devtools.CdpVersionFinder findNearestMatch
+WARNING: Unable to find CDP implementation matching 148
+May 28, 2026 1:34:03 P.M. org.openqa.selenium.chromium.ChromiumDriver lambda$new$5
+WARNING: Unable to find version of CDP to use for 148.0.7778.179. You may need to include a dependency on a specific version of the CDP using something similar to `org.seleniumhq.selenium:selenium-devtools-v86:4.18.1` where the version ("v86") matches the version of the chromium-based browser you're using and the version number of the artifact is the same as Selenium's.
+May 28, 2026 1:34:03 P.M. commonFunctions.CommonFunctions launchBrowser
+INFO: [2026-05-28 13:34:03.532] Browser launched successfully | Browser=CHROME | Headless=false | URL=https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+May 28, 2026 1:34:03 P.M. commonFunctions.CommonFunctions startWordReport
+INFO: [2026-05-28 13:34:03.807] Word report created : C:\Users\Aniket.Pathare\BISS_Automation\Test_Report\docs\TC_13_ENTS_28_05_2026_13_34_03.docx
+May 28, 2026 1:34:03 P.M. stepdefinitions.Hooks beforeAllExecution
+INFO: BeforeAll complete | URL=https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/ | Report=C:\Users\Aniket.Pathare\BISS_Automation\Test_Report\docs\TC_13_ENTS_28_05_2026_13_34_03.docx
+
+@regression @nrcisyf @e2e @tc13
+Scenario: AT-ENTS-E2E - Agent completes the end-to-end NRCISYF regression flow                              # src/test/resources/Test_Cases/ENTS/TC_13_ENTS.feature:65
+May 28, 2026 1:34:04 P.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : AT_ENTS_E2E_Agent_completes_th
+May 28, 2026 1:34:04 P.M. stepdefinitions.Hooks resolveRuntimeCISYFHerd
+INFO: [TC13-HOOK] Resolving random CISYF J-prefix herd for: AT-ENTS-E2E - Agent completes the end-to-end NRCISYF regression flow
+May 28, 2026 1:34:04 P.M. stepdefinitions.Hooks resolveRuntimeCISYFHerd
+INFO: [TC13-HOOK] Attempt 1/50 — querying BISS_DATA (year=2026, limit=50)
+May 28, 2026 1:34:04 P.M. stepdefinitions.Hooks resolveRuntimeCISYFHerd
+INFO: [TC13-HOOK] Candidate pool: 50 herd(s).
+May 28, 2026 1:34:04 P.M. stepdefinitions.Hooks resolveRuntimeCISYFHerd
+INFO: [TC13-HOOK] Pool shuffled. Evaluating candidates...
+May 28, 2026 1:34:05 P.M. stepdefinitions.Hooks resolveRuntimeCISYFHerd
+INFO: [TC13-HOOK] ✓ CISYF herd resolved:
+May 28, 2026 1:34:05 P.M. stepdefinitions.Hooks resolveRuntimeCISYFHerd
+INFO: [TC13-HOOK]   Herd     = Z1430556
+May 28, 2026 1:34:05 P.M. stepdefinitions.Hooks resolveRuntimeCISYFHerd
+INFO: [TC13-HOOK]   Username = agr17724
+May 28, 2026 1:34:05 P.M. utilities.SoftAssertManager reset
+INFO: [SoftAssert] State reset for current thread.
+May 28, 2026 1:34:05 P.M. utilities.ConfigManager loadBaseProperties
+INFO: [ConfigManager] Base config loaded from : src/test/resources/config/application.properties
+May 28, 2026 1:34:05 P.M. utilities.ConfigManager loadProfileProperties
+INFO: [ConfigManager] Profile config loaded from : src/test/resources/config/application-dev.properties | Keys overridden=6
+May 28, 2026 1:34:05 P.M. utilities.ConfigManager <clinit>
+INFO: [ConfigManager] Loaded | Profile='dev' | Total keys=35
+May 28, 2026 1:34:05 P.M. utilities.RetryAnalyser resolveRetryableExceptions
+INFO: [RetryAnalyser] Retryable exceptions : [StaleElementReferenceException, TimeoutException] | Max retries : 1
+May 28, 2026 1:34:05 P.M. utilities.RetryAnalyser clearRetryState
+INFO: [RetryAnalyser] Retry state cleared.
+May 28, 2026 1:34:05 P.M. stepdefinitions.Hooks beforeScenarioExecution
+INFO: ---------- Scenario START : AT-ENTS-E2E - Agent completes the end-to-end NRCISYF regression flow ----------
+May 28, 2026 1:34:05 P.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : TC_13_ENTS
+May 28, 2026 1:34:05 P.M. stepdefinitions.TC_03 theAgentUserIsOnTheLoginPage
+INFO: Application launched via Hooks. Browser is active and URL loaded.
+May 28, 2026 1:34:05 P.M. stepdefinitions.TC_03 theAgentUserIsOnTheLoginPage
+INFO: [STEP] Given the agent user is on the login page
+May 28, 2026 1:34:05 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Given the agent user is on the login page | PASS | 1ms
+May 28, 2026 1:34:05 P.M. stepdefinitions.TC_03 theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP
+INFO: [LOGIN] Classic login detected.
+May 28, 2026 1:34:05 P.M. utilities.ObjReader <clinit>
+INFO: Object Repository loaded successfully from : src/test/resources/Object_Repository/ObjectRepository.properties | Total keys : 309
+  Given the agent user is on the login page                                                                 # stepdefinitions.TC_03.theAgentUserIsOnTheLoginPage()
+May 28, 2026 1:34:05 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:05.101] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='username'] | Value=agr17724
+May 28, 2026 1:34:05 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:05.873] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='username'] | Value=agr17724 | Duration=772 ms
+May 28, 2026 1:34:05 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:05.879] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value=
+May 28, 2026 1:34:06 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:06.635] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value= | Duration=756 ms
+May 28, 2026 1:34:06 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:06.635] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=@c3ntst678!!
+May 28, 2026 1:34:07 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:07.274] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=@c3ntst678!! | Duration=639 ms
+May 28, 2026 1:34:07 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:07.274] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value=
+May 28, 2026 1:34:08 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:08.008] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value= | Duration=734 ms
+May 28, 2026 1:34:11 P.M. stepdefinitions.TC_03 theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP
+INFO: [STEP] Detect login screen and auto-login using simple PIN loop...
+May 28, 2026 1:34:14 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:14.473] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='otp'] | Value=111111
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:15.146] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='otp'] | Value=111111 | Duration=673 ms
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:15.146] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value=
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:15.815] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value= | Duration=669 ms
+May 28, 2026 1:34:15 P.M. stepdefinitions.TC_03 theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP
+INFO: [LOGIN] Classic login completed.
+May 28, 2026 1:34:15 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | When the agent logs into the application with valid credentials and OTP | PASS | 10s
+May 28, 2026 1:34:15 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And the agent opens the "Basic Income Support for Sustainability" application | PASS | 2ms
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:15.818] STEP START | ActionType=WAITINVISIBLE | IdentifyBy=XPATH | Object=iScreenBuffer | Value=MDC Progress Spinner
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions performWaitInvisible
+INFO: [2026-05-28 13:34:15.819] WAITINVISIBLE — watching locator : iScreenBuffer
+  When the agent logs into the application with valid credentials and OTP                                   # stepdefinitions.TC_03.theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP()
+  And the agent opens the "Basic Income Support for Sustainability" application                             # stepdefinitions.TC_03.theAgentOpensTheApplication(java.lang.String)
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions lambda$performWaitInvisible$9
+INFO: [2026-05-28 13:34:15.890] WAITINVISIBLE — spinner container not found in DOM (already removed).
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions performWaitInvisible
+INFO: [2026-05-28 13:34:15.890] WAITINVISIBLE — spinner dismissed successfully : iScreenBuffer
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:15.890] STEP PASS  | ActionType=WAITINVISIBLE | IdentifyBy=XPATH | Object=iScreenBuffer | Value=MDC Progress Spinner | Duration=72 ms
+May 28, 2026 1:34:15 P.M. stepdefinitions.TC_03 theAgentShouldLandOnTheBISSHomePage
+INFO: [STEP] Then the agent should land on the BISS Home page
+May 28, 2026 1:34:15 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:15.891] STEP START | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=
+May 28, 2026 1:34:17 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:17.009] STEP PASS  | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value= | Duration=1117 ms
+May 28, 2026 1:34:17 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:17.010] STEP START | ActionType=VERIFYTEXT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=Basic Income Support for Sustainability
+May 28, 2026 1:34:17 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:17.560] STEP PASS  | ActionType=VERIFYTEXT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=Basic Income Support for Sustainability | Duration=550 ms
+May 28, 2026 1:34:17 P.M. stepdefinitions.TC_03 theAgentShouldLandOnTheBISSHomePage
+INFO: BISS Home page confirmed | Title: Basic Income Support for Sustainability
+May 28, 2026 1:34:17 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then the agent should land on the BISS Home page | PASS | 1s
+May 28, 2026 1:34:17 P.M. stepdefinitions.TC_03 theAgentNavigatesToTheTab
+INFO: [STEP] And the agent navigates to the tab: Home
+May 28, 2026 1:34:17 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:17.564] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='Home'] | Value=
+  Then the agent should land on the BISS Home page                                                          # stepdefinitions.TC_03.theAgentShouldLandOnTheBISSHomePage()
+May 28, 2026 1:34:18 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:18.278] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='Home'] | Value= | Duration=714 ms
+May 28, 2026 1:34:18 P.M. stepdefinitions.TC_03 theAgentNavigatesToTheTab
+INFO: [STEP] And the agent navigates to the tab: My Clients
+May 28, 2026 1:34:18 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:18.279] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='My Clients'] | Value=
+May 28, 2026 1:34:18 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:18.896] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='My Clients'] | Value= | Duration=617 ms
+May 28, 2026 1:34:18 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:18.896] STEP START | ActionType=VERIFYTEXT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=Basic Income Support for Sustainability
+May 28, 2026 1:34:19 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:19.443] STEP PASS  | ActionType=VERIFYTEXT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=Basic Income Support for Sustainability | Duration=547 ms
+May 28, 2026 1:34:19 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:19.444] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mat-button-toggle-label-content' and contains(.,'Herd Expired')] | Value=
+May 28, 2026 1:34:26 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:26.589] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mat-button-toggle-label-content' and contains(.,'Herd Expired')] | Value= | Duration=7145 ms
+May 28, 2026 1:34:26 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:26.589] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mat-button-toggle-label-content' and contains(.,'Draft')] | Value=
+May 28, 2026 1:34:27 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:27.579] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mat-button-toggle-label-content' and contains(.,'Draft')] | Value= | Duration=990 ms
+May 28, 2026 1:34:27 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:27.579] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mat-button-toggle-label-content' and contains(.,'Submitted')] | Value=
+May 28, 2026 1:34:28 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:28.632] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mat-button-toggle-label-content' and contains(.,'Submitted')] | Value= | Duration=1053 ms
+May 28, 2026 1:34:28 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:28.633] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[contains(@class,'mat-button-toggle-label-content') and contains(.,'Not Started')] | Value=
+May 28, 2026 1:34:29 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:29.923] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[contains(@class,'mat-button-toggle-label-content') and contains(.,'Not Started')] | Value= | Duration=1290 ms
+May 28, 2026 1:34:29 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:29.924] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mat-button-toggle-label-content' and contains(.,'View all')] | Value=
+May 28, 2026 1:34:30 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:30.912] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mat-button-toggle-label-content' and contains(.,'View all')] | Value= | Duration=988 ms
+May 28, 2026 1:34:30 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And the agent navigates to the "Home" and "My Clients" Left Menu Link | PASS | 13s
+May 28, 2026 1:34:30 P.M. stepdefinitions.TC_10 theAgentSwitchesToTheTabOnMyClientsPage
+INFO: [STEP] When the agent switches to the 'NR/CISYF' tab on the My Clients page
+May 28, 2026 1:34:30 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:30.914] STEP START | ActionType=WAITVISIBLE | IdentifyBy=XPATH | Object=//mat-tab-header//span[contains(@class,'mdc-tab__text-label') and normalize-space()='NR/CISYF'] | Value=
+  And the agent navigates to the "Home" and "My Clients" Left Menu Link                                     # stepdefinitions.TC_03.theAgentNavigatesToTheTab(java.lang.String,java.lang.String)
+May 28, 2026 1:34:31 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:31.444] STEP PASS  | ActionType=WAITVISIBLE | IdentifyBy=XPATH | Object=//mat-tab-header//span[contains(@class,'mdc-tab__text-label') and normalize-space()='NR/CISYF'] | Value= | Duration=530 ms
+May 28, 2026 1:34:31 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:31.445] STEP START | ActionType=WAITCLICKABLE | IdentifyBy=XPATH | Object=//mat-tab-header//span[contains(@class,'mdc-tab__text-label') and normalize-space()='NR/CISYF'] | Value=
+May 28, 2026 1:34:31 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:31.516] STEP PASS  | ActionType=WAITCLICKABLE | IdentifyBy=XPATH | Object=//mat-tab-header//span[contains(@class,'mdc-tab__text-label') and normalize-space()='NR/CISYF'] | Value= | Duration=71 ms
+May 28, 2026 1:34:31 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:31.516] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//mat-tab-header//span[contains(@class,'mdc-tab__text-label') and normalize-space()='NR/CISYF'] | Value=
+May 28, 2026 1:34:32 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:32.141] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//mat-tab-header//span[contains(@class,'mdc-tab__text-label') and normalize-space()='NR/CISYF'] | Value= | Duration=625 ms
+May 28, 2026 1:34:32 P.M. stepdefinitions.TC_10 theAgentSwitchesToTheTabOnMyClientsPage
+INFO: Switched to tab: NR/CISYF
+May 28, 2026 1:34:32 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And the agent switches to the "NR/CISYF" tab on the My Clients page | PASS | 1s
+May 28, 2026 1:34:32 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentSearchesForTheNRCISYFHerdAndOpensTheApplication
+INFO: [STEP] When the agent searches for the NRCISYF herd and opens the application
+May 28, 2026 1:34:32 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:32.144] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@matinput and @placeholder='Address, Name or Herd Number'] | Value=Z1430556
+  And the agent switches to the "NR/CISYF" tab on the My Clients page                                       # stepdefinitions.TC_10.theAgentSwitchesToTheTabOnMyClientsPage(java.lang.String)
+May 28, 2026 1:34:32 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:32.824] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@matinput and @placeholder='Address, Name or Herd Number'] | Value=Z1430556 | Duration=680 ms
+May 28, 2026 1:34:32 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:32.825] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//button[.//mat-icon[normalize-space()='search']] | Value=
+May 28, 2026 1:34:33 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:33.434] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//button[.//mat-icon[normalize-space()='search']] | Value= | Duration=609 ms
+May 28, 2026 1:34:33 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:33.435] STEP START | ActionType=WAITVISIBLE | IdentifyBy=XPATH | Object=//td[contains(@class,'cdk-column-transfers')]//a[normalize-space()='View'] | Value=
+May 28, 2026 1:34:37 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:37.122] STEP PASS  | ActionType=WAITVISIBLE | IdentifyBy=XPATH | Object=//td[contains(@class,'cdk-column-transfers')]//a[normalize-space()='View'] | Value= | Duration=3687 ms
+May 28, 2026 1:34:37 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:37.123] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//td[contains(@class,'cdk-column-transfers')]//a[normalize-space()='View'] | Value=
+  When the agent searches for the NRCISYF herd and opens the application                                    # stepdefinitions.ENTS.TC_13_ENTS.theAgentSearchesForTheNRCISYFHerdAndOpensTheApplication()
+May 28, 2026 1:34:37 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:37.998] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//td[contains(@class,'cdk-column-transfers')]//a[normalize-space()='View'] | Value= | Duration=875 ms
+May 28, 2026 1:34:37 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentSearchesForTheNRCISYFHerdAndOpensTheApplication
+INFO: NRCISYF herd opened: Z1430556
+May 28, 2026 1:34:37 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | When the agent searches for the NRCISYF herd and opens the application | PASS | 5s
+May 28, 2026 1:34:37 P.M. stepdefinitions.ENTS.TC_13_ENTS theNRCISYFLandingPageShouldBeDisplayed
+INFO: [STEP] Then the NRCISYF landing page should be displayed
+May 28, 2026 1:34:38 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:38.000] STEP START | ActionType=WAITVISIBLE | IdentifyBy=XPATH | Object=//mat-card-title[contains(normalize-space(),'National Reserve/Complementary')] | Value=
+May 28, 2026 1:34:39 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:39.045] STEP PASS  | ActionType=WAITVISIBLE | IdentifyBy=XPATH | Object=//mat-card-title[contains(normalize-space(),'National Reserve/Complementary')] | Value= | Duration=1045 ms
+May 28, 2026 1:34:39 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:39.046] STEP START | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//mat-card-title[contains(normalize-space(),'National Reserve/Complementary')] | Value=
+May 28, 2026 1:34:39 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:39.568] STEP PASS  | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//mat-card-title[contains(normalize-space(),'National Reserve/Complementary')] | Value= | Duration=522 ms
+May 28, 2026 1:34:39 P.M. stepdefinitions.ENTS.TC_13_ENTS theNRCISYFLandingPageShouldBeDisplayed
+INFO: NRCISYF landing page confirmed.
+May 28, 2026 1:34:39 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then the NRCISYF landing page should be displayed | PASS | 1s
+May 28, 2026 1:34:39 P.M. stepdefinitions.ENTS.TC_13_ENTS theNRCISYFClosingDateShouldDisplay
+INFO: [STEP] And the NRCISYF closing date should display: 15 May 2026
+May 28, 2026 1:34:39 P.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-05-28 13:34:39.570] STEP START | ActionType=VERIFYTEXT | IdentifyBy=XPATH | Object=//p[contains(normalize-space(),'closing date')]//span | Value=15 May 2026
+  Then the NRCISYF landing page should be displayed                                                         # stepdefinitions.ENTS.TC_13_ENTS.theNRCISYFLandingPageShouldBeDisplayed()
+May 28, 2026 1:34:40 P.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-05-28 13:34:40.088] STEP PASS  | ActionType=VERIFYTEXT | IdentifyBy=XPATH | Object=//p[contains(normalize-space(),'closing date')]//span | Value=15 May 2026 | Duration=519 ms
+May 28, 2026 1:34:40 P.M. stepdefinitions.ENTS.TC_13_ENTS theNRCISYFClosingDateShouldDisplay
+INFO: NRCISYF close date verified: 15 May 2026
+May 28, 2026 1:34:40 P.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And the NRCISYF closing date should display "15 May 2026" | PASS | 520ms
+May 28, 2026 1:34:40 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [STEP] When the agent opens the NRCISYF Apply or Edit dialog
+May 28, 2026 1:34:40 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 1/95 | herd=Z1430556
+  And the NRCISYF closing date should display "15 May 2026"                                                 # stepdefinitions.ENTS.TC_13_ENTS.theNRCISYFClosingDateShouldDisplay(java.lang.String)
+May 28, 2026 1:34:43 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 1 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:34:43 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=75 — cannot recover on attempt 1
+May 28, 2026 1:34:43 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 2/95 | herd=Z1430556
+May 28, 2026 1:34:46 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 2 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:34:46 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=100 — cannot recover on attempt 2
+May 28, 2026 1:34:46 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 3/95 | herd=Z1430556
+May 28, 2026 1:34:50 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 3 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:34:50 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=125 — cannot recover on attempt 3
+May 28, 2026 1:34:50 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 4/95 | herd=Z1430556
+May 28, 2026 1:34:53 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 4 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:34:53 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=150 — cannot recover on attempt 4
+May 28, 2026 1:34:53 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 5/95 | herd=Z1430556
+May 28, 2026 1:34:56 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 5 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:34:56 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=175 — cannot recover on attempt 5
+May 28, 2026 1:34:56 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 6/95 | herd=Z1430556
+May 28, 2026 1:35:00 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 6 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:00 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=200 — cannot recover on attempt 6
+May 28, 2026 1:35:00 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 7/95 | herd=Z1430556
+May 28, 2026 1:35:03 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 7 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:03 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=225 — cannot recover on attempt 7
+May 28, 2026 1:35:03 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 8/95 | herd=Z1430556
+May 28, 2026 1:35:06 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 8 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:06 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=250 — cannot recover on attempt 8
+May 28, 2026 1:35:06 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 9/95 | herd=Z1430556
+May 28, 2026 1:35:10 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 9 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:10 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=275 — cannot recover on attempt 9
+May 28, 2026 1:35:10 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 10/95 | herd=Z1430556
+May 28, 2026 1:35:13 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 10 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:13 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=300 — cannot recover on attempt 10
+May 28, 2026 1:35:13 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 11/95 | herd=Z1430556
+May 28, 2026 1:35:16 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 11 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:16 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=325 — cannot recover on attempt 11
+May 28, 2026 1:35:16 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 12/95 | herd=Z1430556
+May 28, 2026 1:35:20 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 12 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:20 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=350 — cannot recover on attempt 12
+May 28, 2026 1:35:20 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 13/95 | herd=Z1430556
+May 28, 2026 1:35:23 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 13 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:23 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=375 — cannot recover on attempt 13
+May 28, 2026 1:35:23 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 14/95 | herd=Z1430556
+May 28, 2026 1:35:26 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 14 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:26 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=400 — cannot recover on attempt 14
+May 28, 2026 1:35:26 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 15/95 | herd=Z1430556
+May 28, 2026 1:35:30 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 15 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:30 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=425 — cannot recover on attempt 15
+May 28, 2026 1:35:30 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 16/95 | herd=Z1430556
+May 28, 2026 1:35:33 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 16 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:33 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=450 — cannot recover on attempt 16
+May 28, 2026 1:35:33 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 17/95 | herd=Z1430556
+May 28, 2026 1:35:36 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] Attempt 17 | herd=Z1430556 — herd is Submitted ('View Application'). Recovering...
+May 28, 2026 1:35:36 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+WARNING: [TC13-APPLY] BISS_DATA returned 0 rows at limit=475 — cannot recover on attempt 17
+May 28, 2026 1:35:36 P.M. stepdefinitions.ENTS.TC_13_ENTS theAgentOpensTheNRCISYFApplyOrEditDialog
+INFO: [TC13-APPLY] Attempt 18/95 | herd=Z1430556
+
