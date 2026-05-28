@@ -1,21 +1,102 @@
-SELECT app_herd_no, app_year
-FROM vwbs_application_herd
-WHERE mde_abbrev     = 'I'
-AND   applicant_type = 'I'
-AND EXISTS (
-    SELECT 1 FROM tdbs_application_land x
-    WHERE x.apl_year        = app_year
-    AND   x.apl_aph_id      = aph_id
-    AND   x.apl_app_id      = aph_app_id
-    AND   x.apl_deleted_ind = 'N'
-)
-AND NOT EXISTS (
-    SELECT 1 FROM tdbs_payment_application x
-    WHERE x.pap_app_id      = aph_app_id
-    AND   x.pap_payment_ind = 'Y'
-)
-AND app_year = 2026
-AND NVL((SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) FROM dual), 'N') = 'Y'
-AND SUBSTR(app_herd_no, 1, 1) > 'A'
-AND ROWNUM <= 500
-ORDER BY app_herd_no ASC
+           // ----------------------------------------------------------------
+           // DATA DB: Individual herds with CISYF scheme applied (TC_13 ENTS)
+           //
+           // Confirmed working query — returns 500 rows in test environment.
+           // SUBSTR(app_herd_no, 1, 1) > 'A' correctly excludes TRN reference numbers.
+           // No additional LIKE prefix filter — any B-Z prefix is valid.
+           //
+           // fn_GetSchemeApplied wrapped in scalar subquery (FROM dual) to prevent
+           // ORA-06503 "Function returned without value" which fires on certain
+           // aph_app_id values where the PL/SQL function has no return path.
+           // NVL wrapper alone does not help — the function crashes before returning.
+           //
+           // params[0] = year  (required)
+           // params[1] = limit (optional — defaults to 500)
+           // ----------------------------------------------------------------
+           case "LIST OF INDIVIDUAL HERDS WITH CISYF SCHEME":
+           {
+               requireParamCountBetween(key, params, 1, 2);
+               int year    = parseInt(params[0], "year");
+               int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
+               sql =
+                       "SELECT app_herd_no, app_year, aph_herd_type " +
+                       "FROM vwbs_application_herd " +
+                       "WHERE mde_abbrev     = 'I' " +
+                       "AND   applicant_type = 'I' " +
+                       "AND EXISTS ( " +
+                       "    SELECT 1 " +
+                       "    FROM tdbs_application_land x " +
+                       "    WHERE x.apl_year        = app_year " +
+                       "    AND   x.apl_aph_id      = aph_id " +
+                       "    AND   x.apl_app_id      = aph_app_id " +
+                       "    AND   x.apl_deleted_ind = 'N' " +
+                       ") " +
+                       "AND NOT EXISTS ( " +
+                       "    SELECT 1 " +
+                       "    FROM tdbs_payment_application x " +
+                       "    WHERE x.pap_app_id      = aph_app_id " +
+                       "    AND   x.pap_payment_ind = 'Y' " +
+                       ") " +
+                       "AND app_year = ? " +
+                       "AND NVL(( " +
+                       "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
+                       "    FROM dual " +
+                       "), 'N') = 'Y' " +
+                       "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                       "AND ROWNUM <= ? " +
+                       "ORDER BY app_herd_no ASC";
+               jdbcParams = new Object[]{ year, maxRows };
+               break;
+           }
+
+           // ----------------------------------------------------------------
+           // DATA DB: Not Started individual herds eligible for CISYF (TC_13 ENTS)
+           //
+           // Returns herds where current year is Not Started (mde_abbrev = 'RI')
+           // but previous year submitted application had CISYF applied.
+           //
+           // fn_GetSchemeApplied wrapped in scalar subquery (FROM dual) in the
+           // EXISTS subquery for the same ORA-06503 reason as above.
+           // prev.aph_app_id is passed — same crash risk on certain rows.
+           //
+           // SUBSTR > 'A' excludes TRNs. No LIKE prefix filter.
+           //
+           // params[0] = year  (required — current scheme year)
+           // params[1] = limit (optional — defaults to 500)
+           // ----------------------------------------------------------------
+           case "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF":
+           {
+               requireParamCountBetween(key, params, 1, 2);
+               int year    = parseInt(params[0], "year");
+               int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
+               sql =
+                       "SELECT curr.app_herd_no, curr.app_year, curr.aph_herd_type " +
+                       "FROM vwbs_application_herd curr " +
+                       "WHERE curr.mde_abbrev     = 'RI' " +
+                       "AND   curr.applicant_type = 'I' " +
+                       "AND   curr.app_year       = ? " +
+                       "AND EXISTS ( " +
+                       "    SELECT 1 " +
+                       "    FROM tdbs_application_land x " +
+                       "    WHERE x.apl_year        = curr.app_year " +
+                       "    AND   x.apl_aph_id      = curr.aph_id " +
+                       "    AND   x.apl_app_id      = curr.aph_app_id " +
+                       "    AND   x.apl_deleted_ind = 'N' " +
+                       ") " +
+                       "AND EXISTS ( " +
+                       "    SELECT 1 " +
+                       "    FROM vwbs_application_herd prev " +
+                       "    WHERE prev.app_herd_no = curr.app_herd_no " +
+                       "    AND   prev.app_year    = curr.app_year - 1 " +
+                       "    AND   prev.mde_abbrev  = 'I' " +
+                       "    AND   NVL(( " +
+                       "        SELECT pkbs_payment_utils.fn_GetSchemeApplied(prev.aph_app_id, 3) " +
+                       "        FROM dual " +
+                       "    ), 'N') = 'Y' " +
+                       ") " +
+                       "AND SUBSTR(curr.app_herd_no, 1, 1) > 'A' " +
+                       "AND ROWNUM <= ? " +
+                       "ORDER BY curr.app_herd_no ASC";
+               jdbcParams = new Object[]{ year, maxRows };
+               break;
+           }
