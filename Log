@@ -1723,3 +1723,635 @@ Herds with Prelim Checks
 select LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID
 from vwbs_land_validation
 where lvl_year= 2026 and lvt_desc= 'Preliminary Check' 
+
+Useful Select queries to date  
+1. Finding a specific agent for a herd  
+SELECT hbcus.bcus_bus_id HerdNo,   
+ (SELECT ui.uri_username   
+ FROM tdcr_user_info ui   
+ WHERE uri_ccs_bus_id = abcus.bcus_bus_id   
+ AND ROWNUM = 1) LoginId  
+FROM tdco_customer_asscs ca,   
+ tdco_business_customers abcus,   
+ tdco_business_customers hbcus  
+WHERE SYSDATE BETWEEN ca.ca_start_date   
+ AND ca.ca_end_date   
+ AND ca.ca_cac_code = 194  
+ AND ca.ca_bcus_id_from = abcus.bcus_id   
+ AND ca.ca_bcus_id_to = hbcus.bcus_id   
+ AND hbcus.bcus_bus_id = 'E2230465'  
+ order by 2,1;  
+2. Find a partnership in preprint with at least one forestry parcel  
+select * from tddp_preprint_application where pap_syr_code = 2021 and pap_ppp_code = 2 and   
+pap_herd_no like '%PF%'; --find partnership applications (pap_id)  
+select ppl.* from tddp_preprint_land ppl where ppl_pap_id = 1273540; --lands common for all herds   
+in a partnership application(ppl_pap_id)   
+3. Find a partnership that has multiple herds (and at least one forestry)  
+select pap_id application_id, get_herd(PAP.PAP_HOLDING_ID) partnership, count(distinct   
+ppl_holding_id) herds, count(ppl_holding_id) lands 
+8  
+from TDDP_PREPRINT_APPLICATION pap, TDDP_PREPRINT_LAND ppl   
+where ppl_pap_id = pap_id and pap_syr_code = 2019 and pap_ppp_code = 2  
+and exists (select 1 from tddp_preprint_land ppl2 where ppl2.ppl_pap_id = pap.pap_id and   
+ppl2.PPL_CRP_CODE = 370) --370 forestry ineligible  
+group by pap_id, PAP.PAP_HOLDING_ID  
+having count(distinct ppl_holding_id) > 1;  
+4. Find a parcel claimed in 2017 but not claimed in 2018  
+select * from tddp_scheme_land_unit where slu_syr_code = 2017 and slu_lnu_id not in (select   
+slu_lnu_id from tddp_scheme_land_unit where slu_syr_code = 2018);  
+5. Find a claimed and transformed parcel  
+select lps_parcel_label from vwlp_parcel, tddp_scheme_land_unit  
+where lps_parcel_id = slu_lnu_id  
+6. Find a no herd reference number  
+select * from TDSP_SPS_HOLDING WHERE TO_CHAR(SPH_SPS_HOLDING_ID)=SPH_HERD_NO AND   
+sph_sps_holding_id in (select app_applicant_holding_id from tddp_application where   
+app_syr_code=2019);  
+7. Find a multiyear herd  
+select * from tddp_preprint_application pap where pap.pap_prev_app_id is null and   
+pap.pap_syr_code = 2021 AND NOT EXISTS (SELECT 1 FROM tddp_application a WHERE   
+a.app_applicant_holding_Id = pap.pap_holding_id AND a.app_syr_code = 2020);  
+8. Finding an agent associated with multiyear herds  
+SELECT hbcus.bcus_bus_id HerdNo,  
+hbcus.bcus_id HerdBcusId,  
+hbcus.bcus_cust_id HerdCustId,  
+(SELECT ui.uri_username FROM tdcr_user_info ui WHERE uri_ccs_bus_id = abcus.bcus_bus_id AND   
+ROWNUM = 1) LoginId,
+9  
+abcus.bcus_id AgentBcusId,  
+abcus.bcus_cust_id AgentCustId,  
+abcus.bcus_bus_id AgentId   
+FROM tdco_customer_asscs ca,  
+tdco_business_customers abcus,  
+tdco_business_customers hbcus   
+WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date  
+AND ca.ca_cac_code = 194 -- BPS Agent to Customer  
+AND ca.ca_bcus_id_from = abcus.bcus_id  
+AND ca.ca_bcus_id_to = hbcus.bcus_id  
+and hbcus.BCUS_ROLE_CODE = 100 --Role HR  
+AND hbcus.bcus_bus_id in (SELECT get_herd(myh.MYH_HOLDING_ID) FROM   
+tddp_multi_year_holding myh WHERE NOT EXISTS   
+(SELECT 1 FROM tddp_application_generic appgen WHERE appgen.apg_holding_id=   
+myh.MYH_HOLDING_ID AND appgen.apg_reason like 'Mul%'))  
+order by 1,2;  
+9. Finding all sub-divided parcels and corresponding parcels with claimant details  
+select get_parc(SLU_LNU_ID), get_herd(SLU_HOLDING_ID), slu_syr_code, slu_sub_div_no from   
+tddp_scheme_land_unit where slu_sub_div_no is not null and slu_ect_code=2;   
+10. Find a herd associated with parcel ID  
+select * from TDLP_PARCEL where LPS_PARCEL_ID in '900785884'  
+This is the command if you have multiple  
+select * from TDLP_PARCEL where LPS_PARCEL_ID in   
+(900786003,900786049,900786050,900786318)
+10  
+11. Find a partnership with applications submitted  
+select sph_herd_no, app_id, sph_sps_holding_id from tddp_application, tddp_application_holding,   
+tdsp_sps_holding where sph_sps_holding_id = app_applicant_holding_id and ahd_app_id = app_id  
+ and 1 = (select count(0) from tddp_application_holding where ahd_app_id = app_id) AND   
+sph_group_type_ind = 'P' and app_syr_code=2019;  
+12. Finding an ANC parcel  
+select tab.* from( select LPS_PARCEL_ID, LPS_PARCEL_LABEL, SPH_HERD_NO,  
+pklp_parcel.inspectionparcel(lps_parcel_id,2019) AS inspected ,  
+pklp_util.GetWfTaskLabels('BPS - Parcel Task',LPS_PARCEL_LABEL,SPH_HERD_NO, 2019)  
+AS POSSIBLE_JIRA_LABELS from LPIS_VECTOR.TDLP_PARCEL join vwdp_bps_claims on   
+LPS_PARCEL_ID = LNU)  
+tab where   
+tab.POSSIBLE_JIRA_LABELS LIKE '%ANC%' AND inspected = 'N'   
+ ORDER BY DBMS_RANDOM.VALUE FETCH NEXT 20 ROWS ONLY;  
+/// Not functioning p  
+13. To find multiyear herds + agents in same script  
+SELECT hbcus.bcus_bus_id HerdNo,  
+hbcus.bcus_id HerdBcusId,  
+hbcus.bcus_cust_id HerdCustId,  
+(SELECT ui.uri_username FROM tdcr_user_info ui WHERE uri_ccs_bus_id = abcus.bcus_bus_id AND   
+ROWNUM = 1) LoginId,  
+abcus.bcus_id AgentBcusId,  
+abcus.bcus_cust_id AgentCustId,  
+abcus.bcus_bus_id AgentId   
+FROM tdco_customer_asscs ca,  
+tdco_business_customers abcus,
+11  
+tdco_business_customers hbcus   
+WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date  
+AND ca.ca_cac_code = 194 -- BPS Agent to Customer  
+AND ca.ca_bcus_id_from = abcus.bcus_id  
+AND ca.ca_bcus_id_to = hbcus.bcus_id  
+and hbcus.BCUS_ROLE_CODE = 100 --Role HR  
+AND hbcus.bcus_bus_id in (SELECT get_herd(myh.MYH_HOLDING_ID) FROM   
+tddp_multi_year_holding myh WHERE NOT EXISTS   
+(SELECT 1 FROM tddp_application_generic appgen WHERE appgen.apg_holding_id=   
+myh.MYH_HOLDING_ID AND appgen.apg_reason like 'Mul%'))  
+order by 1,2;  
+14. Find a specific agent for a Partnership herd  
+SELECT hbcus.bcus_bus_id HerdNo, hbcus.bcus_id HerdBcusId, hbcus.bcus_cust_id HerdCustId,   
+(SELECT ui.uri_username FROM tdcr_user_info ui WHERE uri_ccs_bus_id = abcus.bcus_bus_id AND   
+ROWNUM = 1) LoginId,  
+abcus.bcus_id AgentBcusId, abcus.bcus_cust_id AgentCustId, abcus.bcus_bus_id AgentId   
+ FROM tdco_customer_asscs ca, tdco_business_customers abcus, tdco_business_customers hbcus  
+WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date AND ca.ca_cac_code = 194   
+ AND ca.ca_bcus_id_from = abcus.bcus_id AND ca.ca_bcus_id_to = hbcus.bcus_id   
+ AND hbcus.bcus_cust_id = (SELECT bcus_cust_id FROM tdco_business_customers WHERE   
+bcus_bus_id='OFP00110' AND ROWNUM = 1);  
+// Runs in BPS_CONNECT_DEV p  
+15. This function is checking partnerships and single herds  
+SELECT pkdp_lpis_utils.fn_IsLPISHolding(:in_SchemeYear,:in_HoldingId) FROM DUAL;  
+// Resultset Delivered – but untested
+12  
+16. This function is for delivering Herdids (First 10 only) which have a missing parcel  
+select sph_herd_no, app_id, sph_sps_holding_id from tddp_application, tdsp_sps_holding,   
+tddp_scheme_land_unit slu  
+where sph_sps_holding_id = app_applicant_holding_id and app_syr_code=2019   
+AND slu.slu_holding_id = sph_sps_holding_id   
+and slu.slu_syr_code = app_syr_code  
+and not exists (select 1 from (select lnu_land_unit_unique_num from tdcr_land_unit  
+union select lba_lnu_id from tddp_lnu_bps_attribute) where lnu_land_unit_unique_num =   
+slu.slu_lnu_id)  
+ORDER BY dbms_random.value FETCH FIRST 10 ROWS ONLY;  
+17. This function is for delivering Herdids with Organic Land  
+select get_herd(slu_holding_id) from tddp_scheme_land_unit slu where slu.slu_holding_id in   
+(select app_applicant_holding_id from tddp_application where APP_ORGANIC_IND = 'Y' and   
+app_syr_code = 2019) and slu_syr_code = 2019;   
+18. Query to get herds with protein land for testing summary screen  
+select get_herd(slu_holding_id) from tddp_scheme_land_unit where slu_crp_code in (496, 497, 7,   
+412) and slu_syr_code = 2019; select * from TSSP_USAGE_CROP where syr_scheme_year_code =   
+2019 and USC_PROTEIN_ELIGIBLE = 'Y';  
+19. Commonage Parcels  
+select distinct get_parc(slu_lnu_id) from tddp_scheme_land_unit slu where slu.slu_ccm_id   
+is not null and slu.slu_syr_code = 2020;  
+20. Find a Partnership with Organic Lands
+13  
+select get_herd(app.app_applicant_holding_id) from tddp_scheme_land_unit slu,   
+tddp_application_holding ahd, tddp_application app where slu.slu_holding_id in (  
+select app_applicant_holding_id from tddp_application where APP_ORGANIC_IND = 'Y' and   
+app_syr_code = 2019)  
+and ahd.ahd_id = slu_ahd_id  
+and app.app_id = ahd.ahd_app_id  
+and slu_syr_code = app.app_syr_code  
+and get_herd(app.app_applicant_holding_id) like '%FP%';  
+-- Basic random query.....  
+SELECT LNU_LAND_UNIT_UNIQUE_NUM  
+ FROM   
+( SELECT LNU_LAND_UNIT_UNIQUE_NUM  
+ FROM TDCR_LAND_UNIT  
+ ORDER BY DBMS_RANDOM.VALUE )  
+ WHERE ROWNUM <= 10  
+ORDER BY 1;  
+-- With the WHERE Clause. (Get me 10 Louth or 'O' herds)  
+SELECT LNU_PARCEL_ID  
+ FROM ( SELECT LNU_PARCEL_ID  
+ FROM vwdp_LAND_UNIT  
+ where SUBSTR(LNU_PARCEL_ID,1,1) = 'O'  
+ ORDER BY DBMS_RANDOM.VALUE )  
+WHERE ROWNUM <= 10  
+ORDER BY 1;
+14  
+-- This is what I got back when I ran it. If you rerun you will be a different set of Parcels  
+O10324097  
+O1051500003  
+O10603038  
+O1060400068  
+O10817015  
+O1136000107  
+O11803035  
+O12702212  
+O13008019  
+O13504183  
+Or .... If I want to create the list with quotes and commas for an IN clause.  
+SELECT ''''||LNU_PARCEL_ID||''','  
+ FROM ( SELECT LNU_PARCEL_ID  
+ FROM vwdp_LAND_UNIT  
+ where SUBSTR(LNU_PARCEL_ID,1,1) = 'O'  
+ ORDER BY DBMS_RANDOM.VALUE )  
+WHERE ROWNUM <= 10  
+ORDER BY 1;  
+'O1030700032',  
+'O11346024',  
+'O11813029',  
+'O12314039',
+15  
+'O1231500038',  
+'O12701045',  
+'O12709254',  
+'O12804047',  
+'O1291300012',  
+'O13105056',  
+/// ~Should be avoided – We don’t want to insert into or alter any tables Needs invetigation  
+or CREATE AN INSERT STATEMENT  
+SELECT 'INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('''||LNU_PARCEL_ID||''');'  
+ FROM ( SELECT LNU_PARCEL_ID  
+ FROM vwdp_LAND_UNIT  
+ where SUBSTR(LNU_PARCEL_ID,1,1) = 'O'  
+ ORDER BY DBMS_RANDOM.VALUE )  
+WHERE ROWNUM <= 10  
+ORDER BY 1;  
+RESULT  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O10401021');  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O1042500006');  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O1100800058');  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O11105118');  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O11207070');  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O11321072');  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O11356174');  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O11502015');
+16  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O12103160');  
+INSERT INTO TT_TEST_DATA(PARCEL LABEL) VALUES('O1210900077');  
+***//////  
+-- Get me the Parcel Label and the Gross Area for Louth Herds with a gross area greater than 15  
+SELECT LNU_PARCEL_ID, LNU_GROSS_AREA  
+ FROM ( SELECT *  
+ FROM vwdp_LAND_UNIT  
+ where SUBSTR(LNU_PARCEL_ID,1,1) = 'O'  
+ AND LNU_GROSS_AREA > 15   
+ ORDER BY DBMS_RANDOM.VALUE )  
+WHERE ROWNUM <= 10  
+ORDER BY 1;  
+RESULTS  
+O10402028 16.6  
+O10521095 18.21  
+O10604089 16.13  
+O10605138 17.74  
+O1090300003 20.73  
+O11503067 15.546  
+O1231400021 22.69  
+O1231800010 34.29  
+O12807019 46.23  
+O1291600071 17.65
+17  
+22. Finding a herd that is engaged in the Young Farmer Scheme  
+SELECT hbcus.bcus_bus_id HerdNo,  
+ hbcus.bcus_id HerdBcusId,  
+ hbcus.bcus_cust_id HerdCustId,  
+ (SELECT ui.uri_username FROM tdcr_user_info ui WHERE uri_ccs_bus_id = abcus.bcus_bus_id   
+AND ROWNUM = 1) LoginId,  
+ abcus.bcus_id AgentBcusId,  
+ abcus.bcus_cust_id AgentCustId,  
+ abcus.bcus_bus_id AgentId   
+FROM tdco_customer_asscs ca,  
+ tdco_business_customers abcus,  
+ tdco_business_customers hbcus   
+WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date
+18  
+AND ca.ca_cac_code = 194 -- BPS Agent to Customer  
+AND ca.ca_bcus_id_from = abcus.bcus_id  
+AND ca.ca_bcus_id_to = hbcus.bcus_id  
+and hbcus.BCUS_ROLE_CODE = 100 --Role HR  
+23. Finding a Natura parcel also in Pre-Print  
+SELECT distinct get_herd(ppl_holding_id) herd FROM tddp_preprint_land where ppl_syr_code =   
+2020 and ppl_natura_ind = 'Y';  
+24. To find a Multiyear Herd (replacing SQL 8, as table in that query was deleted. This query   
+won’t find the agent though, so will need to rung query 1 as well)  
+select get_herd(pap_holding_id) from tddp_preprint_application where pap_syr_code = 2020 and   
+not exists ( select * from tddp_application app where app.app_applicant_holding_id in   
+pap_holding_id and app.app_syr_code = 2018);  
+SELECT hbcus.bcus_bus_id HerdNo, hbcus.bcus_id HerdBcusId, hbcus.bcus_cust_id HerdCustId,   
+(SELECT ui.uri_username FROM tdcr_user_info ui WHERE uri_ccs_bus_id = abcus.bcus_bus_id AND   
+ROWNUM = 1) LoginId,  
+abcus.bcus_id AgentBcusId, abcus.bcus_cust_id AgentCustId, abcus.bcus_bus_id AgentId   
+ FROM tdco_customer_asscs ca, tdco_business_customers abcus, tdco_business_customers hbcus  
+WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date AND ca.ca_cac_code = 194   
+ AND ca.ca_bcus_id_from = abcus.bcus_id AND ca.ca_bcus_id_to = hbcus.bcus_id AND   
+hbcus.bcus_bus_id='B1250162'  
+order by 1,2
+19  
+Finding an Individua Login for a Herd:  
+select bc_100.bcus_bus_id herdnumber, ui.uri_username login  
+from tdcr_user_info ui, tdco_business_customers bc_100, tdco_business_customers bc_115  
+where ui.uri_ccs_bus_id = bc_115.bcus_bus_id  
+and bc_100.bcus_cust_id = bc_115.bcus_cust_id  
+and bc_100.bcus_bus_id in ('C1520707')  
+and bc_100.BCUS_ROLE_CODE = 100  
+and bc_115.BCUS_ROLE_CODE = 115;  
+25. To get users with co-ordination roles 2:  
+SELECT * FROM vw_sso_roles_for_user WHERE lower(role_desc)   
+like LOWER('BPS Coordination 2 User')   
+AND grade IS NOT NULL;  
+26. Find user with co-ordination 1 but without co-ordination 2  
+SELECT * FROM vw_sso_roles_for_user WHERE lower(role_desc)   
+like LOWER('BPS Coordination 1 User')   
+AND userId NOT IN (SELECT userId FROM vw_sso_roles_for_user WHERE lower(role_desc)   
+ like LOWER('BPS Coordination 2 User'))  
+AND grade IS NOT NULL;  
+27. Find Partnership herds with application and in certain year:  
+SELECT  
+ sph_herd_no,  
+ app_id,  
+ sph_sps_holding_id  
+FROM
+20  
+ tddp_application, -- joins application and holding table to check for partnership  
+ tdsp_sps_holding  
+WHERE  
+ sph_sps_holding_id = app_applicant_holding_id  
+AND app_syr_code =2019 -- specific scheme year  
+AND 1 <  
+ (  
+ SELECT  
+ COUNT(0)  
+ FROM  
+ tddp_application_holding  
+ WHERE  
+ ahd_app_id = app_id  
+ )  
+AND sph_group_type_ind = 'P'; -- partnership indicator check  
+New queries to be checked  
+Anita   
+"Can you apply data capture from mid June 2020 until end Feb 2021 in Devc please?"  
+select PKCO_AUDIT.set_audit('Anita','Test') from dual;  
+update TSDP_DISPLAY_CONFIG set DCG_DISPLAY_FROM = TO_DATE('15/Jun/2020','dd/mon/yyyy'),   
+DCG_DISPLAY_TO = TO_DATE('28/Feb/2021','dd/mon/yyyy')  
+where dcg_desc='BPS Data Capture';  
+select * from TSDP_DISPLAY_CONFIG where dcg_desc = 'BPS Amendments';  
+COMMIT;  
+"Can you open GLAS Blacklist from April 16th please?"   
+select PKCO_AUDIT.set_audit('Anita','Test') from dual;  
+update TSDP_DISPLAY_CONFIG set DCG_DISPLAY_FROM = TO_DATE('16/Apr/2020','dd/mon/yyyy')  
+where dcg_desc='GLAS blacklist filter removal';  
+select * from TSDP_DISPLAY_CONFIG where dcg_desc = 'GLAS blacklist filter removal';  
+COMMIT;  
+"Can you turn on TRN functionality in PreLive please?" or "Can you release Ref Num functionality?"
+21  
+select PKCO_AUDIT.set_audit('Anita','Test') from dual;  
+update TSDP_DISPLAY_CONFIG set dcg_display_from=sysdate -1  
+where (dcg_desc = 'Create No Herd Number Case' or dcg_desc= '2nd Helpdesk Create No Herd   
+Number Case');  
+select * from TSDP_DISPLAY_CONFIG where dcg_desc = 'Create No Herd Number Case';  
+select * from TSDP_DISPLAY_CONFIG where dcg_desc = '2nd Helpdesk Create No Herd Number   
+Case';  
+COMMIT;  
+Jason Ellis  
+Here are two queries. It just orders the app date or receipt ascending or descending. So you should   
+be able to find a herd with date of receipt before and after bpsinet closing date with these.  
+select get_herd(app_applicant_holding_id), app_date_of_receipt from tddp_application where   
+app_syr_code = 2019 order by app_date_of_receipt desc;  
+select get_herd(app_applicant_holding_id), app_date_of_receipt from tddp_application where   
+app_syr_code = 2019 order by app_date_of_receipt asc;  
+PM _________  
+28. Herds with no application in previous years   
+select * from tddp_preprint_application pap where pap.pap_prev_app_id is null and   
+pap.pap_syr_code = 2021 AND NOT EXISTS (SELECT 1 FROM tddp_application a WHERE   
+a.app_applicant_holding_Id = pap.pap_holding_id AND a.app_syr_code = 2020);  
+29. Querying the database for Notes Category etc.  
+select * from tddp_note nte, tddp_note_category_map ncm, tsdp_note_category nca   
+where nte_object_id = (select app_id from tddp_application where app_applicant_holding_id =   
+get_hold('L1431991') and app_syr_code = 2021)  
+and ncm.ncm_nte_id = nte.nte_id  
+and nca.nca_code = ncm.ncm_nca_code;
+22  
+select * from tsdp_note_category  
+select * from tddp_note_category_map WHERE NCM_AUDIT_DATE Not LIKE '%18-JAN-21'  
+# Functioning #  
+Script to find Herds with Catch Crops  
+ select * from vwgx_ext_bps_glas_actions  
+where bps_application_year=2020 and action_description='Catch Crops (Whole Farm)';  
+30 .Redigitised Parcels and their LNUID  
+select NVL(VW.lps_parcel_label, LNU.LNU_PARCEL_ID) parcel_id, NVL(VW.lps_parcel_id,   
+LNU.LNU_LAND_UNIT_UNIQUE_NUM) lnu_land_unit_unique_num, old_parcel_id  
+FROM TDCR_LAND_UNIT LNU LEFT JOIN VWLP_LPIS_SPATIAL_PARC_HIST VW ON   
+LNU.LNU_LAND_UNIT_UNIQUE_NUM = VW.LNU  
+where LNU_ARCHIVE_DATE IS NULL AND LNU_PARCEL_ID IS NOT NULL;  
+Describe the table (Shows the Fields within)  
+desc tssp_county;  
+Brings back all counties  
+select * from tssp_county;   
+Describe the table (Shows the Fields within)  
+desc vwdp_townland;  
+Brings back the Townland using the First 6 characters from the Parcel No.  
+select *   
+from vwdp_townland
+23  
+where TNL_TOWNLAND_CODE = 'A11511';  
+30. Checking Activity Table:  
+select tal_action_desc, tdac_activity_log_gen.* from tdac_activity_log_gen,   
+tsac_activity_action_code   
+where tal_action_code=tdac_activity_log_gen.tal_action and tal_scheme_id='BPS'  
+and tal_date>=TO_TIMESTAMP ('15-JUN-21', 'DD-Mon-RR')  
+and tal_user_id= 'agr5163' order by tal_date desc;  
+31. Return Herds that have No Commonage Errror in 2021 (Should be editable to change year)  
+SELECT get_herd(app_applicant_holding_Id) herd, lu.lnu_parcel_id  
+FROM tddp_application app,  
+ tddp_application_holding ahd,  
+ tddp_scheme_land_unit slu,  
+ vwdp_parcel_area_hist lu,  
+ tddp_commonage_claim ccm  
+WHERE 1=1--app.app_applicant_holding_id = in_holding_Id  
+AND app.app_syr_code = 2021  
+AND app.app_id = ahd.ahd_app_id  
+AND ahd.ahd_holding_id = slu.slu_holding_id  
+AND slu.slu_syr_code = app.app_syr_code  
+AND slu.slu_lnu_id = lu.lnu_id  
+AND slu.slu_ccm_id = ccm.ccm_id  
+AND NVL( ccm.ccm_evidence,'N') = 'N'  
+order by 1,2;
+24  
+34. Herds that have archived LPIS lands claimed for 2019:  
+SELECT slu.slu_syr_code,  
+get_herd(slu.slu_holding_id),  
+LNU_PARCEL_ID as parcel_id  
+FROM tddp_scheme_land_unit slu,  
+vwdp_parcel_area_hist vpa  
+WHERE slu.slu_syr_code=2019  
+AND vpa.lnu_id = slu.slu_lnu_id  
+AND (NVL(vpa.delete_date, sysdate) < sysdate);  
+35. Similarly for 2020 LPIS land, just change the filter value.  
+36. Herds that have archived GIS lands claimed for 2019:  
+SELECT  
+slu.slu_syr_code,  
+get_herd(slu.slu_holding_id),  
+pkdp_lpis_utils.fn_getparc(slu.slu_lnu_id) as parcel_id  
+FROM tddp_scheme_land_unit slu  
+WHERE slu.slu_syr_code=2019  
+AND Pkcr_bps_utils.fn_parcel_status_by_id(slu.slu_lnu_id)=2;  
+Similarly for 2020 LPIS land, just change the filter value.  
+36. claims from 2019 and 2020 with archived LPIS lands without any overclaim errors:  
+SELECT slu.slu_syr_code,slu_ccm_id,  
+get_herd(slu.slu_holding_id),  
+LNU_PARCEL_ID as parcel_id  
+FROM tddp_scheme_land_unit slu,  
+vwdp_parcel_area_hist vpa  
+WHERE slu.slu_syr_code in (2019,2020)  
+AND vpa.lnu_id = slu.slu_lnu_id  
+and not exists (select 1 from tddp_error where eor_syr_code=slu.slu_syr_code and eor_lifted_date   
+is null  
+and eor_slu_id=slu_id and eor_ety_code in (2010,2006 ,2008 ,2024 ))  
+AND (NVL(vpa.delete_date, sysdate) < sysdate);  
+if slu_ccm_id is not null, it is a commomage land  
+37. claims from 2019 and 2020 with archived LPIS lands with overclaim within tolerance errors:  
+SELECT slu.slu_syr_code,slu_ccm_id,  
+get_herd(slu.slu_holding_id),  
+LNU_PARCEL_ID as parcel_id  
+FROM tddp_scheme_land_unit slu,  
+vwdp_parcel_area_hist vpa, tddp_error eor  
+WHERE slu.slu_syr_code in (2019,2020)
+25  
+AND vpa.lnu_id = slu.slu_lnu_id  
+and eor_syr_code=slu.slu_syr_code and eor_lifted_date is null  
+and eor_slu_id=slu_id and eor_ety_code in (2024 )  
+AND (NVL(vpa.delete_date, sysdate) < sysdate);  
+38. claims from 2019 and 2020 with archived GIS lands without any overclaim errors:  
+SELECT slu.slu_syr_code,  
+get_herd(slu.slu_holding_id),slu_ccm_id,  
+pkdp_lpis_utils.fn_getparc(slu.slu_lnu_id) as parcel_id  
+FROM tddp_scheme_land_unit slu  
+WHERE slu.slu_syr_code in (2019,2020)  
+AND Pkcr_bps_utils.fn_parcel_status_by_id(slu.slu_lnu_id)=2  
+and not exists (select 1 from tddp_error where eor_syr_code=slu.slu_syr_code and eor_lifted_date   
+is null  
+and eor_slu_id=slu_id and eor_ety_code in (2010,2006 ,2008 ,2024 ));  
+39. claims from 2019 and 2020 with archived GIS lands with overclaim within tolerance errors:  
+SELECT slu.slu_syr_code,  
+get_herd(slu.slu_holding_id),slu_ccm_id,  
+pkdp_lpis_utils.fn_getparc(slu.slu_lnu_id) as parcel_id  
+FROM tddp_scheme_land_unit slu, tddp_error eor  
+WHERE slu.slu_syr_code in (2019,2020)  
+AND Pkcr_bps_utils.fn_parcel_status_by_id(slu.slu_lnu_id)=2  
+and eor_syr_code=slu.slu_syr_code and eor_lifted_date is null  
+and eor_slu_id=slu_id and eor_ety_code in (2024 );   
+**********************************************************************  
+XTEAMSDEV-1719 | DEV: DB Task  
+40. Re: Request for information about MEA on ground/remote inspection screens  
+I am checking that with following query:  
+select * from tdsp_ground_inspect_cases   
+where (syr_scheme_year_code = 2018 and sph_sps_holding_id=get_hold('A1010118')) or   
+(syr_scheme_year_code = 2019 and sph_sps_holding_id=get_hold('A1060506'));  
+41.For reference, this is the query to get herds with large amounts of claimed land:  
+select get_herd(slu_holding_id), count(*)   
+from tddp_scheme_land_unit   
+where slu_syr_code = 2021  
+group by slu_holding_id  
+order by count(*) desc;
+26  
+42. Dual claim herds  
+SELECT NVL(sphapp.sph_group_type_ind,'I') ApplicantHerdTypeInd,  
+ sphapp.sph_herd_no ApplicantHerdNo, sphapp.sph_sps_holding_id,  
+ NVL(sphahd.sph_group_type_ind,'I') HoldingHerdTypeInd,  
+ sphahd.sph_herd_no HoldingHerdNo,  
+ lnu_parcel_id ParcelId  
+FROM tddp_application app,  
+ tdsp_sps_holding sphapp,  
+ tddp_application_holding ahd,  
+ tdsp_sps_holding sphahd,  
+ tddp_scheme_land_unit slu,  
+ tdcr_land_unit lnu  
+WHERE app.app_applicant_holding_id = sphapp.sph_sps_holding_id  
+AND app.app_id = ahd.ahd_app_id  
+AND ahd.ahd_holding_id = sphahd.sph_sps_holding_id  
+AND app.app_syr_code = 2022  
+AND NVL(sphapp.sph_group_type_ind,'I') != 'N'  
+AND ahd.ahd_id = slu.slu_ahd_id  
+AND slu.slu_lnu_id = lnu.lnu_land_unit_unique_num  
+AND slu.slu_dualclaim_ind = 'Y'  
+--AND slu.SLU_OVERCLAIM_ERROR_IND = 'Y'   
+--AND slu.SLU_OVERLAP_IND = 'Y'   
+--AND sphapp.sph_herd_no = 'A110085X'  
+ORDER BY 1,2,3,4,5;  
+43.Find herds in CENTEST with SFN GAEC8  
+select sfh_herd_no, sfh_sfn_perc from tdbs_sfn_herd;
+27  
+44. /*RUN IN CENTEST*/  
+/*search for a Individual user*/  
+select bc_100.bcus_bus_id herdnumber, ui.uri_username login  
+from tdcr_user_info ui, tdco_business_customers bc_100, tdco_business_customers bc_115  
+where ui.uri_ccs_bus_id = bc_115.bcus_bus_id  
+and bc_100.bcus_cust_id = bc_115.bcus_cust_id  
+and bc_100.bcus_bus_id in ('C15205223')  
+and bc_100.BCUS_ROLE_CODE = 100  
+and bc_115.BCUS_ROLE_CODE = 115;  
+45. /* search for a Agent*/  
+SELECT hbcus.bcus_bus_id HerdNo,   
+ (SELECT ui.uri_username   
+ FROM tdcr_user_info ui   
+ WHERE uri_ccs_bus_id = abcus.bcus_bus_id   
+ AND ROWNUM = 1) LoginId  
+FROM tdco_customer_asscs ca,   
+ tdco_business_customers abcus,   
+ tdco_business_customers hbcus  
+WHERE SYSDATE BETWEEN ca.ca_start_date   
+ AND ca.ca_end_date   
+ AND ca.ca_cac_code = 194  
+ AND ca.ca_bcus_id_from = abcus.bcus_id   
+ AND ca.ca_bcus_id_to = hbcus.bcus_id   
+ AND hbcus.bcus_bus_id = 'B136034X'
+28  
+ order by 2,1;  
+   
+select h.sfh_herd_no as Herd,  
+ h.sfh_sfn_total as sfn_total,  
+ (100*h.sfh_sfn_perc) as sfn_perc,  
+ h.sfh_sfn_obligation_total as sfn_obligation_total,  
+ h.sfh_gaec8_total as gaec8_total,  
+ (100*h.sfh_gaec8_perc) as gaec8_perc,  
+ h.sfh_gaec8_obligation_total as gaec8_obligation_total,  
+ l.sfl_lnu_id as LNU_id,  
+ pkdp_lpis_utils.fn_getparc(l.sfl_lnu_id) as Land,  
+ l.sfl_sub_div_no as Sub_Div,  
+ l.sfl_commonage_ind as commonage_ind,  
+ l.sfl_espg_ind as espg_ind,  
+ l.sfl_forestry_ind as forestry_ind,  
+ l.sfl_gaec8_ind as gaec8_ind,  
+ l.sfl_parcel_area Parcel_Area,  
+ l.sfl_gross_area Gross_Area,  
+ l.sfl_sfn_total as sfn_land_area,  
+ l.sfl_obligation_area as obligation_land_area  
+from tdbs_sfn_herd h, tdbs_sfn_land l  
+where h.sfh_id = l.sfl_sfh_id  
+order by herd, land, l.sfl_sub_div_no;
+29  
+45.  
+-- Get a herd without iNet 2024 application  
+select app_herd_no, app_audit_create_user,   
+pkbs_space_for_nature.fn_ExistSFN(app_herd_no, 2024, mde_abbrev) hasSfN   
+from vwbs_application a  
+where a.mde_abbrev = 'I'   
+and a.app_year = 2023  
+and not exists (select 1 from vwbs_application x   
+ where x.mde_abbrev = 'I' and x.app_year = 2024   
+ and x.app_herd_no = a.app_herd_no);
+
+
+Preprint Inet Result Query  to get test data  
+Organic Status should be blank  
+SELECT *  
+  FROM vwbs_application_land  
+WHERE app_year = 2023  
+   AND mde_abbrev = 'I'  
+   AND apl_org_code = 2  
+   AND substr(app_herd_no,1,1) not in  
+('C','G');  
+Organic Status should be Organic Converted  
+SELECT *  
+  FROM vwbs_application_land  
+WHERE app_year = 2023  
+   AND mde_abbrev = 'I'  
+   AND apl_org_code = 3  
+   AND substr(app_herd_no,1,1) not in  
+('C','G');  
+Organic Status should be Conventional  
+SELECT *  
+  FROM vwbs_application_land  
+WHERE app_year = 2023  
+   AND mde_abbrev = 'I'  
+   AND apl_orl_code = 2  
+   AND substr(app_herd_no,1,1) not in  
+('C','G');  
+Organic Status should be Conventional  
+select app_id, app_herd_no, apl_lnu_id,  
+apl_org_code, apl_crp_code from  
+vwbs_application_land  
+where apl_commonage_evidence = 'Y'  
+   AND app_year = 2023  
+   AND mde_abbrev = 'I'  
+   --AND app_herd_no = 'H2100870'  
+    AND substr(app_herd_no,1,1) not in  
+('C','G')  
+Organic Status should be Conventional  
+select app_id, app_herd_no, apl_lnu_id,  
+apl_org_code, apl_crp_code from  
+vwbs_application_land  
+where apl_commonage_evidence = 'Y'  
+   AND app_year = 2023  
+   AND mde_abbrev = 'I'  
+   AND apl_crp_code IN (SELECT cru_crp_code  
+                FROM tsbs_crop_usage  
+                WHERE 2024 between  
+cru_start_year AND cru_end_year  
+                AND cru_ineligible_ind = 'Y'  
+AND cru_organic_ind = 'N');
