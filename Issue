@@ -1,28 +1,84 @@
-    // ===================================================================================================================================
-    //  HERD SEARCH AND LANDING PAGE
-    // ===================================================================================================================================
+// ***************************************************************************************************************************************************************************************
+// Step          : the agent searches for the NRCISYF herd and opens the application
+// Description   : Enters the runtime herd number into the NRCISYF search field and clicks View.
+//                 If the search returns zero rows (no View button visible), the herd is not
+//                 visible for this agent — performs logout + login + re-navigate + retry.
+//                 Up to 5 attempts before failing with a clear message.
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 31-03-2026
+// ***************************************************************************************************************************************************************************************
+@When("the agent searches for the NRCISYF herd and opens the application")
+public void theAgentSearchesForTheNRCISYFHerdAndOpensTheApplication()
+{
+    log.info("[STEP] When the agent searches for the NRCISYF herd and opens the application"
+            + " | herd=" + Hooks.CISYF_HERD);
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent searches for the NRCISYF herd and opens the application
-    // Description   : Enters the runtime herd number into the NRCISYF search field and clicks View.
-    //                 Herd is resolved from Hooks.RUNTIME_HERD (DB-driven at boot time).
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent searches for the NRCISYF herd and opens the application")
-    public void theAgentSearchesForTheNRCISYFHerdAndOpensTheApplication()
+    final int    MAX_RETRIES      = 5;
+    final String NRCISYF_TAB      = "NR/CISYF";
+    final String RESULT_ROW_XPATH = ObjReader.getLocator("iNRCISYFViewLink");
+
+    for (int iAttempt = 1; iAttempt <= MAX_RETRIES; iAttempt++)
     {
-        log.info("[STEP] When the agent searches for the NRCISYF herd and opens the application");
+        log.info("[TC13-SEARCH] Attempt " + iAttempt + "/" + MAX_RETRIES
+                + " | herd=" + Hooks.CISYF_HERD
+                + " | agent=" + Hooks.CISYF_USERNAME);
 
-        // Type the runtime herd number into the NRCISYF search field
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), Hooks.RUNTIME_HERD);
+        // ── Clear + type herd into search field ───────────────────────────────────────
+        iAction("TEXTBOX", "XPATH",
+                ObjReader.getLocator("iNRCISYFHerdSearchField"), "");
+        iAction("TEXTBOX", "XPATH",
+                ObjReader.getLocator("iNRCISYFHerdSearchField"), Hooks.CISYF_HERD);
+        iAction("CLICK",   "XPATH",
+                ObjReader.getLocator("iNRCISYFSearchBtn"), null);
 
-        // Click search to filter the results
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        // ── Check if View link appears ────────────────────────────────────────────────
+        if (isVisible(By.xpath(RESULT_ROW_XPATH), 5))
+        {
+            iAction("CLICK", "XPATH", RESULT_ROW_XPATH, null);
+            log.info("[TC13-SEARCH] Herd landing page opened: " + Hooks.CISYF_HERD);
+            return;
+        }
 
-        // Click the View link on the first matching row
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
+        // ── Zero rows — herd not visible for this agent ───────────────────────────────
+        log.warning("[TC13-SEARCH] No result row for herd=" + Hooks.CISYF_HERD
+                + " on attempt " + iAttempt + " — logout + fresh login + re-navigate.");
 
-        log.info("NRCISYF herd opened: " + Hooks.RUNTIME_HERD);
+        if (iAttempt == MAX_RETRIES)
+        {
+            throw new RuntimeException(
+                    "[TC13-SEARCH] Herd " + Hooks.CISYF_HERD
+                    + " not found in NR/CISYF tab after " + MAX_RETRIES
+                    + " attempts. Herd may not be accessible for agent "
+                    + Hooks.CISYF_USERNAME);
+        }
+
+        // ── Logout + Login as same agent + re-navigate ────────────────────────────────
+        // A fresh session sometimes resolves tab visibility issues
+        // caused by stale session state or portal caching.
+        performLogout();
+        performLogin(Hooks.CISYF_USERNAME);
+
+        // Abort if account expired during re-login
+        if (Hooks.EXPIRED_AGENTS.contains(Hooks.CISYF_USERNAME))
+        {
+            throw new RuntimeException(
+                    "[TC13-SEARCH] Agent " + Hooks.CISYF_USERNAME
+                    + " expired during re-login — cannot continue.");
+        }
+
+        // ── Navigate back to BISS → My Clients → NR/CISYF tab ────────────────────────
+        iAction("TEXTBOX", "XPATH",
+                ObjReader.getLocator("iAppSearchBar"),
+                "Basic Income Support for Sustainability");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"),          null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("WAITVISIBLE",   "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+        iAction("WAITCLICKABLE", "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+        iAction("CLICK", "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+
+        log.info("[TC13-SEARCH] Re-navigated to NR/CISYF tab — retrying search.");
     }
+}
