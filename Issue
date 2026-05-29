@@ -1,98 +1,14 @@
     // ***************************************************************************************************************************************************************************************
-// Step          : the agent enters group member details (DataTable)
-// Description   : Fills each member row in the table — name, DOB (single DD/MM/YYYY datepicker),
-//                 and Eligible Farmer checkbox.
-//
-//                 DOM findings:
-//                   - Name: plain input in td[1], no formcontrolname — row-indexed via tbody//tr
-//                   - DOB:  single mat-datepicker input in td[2], disabled by default — JS inject
-//                           (NOT split day/month/year — those fields do not exist in the DOM)
-//                   - Eligible: mat-checkbox in td[3], touch-target present — JS click on native input
-//
-//                 DataTable cols: memberIndex | name | dob | eligible
-//                 dob format: DD/MM/YYYY (e.g. "15/06/1995")
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-    @And("the agent enters group member details")
-    public void theAgentEntersGroupMemberDetails(DataTable pDataTable)
-    {
-        log.info("[STEP] And the agent enters group member details");
-
-        JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
-        List<Map<String, String>> iMembers = pDataTable.asMaps(String.class, String.class);
-
-        for (Map<String, String> iMember : iMembers)
-        {
-            String iIdx      = iMember.get("memberIndex").trim();
-            String iName     = iMember.get("name").trim();
-            String iDob      = iMember.get("dob").trim();
-            String iEligible = iMember.get("eligible").trim();
-
-            log.info("[TC13] Entering member " + iIdx + ": " + iName);
-
-            // ── Name — td[1] matinput, row-indexed ───────────────────────────────────────────
-            String iNameXpath = ObjReader.getLocator("iNRCISYFMemberNameInput").replace("{index}", iIdx);
-            iAction("WAITVISIBLE", "XPATH", iNameXpath, null);
-            iAction("TEXTBOX",     "XPATH", iNameXpath, iName);
-
-            // ── DOB — td[2] mat-datepicker, disabled by default — JS inject ──────────────────
-            String iDobXpath = ObjReader.getLocator("iNRCISYFMemberDOBInput").replace("{index}", iIdx);
-            try
-            {
-                WebElement iDobInput = getDriver().findElement(By.xpath(iDobXpath));
-                iJs.executeScript("arguments[0].removeAttribute('disabled');", iDobInput);
-                iJs.executeScript("arguments[0].click();",                     iDobInput);
-                iDobInput.clear();
-                iDobInput.sendKeys(iDob);
-                iDobInput.sendKeys(org.openqa.selenium.Keys.TAB);
-                log.info("[TC13] DOB set for member " + iIdx + ": " + iDob);
-            }
-            catch (Exception e)
-            {
-                log.warning("[TC13] Could not set DOB for member " + iIdx + ": " + e.getMessage());
-            }
-
-            // ── Eligible Farmer checkbox — td[3], JS click on native input ───────────────────
-            if ("Yes".equalsIgnoreCase(iEligible))
-            {
-                String iHostXpath  = ObjReader.getLocator("iNRCISYFMemberEligibleCheckboxHost").replace("{index}", iIdx);
-                String iInputXpath = ObjReader.getLocator("iNRCISYFMemberEligibleInput").replace("{index}", iIdx);
-                try
-                {
-                    WebElement iHost  = getDriver().findElement(By.xpath(iHostXpath));
-                    String     iClass = iHost.getAttribute("class");
-                    if (iClass != null && iClass.contains("mat-mdc-checkbox-checked"))
-                    {
-                        log.info("[TC13] Member " + iIdx + " already eligible — skipping.");
-                    }
-                    else
-                    {
-                        WebElement iNative = getDriver().findElement(By.xpath(iInputXpath));
-                        iJs.executeScript("arguments[0].scrollIntoView({block:'center'});", iNative);
-                        iJs.executeScript("arguments[0].click();", iNative);
-                        log.info("[TC13] Eligible ticked for member " + iIdx);
-                    }
-                }
-                catch (Exception e)
-                {
-                    log.warning("[TC13] Could not tick eligible for member " + iIdx
-                            + ": " + e.getMessage());
-                }
-            }
-
-            log.info("[TC13] Member " + iIdx + " complete: " + iName + " DOB=" + iDob);
-        }
-    }
-
-
-------------------------------------------------------------
-    // ***************************************************************************************************************************************************************************************
     // Step          : the agent completes the qualification details for each member (DataTable)
-    // Description   : Same as completes the qualification details but loops through each member
-    //                 by clicking "Next Farmer" between entries. The same qualification data is
-    //                 applied to every member (as per the legacy test patterns).
+    // Description   : Loops through each member's qualification step, clicking "Next Farmer"
+    //                 between entries until no more members remain.
+    //
+    //                 DOM alignment (from theAgentEntersGroupMemberDetails reference):
+    //                   - dateOfCompletion: mat-datepicker, disabled by default — JS inject
+    //                     same pattern as member DOB: removeAttribute + click + sendKeys + TAB
+    //                   - hasQualification / certificateAwarded: ObjReader radio keys with {value} replace
+    //                   - college / qualification: ObjReader LIST keys — already correct
+    //
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
@@ -101,65 +17,86 @@
     {
         log.info("[STEP] When the agent completes the qualification details for each member");
 
-        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
-
-        // Determine how many members need qualification by counting available "Next Farmer" clicks.
-        // We loop: fill qualification → click Next Farmer → fill again, until Next Farmer is no longer available.
-        int iMaxMembers = 10;  // safety cap
-        int iMemberCount = 0;
+        JavascriptExecutor      iJs      = (JavascriptExecutor) getDriver();
+        Map<String, String>     iData    = pDataTable.asMap(String.class, String.class);
+        final int               iMaxMembers = 10;
+        int                     iMemberCount = 0;
 
         for (int i = 0; i < iMaxMembers; i++)
         {
             iMemberCount++;
-            log.info("Filling qualification for member " + iMemberCount);
+            log.info("[TC13] Filling qualification for member " + iMemberCount);
 
-            // Has qualification
+            // ── Has Qualification radio ───────────────────────────────────────────────────────
+            // Uses ObjReader iNRCISYFHasQualRadio with {value} replace — same as theAgentCompletesTheQualificationDetails
             String iHasQual = iData.getOrDefault("hasQualification", "Yes").trim();
-            iAction("CLICK", "XPATH",
-                    "//mat-radio-button[contains(.,'" + iHasQual + "')] | //label[contains(text(),'" + iHasQual + "')]",
-                    null);
+            String iHasQualXpath = ObjReader.getLocator("iNRCISYFHasQualRadio")
+                    .replace("{value}", iHasQual);
+            iAction("WAITVISIBLE", "XPATH", iHasQualXpath, null);
+            iAction("CLICK",       "XPATH", iHasQualXpath, null);
 
-            // Date of completion
+            // ── Date of Completion — mat-datepicker, disabled by default ──────────────────────
+            // Same JS inject pattern as member DOB in theAgentEntersGroupMemberDetails.
+            // iAction("TEXTBOX",...) does not work — disabled attribute blocks sendKeys.
             if (iData.containsKey("dateOfCompletion"))
             {
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFDateOfCompletionField"), iData.get("dateOfCompletion").trim());
+                String iDate = iData.get("dateOfCompletion").trim();
+                try
+                {
+                    WebElement iDateInput = getDriver().findElement(
+                            By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionField")));
+                    iJs.executeScript("arguments[0].removeAttribute('disabled');", iDateInput);
+                    iJs.executeScript("arguments[0].click();",                     iDateInput);
+                    iDateInput.clear();
+                    iDateInput.sendKeys(iDate);
+                    iDateInput.sendKeys(org.openqa.selenium.Keys.TAB);
+                    log.info("[TC13] Date of completion set for member " + iMemberCount + ": " + iDate);
+                }
+                catch (Exception e)
+                {
+                    log.warning("[TC13] Could not set date of completion for member "
+                            + iMemberCount + ": " + e.getMessage());
+                }
             }
 
-            // Certificate awarded
+            // ── Certificate Awarded radio ─────────────────────────────────────────────────────
+            // Uses ObjReader iNRCISYFCertAwardedRadio with {value} replace
             if (iData.containsKey("certificateAwarded"))
             {
-                iAction("CLICK", "XPATH", "(//mat-radio-button[contains(.,'" + iData.get("certificateAwarded").trim() + "')])[last()]", null);
+                String iCert = iData.get("certificateAwarded").trim();
+                String iCertXpath = ObjReader.getLocator("iNRCISYFCertAwardedRadio")
+                        .replace("{value}", iCert);
+                iAction("WAITVISIBLE", "XPATH", iCertXpath, null);
+                iAction("CLICK",       "XPATH", iCertXpath, null);
             }
 
-            // College
+            // ── College dropdown ──────────────────────────────────────────────────────────────
             if (iData.containsKey("college"))
             {
-                iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown"), iData.get("college").trim());
+                iAction("LIST", "XPATH",
+                        ObjReader.getLocator("iNRCISYFCollegeDropdown"),
+                        iData.get("college").trim());
             }
 
-            // Qualification
+            // ── Qualification dropdown ────────────────────────────────────────────────────────
             if (iData.containsKey("qualification"))
             {
-                iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"), iData.get("qualification").trim());
+                iAction("LIST", "XPATH",
+                        ObjReader.getLocator("iNRCISYFQualificationDropdown"),
+                        iData.get("qualification").trim());
             }
 
-            // Try clicking "Next Farmer" — if it doesn't exist, we've done all members
-            try
+            // ── Next Farmer — click if visible, exit loop if not ─────────────────────────────
+            if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNextFarmerBtn")), 3))
             {
-                if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNextFarmerBtn")), 3))
-                {
-                    iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextFarmerBtn"), null);
-                    log.info("Next Farmer clicked — proceeding to member " + (iMemberCount + 1));
-                }
-                else
-                {
-                    log.info("No more Next Farmer buttons — all " + iMemberCount + " members completed.");
-                    break;
-                }
+                iAction("CLICK", "XPATH",
+                        ObjReader.getLocator("iNRCISYFNextFarmerBtn"), null);
+                log.info("[TC13] Next Farmer clicked — proceeding to member " + (iMemberCount + 1));
             }
-            catch (Exception e)
+            else
             {
-                log.info("Next Farmer not found — all " + iMemberCount + " members completed.");
+                log.info("[TC13] No more Next Farmer buttons — all "
+                        + iMemberCount + " member(s) completed.");
                 break;
             }
         }
