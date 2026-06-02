@@ -406,12 +406,11 @@ public class DBRouter
             {
                 requireParamCountBetween(key, params, 1, 2);
                 int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 50;
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
                 sql =
                         "SELECT app_herd_no, app_year, aph_herd_type " +
                                 "FROM vwbs_application_herd " +
                                 "WHERE mde_abbrev     = 'I' " +
-                                "AND   app_herd_no    LIKE 'J%' " +
                                 "AND   applicant_type = 'I' " +
                                 "AND EXISTS ( " +
                                 "    SELECT 1 " +
@@ -428,14 +427,16 @@ public class DBRouter
                                 "    AND   x.pap_payment_ind = 'Y' " +
                                 ") " +
                                 "AND app_year = ? " +
-                                "AND NVL(pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3), 'N') = 'Y' " +
+                                "AND NVL(( " +
+                                "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
+                                "    FROM dual " +
+                                "), 'N') = 'Y' " +
                                 "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
                                 "AND ROWNUM <= ? " +
-                                "ORDER BY app_herd_no DESC";
+                                "ORDER BY app_herd_no ASC";
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
-
             // ----------------------------------------------------------------
             // DATA DB: Not Started individual herds eligible for CISYF (TC_13 ENTS)
             //
@@ -463,12 +464,11 @@ public class DBRouter
             {
                 requireParamCountBetween(key, params, 1, 2);
                 int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 50;
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
                 sql =
                         "SELECT curr.app_herd_no, curr.app_year, curr.aph_herd_type " +
                                 "FROM vwbs_application_herd curr " +
                                 "WHERE curr.mde_abbrev     = 'RI' " +
-                                "AND   curr.app_herd_no    LIKE 'J%' " +
                                 "AND   curr.applicant_type = 'I' " +
                                 "AND   curr.app_year       = ? " +
                                 "AND EXISTS ( " +
@@ -485,11 +485,14 @@ public class DBRouter
                                 "    WHERE prev.app_herd_no = curr.app_herd_no " +
                                 "    AND   prev.app_year    = curr.app_year - 1 " +
                                 "    AND   prev.mde_abbrev  = 'I' " +
-                                "    AND   NVL(pkbs_payment_utils.fn_GetSchemeApplied(prev.aph_app_id, 3), 'N') = 'Y' " +
+                                "    AND   NVL(( " +
+                                "        SELECT pkbs_payment_utils.fn_GetSchemeApplied(prev.aph_app_id, 3) " +
+                                "        FROM dual " +
+                                "    ), 'N') = 'Y' " +
                                 ") " +
                                 "AND SUBSTR(curr.app_herd_no, 1, 1) > 'A' " +
                                 "AND ROWNUM <= ? " +
-                                "ORDER BY curr.app_herd_no DESC";
+                                "ORDER BY curr.app_herd_no ASC";
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
