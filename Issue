@@ -1,76 +1,88 @@
-    @When("the agent uploads NRCISYF documents")
-    public void theAgentUploadsNRCISYFDocuments(DataTable pDataTable) throws InterruptedException {
-        log.info("[STEP] When the agent uploads NRCISYF documents");
+# Upload dialog error — shown when non-PDF file is uploaded
+# DOM: mat-error inside app-nr-cisyf-supporting-doc-upload
+iNRCISYFUploadErrorNotPdf           = //app-nr-cisyf-supporting-doc-upload//mat-error[contains(normalize-space(),'File is not a PDF')]
 
-        String iFilePath = System.getProperty("nrcisyf.upload.path",
-                System.getProperty("user.dir")
-                        + java.io.File.separator + "src"
-                        + java.io.File.separator + "test"
-                        + java.io.File.separator + "resources"
-                        + java.io.File.separator + "Test_Data"
-                        + java.io.File.separator + "Cover_Letter.pdf");
+# Upload dialog error — upload failed message
+iNRCISYFUploadErrorFailed           = //app-nr-cisyf-supporting-doc-upload//mat-error[contains(normalize-space(),'Document upload failed')]
 
-        List<String> iDocTypes = pDataTable.asList();
-
-        for (String iDocType : iDocTypes)
-        {
-            String iClean = iDocType.trim();
-            // Use first 40 chars as the label match — avoids XPath being too long
-            // while still uniquely identifying each upload section
-            String iLabel = iClean.substring(0, Math.min(40, iClean.length()));
-
-            log.info("[TC13] Uploading: " + iClean);
-
-            // ── JS click the Upload button scoped to this document's label ────────────────────
-            // Invoice/Receipt and Bank Statement buttons are preceded by an advisory notice div
-            // which intercepts normal Selenium clicks. JS click bypasses this entirely.
-            // scrollIntoView first ensures the button is in the viewport before clicking.
-            String iUploadBtnXpath = ObjReader.getLocator("iNRCISYFUploadBtn").replace("{label}", iLabel);
-            iAction("WAITVISIBLE", "XPATH", iUploadBtnXpath, null);
-            WebElement iUploadBtn = getDriver().findElement(By.xpath(iUploadBtnXpath));
-            ((JavascriptExecutor) getDriver()).executeScript("arguments[0].scrollIntoView({block:'center'});", iUploadBtn);
-            ((JavascriptExecutor) getDriver()).executeScript("arguments[0].click();", iUploadBtn);
-
-            // ── Attach the PDF file (input type=file inside the upload dialog) ──────────────
-            iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iNRCISYFFileUploadInput"), iFilePath);
-
-            // ── Confirm the upload ──────────────────────────────────────────────────────────
-            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
-            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
-            iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
-
-            // ── Wait for dialog to close before next upload ─────────────────────────────────
-            iAction("WAITINVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
-            Thread.sleep(2000);
-            log.info("[TC13] Uploaded: " + iClean);
-        }
-    }
-
-above is the fucntion which we used for uploading a file , below is the function where we need to upload a file of image type and then we should see the error message post clicking on upload and validate that error message also i guess we need to click on close button so that we can test the same on other upload option
+# Close button inside upload dialog
+iNRCISYFUploadDialogCloseBtn        = //app-nr-cisyf-supporting-doc-upload//button[contains(@class,'clearBtn')]
 
 
-iamge path C:\Users\Aniket.Pathare\BISS_Automation\src\test\resources\Test_Data\image.png
+// ***************************************************************************************************************************************************************************************
+// Step          : the agent verifies the upload control only accepts PDF format
+// Description   : Uploads a non-PDF image file to the open upload dialog, then verifies:
+//                   1. "Document upload failed" error appears
+//                   2. "File is not a PDF" error appears
+//                 After verification clicks Close so the dialog is dismissed and the
+//                 same flow can be tested on other upload sections.
+//
+//                 DOM:
+//                   - File input: input#selectedPdfFile accept="application/pdf"
+//                   - Error 1:    mat-error "Document upload failed"
+//                   - Error 2:    mat-error "File is not a PDF"
+//                   - Close btn:  button.clearBtn inside app-nr-cisyf-supporting-doc-upload
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 31-03-2026
+// ***************************************************************************************************************************************************************************************
+@Then("the agent verifies the upload control only accepts PDF format")
+public void theAgentVerifiesTheUploadControlOnlyAcceptsPDFFormat()
+{
+    log.info("[STEP] Then the agent verifies the upload control only accepts PDF format");
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent verifies the upload control only accepts PDF format
-    // Description   : Checks the file input element's accept attribute to confirm it restricts to PDF
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @Then("the agent verifies the upload control only accepts PDF format")
-    public void theAgentVerifiesTheUploadControlOnlyAcceptsPDFFormat()
-    {
-        log.info("[STEP] Then the agent verifies the upload control only accepts PDF format");
-        WebElement iFileInput = getDriver().findElement(By.xpath(ObjReader.getLocator("iNRCISYFFileUploadInput")));
-        String iAccept = iFileInput.getAttribute("accept");
-        Assertions.assertTrue(iAccept != null && iAccept.toLowerCase().contains("pdf"), "File upload should only accept PDF. Actual accept attribute: " + iAccept);
-        log.info("Upload control verified: accept=" + iAccept);
-    }
+    // ── Verify accept attribute on file input ─────────────────────────────────────────
+    // DOM: input#selectedPdfFile accept="application/pdf"
+    WebElement iFileInput = getDriver().findElement(
+            By.xpath(ObjReader.getLocator("iNRCISYFFileUploadInput")));
+    String iAccept = iFileInput.getAttribute("accept");
+    Assertions.assertTrue(
+            iAccept != null && iAccept.toLowerCase().contains("pdf"),
+            "File input accept attribute should contain 'pdf'. Actual: " + iAccept);
+    log.info("[TC13] Accept attribute verified: " + iAccept);
 
+    // ── Upload a non-PDF image file to trigger the error ──────────────────────────────
+    // Image file path is fixed in test resources — used only for negative validation
+    String iImagePath = System.getProperty("user.dir")
+            + java.io.File.separator + "src"
+            + java.io.File.separator + "test"
+            + java.io.File.separator + "resources"
+            + java.io.File.separator + "Test_Data"
+            + java.io.File.separator + "image.png";
 
-Below is the dom stucture of it 
-<div id="cdk-overlay-7" class="cdk-overlay-pane mat-mdc-dialog-panel" style="position: static;"><div tabindex="0" class="cdk-visually-hidden cdk-focus-trap-anchor" aria-hidden="true"></div><mat-dialog-container tabindex="-1" class="mat-mdc-dialog-container mdc-dialog cdk-dialog-container mat-mdc-dialog-container-with-actions mdc-dialog--open" id="mat-mdc-dialog-4" role="dialog" aria-modal="true" aria-labelledby="mat-mdc-dialog-title-2" style="--mat-dialog-transition-duration: 150ms;"><div class="mat-mdc-dialog-inner-container mdc-dialog__container"><div class="mat-mdc-dialog-surface mdc-dialog__surface"><app-nr-cisyf-supporting-doc-upload _nghost-ng-c3844956419="" class="mat-mdc-dialog-component-host ng-star-inserted"><section _ngcontent-ng-c3844956419="" class="container-fluid"><mat-card-title _ngcontent-ng-c3844956419="" matdialogtitle="" class="mat-mdc-dialog-title mdc-dialog__title header-dialog" id="mat-mdc-dialog-title-2">NR/CISYF Invoice Upload</mat-card-title><hr _ngcontent-ng-c3844956419=""><mat-dialog-content _ngcontent-ng-c3844956419="" class="mat-mdc-dialog-content mdc-dialog__content p-dialog-content" style="padding-top: 0px;"><p _ngcontent-ng-c3844956419="" style="color: red;"> Only <strong _ngcontent-ng-c3844956419="">PDF</strong> files, up to a <strong _ngcontent-ng-c3844956419="">maximum of 3MB</strong> in size will be accepted. </p></mat-dialog-content><form _ngcontent-ng-c3844956419="" novalidate="" class="ng-untouched ng-pristine ng-valid"><mat-dialog-content _ngcontent-ng-c3844956419="" class="mat-mdc-dialog-content mdc-dialog__content p-dialog-content"><mat-label _ngcontent-ng-c3844956419="" style="margin-right: 5px;">Please select the document</mat-label><input _ngcontent-ng-c3844956419="" mat-input="" id="selectedPdfFile" name="selectedPdfFile" type="file" accept="application/pdf" class="file-upload"><p _ngcontent-ng-c3844956419="">Please note: Uploading may take several minutes, depending on your connection speed.</p><mat-error _ngcontent-ng-c3844956419="" aria-atomic="true" class="mat-mdc-form-field-error mat-mdc-form-field-bottom-align ng-star-inserted" aria-live="polite" id="mat-mdc-error-4"> You are about to upload a document which may contain personal information. Please ensure that the document being uploaded is correct and accurate in respect of the client you are uploading to. </mat-error><!----><div _ngcontent-ng-c3844956419="" class="ng-star-inserted"><mat-error _ngcontent-ng-c3844956419="" aria-atomic="true" class="mat-mdc-form-field-error mat-mdc-form-field-bottom-align" aria-live="polite" id="mat-mdc-error-5">Document upload failed. 
+    iAction("UPLOADFILE", "XPATH",
+            ObjReader.getLocator("iNRCISYFFileUploadInput"), iImagePath);
 
-</mat-error><br _ngcontent-ng-c3844956419=""><mat-error _ngcontent-ng-c3844956419="" aria-atomic="true" class="mat-mdc-form-field-error mat-mdc-form-field-bottom-align" aria-live="polite" id="mat-mdc-error-6">File is not a PDF 
+    // ── Click Upload Document to trigger validation ───────────────────────────────────
+    iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+    iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+    iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
 
-</mat-error></div><!----><!----></mat-dialog-content><mat-dialog-actions _ngcontent-ng-c3844956419="" align="end" class="mat-mdc-dialog-actions mdc-dialog__actions mat-mdc-dialog-actions-align-end"><button _ngcontent-ng-c3844956419="" type="button" class="nav-button clearBtn"><mat-icon _ngcontent-ng-c3844956419="" role="img" class="mat-icon notranslate material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">close</mat-icon> Close </button><button _ngcontent-ng-c3844956419="" type="button" class="nav-button"><mat-icon _ngcontent-ng-c3844956419="" role="img" class="mat-icon notranslate material-icons mat-ligature-font mat-icon-no-color" aria-hidden="true" data-mat-icon-type="font">cloud_upload</mat-icon><span _ngcontent-ng-c3844956419="" style="color: white; margin-left: 5px;">Upload Document</span></button></mat-dialog-actions><!----></form></section></app-nr-cisyf-supporting-doc-upload><!----></div></div></mat-dialog-container><div tabindex="0" class="cdk-visually-hidden cdk-focus-trap-anchor" aria-hidden="true"></div></div>
+    // ── Verify "Document upload failed" error is displayed ───────────────────────────
+    iAction("WAITVISIBLE", "XPATH",
+            ObjReader.getLocator("iNRCISYFUploadErrorFailed"), null);
+    iAction("VERIFYELEMENT", "XPATH",
+            ObjReader.getLocator("iNRCISYFUploadErrorFailed"), null);
+    log.info("[TC13] Error verified: Document upload failed");
+
+    // ── Verify "File is not a PDF" error is displayed ─────────────────────────────────
+    iAction("WAITVISIBLE", "XPATH",
+            ObjReader.getLocator("iNRCISYFUploadErrorNotPdf"), null);
+    iAction("VERIFYELEMENT", "XPATH",
+            ObjReader.getLocator("iNRCISYFUploadErrorNotPdf"), null);
+    log.info("[TC13] Error verified: File is not a PDF");
+
+    // ── Close the dialog so next upload section can be tested ─────────────────────────
+    iAction("WAITVISIBLE",   "XPATH",
+            ObjReader.getLocator("iNRCISYFUploadDialogCloseBtn"), null);
+    iAction("WAITCLICKABLE", "XPATH",
+            ObjReader.getLocator("iNRCISYFUploadDialogCloseBtn"), null);
+    iAction("CLICK",         "XPATH",
+            ObjReader.getLocator("iNRCISYFUploadDialogCloseBtn"), null);
+
+    // ── Wait for dialog to fully close ────────────────────────────────────────────────
+    iAction("WAITINVISIBLE", "XPATH",
+            ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
+
+    log.info("[TC13] Upload PDF validation complete — dialog closed.");
+}
