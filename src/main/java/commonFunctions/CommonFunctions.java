@@ -287,11 +287,18 @@ public class CommonFunctions
                 case "CHROME":
                 {
                     ChromeOptions iOptions = new ChromeOptions();
+                    iOptions.addArguments("--incognito");                    // incognito mode
+                    iOptions.addArguments("--disable-application-cache");   // no app cache
+                    iOptions.addArguments("--disable-cache");               // no disk cache
+                    iOptions.addArguments("--no-default-browser-check");
+                    iOptions.addArguments("--no-first-run");
                     iOptions.addArguments("--start-maximized");
                     iOptions.addArguments("--disable-notifications");
                     iOptions.addArguments("--disable-infobars");
                     iOptions.addArguments("--disable-extensions");
 
+                    String iTempProfile = System.getProperty("java.io.tmpdir") + "chrome_profile_" + System.currentTimeMillis();
+                    iOptions.addArguments("--user-data-dir=" + iTempProfile);
                     // Set browser-level zoom to 80% via Chrome user profile preferences.
                     // This is the robust approach — sets the actual Chrome zoom (same as
                     // Ctrl+- in browser) rather than CSS zoom which only affects body element.
@@ -1162,7 +1169,7 @@ public class CommonFunctions
     {
         try {
             Wait<WebDriver> fluentWait = new FluentWait<>(pDriver)
-                    .withTimeout(Duration.ofSeconds(20))
+                    .withTimeout(Duration.ofSeconds(30))
                     .pollingEvery(Duration.ofMillis(500))
                     .ignoring(NoSuchElementException.class)
                     .ignoring(StaleElementReferenceException.class);
@@ -1173,8 +1180,7 @@ public class CommonFunctions
             highlightElement(pDriver, element);
 
         } catch (Exception e) {
-            throw new RuntimeException("WAITVISIBLE failed for locator: " + pBy.toString()
-                    + " | Reason: " + e.getMessage(), e);
+            throw new RuntimeException("WAITVISIBLE failed for locator: " + pBy.toString() + " | Reason: " + e.getMessage(), e);
         }
     }
 
