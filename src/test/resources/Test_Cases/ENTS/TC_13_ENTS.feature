@@ -369,7 +369,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent enters company details
       | croNumber    | 23315673     |
       | companyName  | Company 1    |
-      | directorName | Mary Donald  |
+      | secretaryName  | Mary Donald  |
     And the agent sets group member count to "1"
     And the agent enters group member details
       | memberIndex | name         | dob        | eligible |
@@ -379,7 +379,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
 
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                               |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -400,6 +400,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC36
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -412,18 +413,18 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent enters company details
       | croNumber    | 23315673     |
       | companyName  | Company 1    |
-      | directorName | Mary Donald  |
+      | secretaryName | Mary Donald  |
     And the agent sets group member count to "2"
     And the agent enters group member details
-      | memberIndex | name    | dobDay | dobMonth | dobYear | eligible |
-      | 1           | Member1 | 1      | FEB      | 2003    | Yes      |
-      | 2           | Member2 | 1      | FEB      | 2003    | Yes      |
+      | memberIndex | name         | dob        | eligible |
+      | 1           | John Smith   | 15/06/1995 | Yes      |
+      | 2           | Jane Smith   | 16/06/1995 | Yes      |
     And the agent confirms group status question as "Yes"
     And the agent proceeds to the qualification step
 
     When the agent completes the qualification details for each member
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                               |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -444,6 +445,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC37
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -456,19 +458,19 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent enters company details
       | croNumber    | 23315673     |
       | companyName  | Company 1    |
-      | directorName | Mary Donald  |
+      | secretaryName | Mary Donald  |
     And the agent sets group member count to "3"
     And the agent enters group member details
-      | memberIndex | name    | dobDay | dobMonth | dobYear | eligible |
-      | 1           | Member1 | 1      | FEB      | 2003    | Yes      |
-      | 2           | Member2 | 1      | FEB      | 2003    | Yes      |
-      | 3           | Member3 | 1      | FEB      | 2003    | Yes      |
+      | memberIndex | name         | dob        | eligible |
+      | 1           | John Smith   | 15/06/1995 | Yes      |
+      | 2           | Jane Smith   | 16/06/1995 | Yes      |
+      | 3           | Jack Smith   | 17/06/1995 | Yes      |
     And the agent confirms group status question as "Yes"
     And the agent proceeds to the qualification step
 
     When the agent completes the qualification details for each member
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                               |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -489,6 +491,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC80
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -502,18 +505,18 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent enters company details
       | croNumber    | 324556789    |
       | companyName  | Company 1    |
-      | directorName | Mary Donald  |
+      | secretaryName | Mary Donald  |
     And the agent sets group member count to "2"
     And the agent enters group member details
-      | memberIndex | name    | dobDay | dobMonth | dobYear | eligible |
-      | 1           | Member1 | 1      | FEB      | 2003    | Yes      |
-      | 2           | Member2 | 1      | FEB      | 2003    | Yes      |
+      | memberIndex | name         | dob        | eligible |
+      | 1           | John Smith   | 15/06/1995 | Yes      |
+      | 2           | Jane Smith   | 16/06/1995 | Yes      |
     And the agent confirms group status question as "Yes"
     And the agent proceeds to the qualification step
 
     When the agent completes the qualification details for each member
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                               |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -537,6 +540,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC30
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -553,7 +557,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
 
     # --- Navigate back to reset for next flow ---
     When the agent navigates back to the NRCISYF client list
-
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     # ===========================================
     # SECTION 18 : Save and Exit mid-application
     # Covers: TC26
@@ -569,7 +573,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                                |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -581,6 +585,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC32
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -591,7 +596,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                                                                |
-      | dateOfCompletion   | 1                                                                  |
+      | dateOfCompletion   | 01/01/2026                                                                  |
       | certificateAwarded | Yes                                                                |
       | college            | The educational institution I attended does not appear in this list |
       | customCollege      | Dublin Institute of Technology                                     |
@@ -604,6 +609,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC33
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -614,7 +620,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification      | Yes                                                                       |
-      | dateOfCompletion      | 1                                                                         |
+      | dateOfCompletion      | 01/01/2026                                                                        |
       | certificateAwarded    | Yes                                                                       |
       | college               | Athlone Institute of Technology                                           |
       | qualification         | The qualification I have achieved does not appear in this list             |
@@ -627,6 +633,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC28
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     Then the agent verifies the upload control only accepts PDF format
 
@@ -635,6 +642,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC29
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent opens the NRCISYF Apply or Edit dialog
     And the agent resets all category selections
@@ -646,7 +654,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 1                               |
+      | dateOfCompletion   | 01/01/2026                               |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -660,6 +668,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # Covers: TC27, TC31
     # ===========================================
     When the agent navigates back to the NRCISYF client list
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent views the submitted NRCISYF application
     Then the uploaded documents should be accessible in correspondence
