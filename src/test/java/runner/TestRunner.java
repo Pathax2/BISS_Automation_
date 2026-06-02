@@ -235,12 +235,20 @@ public class TestRunner
                 //    TC_Login_01  →  src/test/resources/Test_Cases/TC_Login_01.feature
                 String iFeaturePath = iFeatureDirectoryPath + iTestCaseID + ".feature";
 
-                if (!new File(iFeaturePath).exists())
+                    // If not found at root, scan one level of subdirectories
+                if (!new java.io.File(iFeaturePath).exists())
                 {
-                    throw new RuntimeException(
-                            "Feature file not found : " + iFeaturePath + "\n"
-                                    + "Ensure a file named '" + iTestCaseID + ".feature' exists in "
-                                    + iFeatureDirectoryPath);
+                    java.io.File iDir = new java.io.File(iFeatureDirectoryPath);
+                    for (java.io.File iSub : iDir.listFiles(f -> f.isDirectory()))
+                    {
+                        String iSubPath = iSub.getAbsolutePath()
+                                + java.io.File.separator + iTestCaseID + ".feature";
+                        if (new java.io.File(iSubPath).exists())
+                        {
+                            iFeaturePath = iSubPath;
+                            break;
+                        }
+                    }
                 }
 
                 // ── Push values to Hooks via system properties ───────────────────────────────────
