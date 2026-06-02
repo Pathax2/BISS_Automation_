@@ -46,11 +46,17 @@ public class Hooks
     public static String AGRI_ACTIVITY_HERD      = null;
     public static String AGRI_ACTIVITY_USERNAME  = null;
 
+    // ── TC_13 NRCISYF runtime data ────────────────────────────────────────────────────────────────
+    // Resolved by @Before("@tc13") immediately before the scenario runs.
+    // Overrides RUNTIME_HERD and RUNTIME_USERNAME so the Background login
+    // and herd search steps automatically use the correct CISYF-eligible J-prefix herd.
+    public static String CISYF_HERD     = null;
+    public static String CISYF_USERNAME = null;
     // ─── Blacklisted herds — re-fetch if we land on one of these ─────────────────────────────────
-    private static final Set<String> BLACKLISTED_HERDS = Set.of(
+    public static final Set<String> BLACKLISTED_HERDS = Set.of(
             "R1230577","C2280025","C1281036","Q1060377","M1391623","M1701886","D1160614",
             "X1120993","P1261051","E209434X","D1174054","H2621144","B1240361","G1930639",
-            "G194082X","B1560048","R1050781","D201078X","M1952021","W1040563","B1150150",
+            "G194082X","B1560048","R1050781","D201078X","M1952021","W1040563","J1770847","J1710089","B1150150",
             "B1380562","C129112X","G1221786","T209028X","A1030615","T1790688","G1280928","G1930167",
             "Y1070492","Y1791564","R1040514","C1430554","C1289029","B1014078","D2450985"
     );
@@ -480,7 +486,134 @@ public class Hooks
 
         return iUsername.trim();
     }
+    //***************************************************************************************************************************************************************************************
+    // @Before("@tc13")
+    // Description   : Resolves a random CISYF-eligible J-prefix herd and its agent login
+    //                 from BISS_DATA and BISS_INET before the TC_13 NRCISYF scenario runs.
+    //
+    //                 Strategy:
+    //                   1. Query BISS_DATA using "List of individual herds with CISYF scheme"
+    //                      (J-prefix, submitted, CISYF scheme applied, no payment yet).
+    //                   2. Shuffle the result pool randomly — a different herd is picked each run.
+    //                   3. For each candidate, query BISS_INET for the agent login.
+    //                   4. Skip candidates with no INET agent or in EXPIRED_AGENTS.
+    //                   5. On success: overwrite RUNTIME_HERD and RUNTIME_USERNAME so the
+    //                      Background login step and herd search step use the correct CISYF herd.
+    //                   6. If all candidates exhausted: retry with a larger limit (up to 5 attempts).
+    //
+    //                 Why random:
+    //                   Shuffling gives a different herd on each run, avoiding repeated use of
+    //                   the same herd and making the test suite more robust across environments.
+    //
+    //                 After this hook:
+    //                   Hooks.RUNTIME_HERD     = resolved CISYF J-prefix herd
+    //                   Hooks.RUNTIME_USERNAME = agent who owns that herd in BISS_INET
+    //                   Hooks.CISYF_HERD       = same as RUNTIME_HERD (kept for clarity in logs)
+    //                   Hooks.CISYF_USERNAME   = same as RUNTIME_USERNAME
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 15-05-2026
+    // ***************************************************************************************************************************************************************************************
+    @Before("@tc13")
+    public void resolveRuntimeCISYFHerd(Scenario pScenario)
+    {
+        final String YEAR      = System.getProperty("herd.year",  "2026").trim();
+        final int    MAX_TRIES = 50;
 
+        CommonFunctions.log.info("[TC13-HOOK] Resolving random CISYF J-prefix herd for: " + pScenario.getName());
+
+        boolean iFound = false;
+
+        for (int iAttempt = 1; iAttempt <= MAX_TRIES && !iFound; iAttempt++)
+        {
+            // Increase limit on each retry to surface more candidates
+            int iLimit = 50 + ((iAttempt - 1) * 25);
+
+            CommonFunctions.log.info("[TC13-HOOK] Attempt " + iAttempt + "/" + MAX_TRIES + " — querying BISS_DATA (year=" + YEAR + ", limit=" + iLimit + ")");
+
+            database.DBRouter.runDB("DATA", "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF", YEAR, String.valueOf(iLimit));
+
+            List<Map<String, Object>> iRows = database.DBRouter.getRows();
+
+            if (iRows == null || iRows.isEmpty())
+            {
+                CommonFunctions.log.warning("[TC13-HOOK] BISS_DATA returned no CISYF herds " + "at limit=" + iLimit + ". Retrying...");
+                continue;
+            }
+
+            CommonFunctions.log.info("[TC13-HOOK] Candidate pool: " + iRows.size() + " herd(s).");
+
+            // ── Shuffle for random selection — different herd each run ────────────────
+            List<String> iCandidates = new java.util.ArrayList<>();
+            for (Map<String, Object> iRow : iRows)
+            {
+                String iHerd = Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
+                if (!iHerd.isEmpty()) iCandidates.add(iHerd);
+            }
+            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
+
+            CommonFunctions.log.info("[TC13-HOOK] Pool shuffled. Evaluating candidates...");
+
+            int iIdx = 0;
+            for (String iCandidate : iCandidates)
+            {
+                iIdx++;
+
+                // Skip blacklisted herds
+                if (BLACKLISTED_HERDS.contains(iCandidate))
+                {
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " is blacklisted — skipping.");
+                    continue;
+                }
+
+                // Query BISS_INET for agent login
+                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
+                String iUsername = database.DBRouter.getValue("USERNAME");
+
+                if (iUsername == null || iUsername.isBlank())
+                {
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " — no INET agent found. Skipping.");
+                    continue;
+                }
+
+                iUsername = iUsername.trim();
+
+                // Skip agents with expired SSO accounts
+                if (EXPIRED_AGENTS.contains(iUsername))
+                {
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " — agent " + iUsername + " is in EXPIRED_AGENTS. Skipping.");
+                    continue;
+                }
+
+                // ── Valid candidate found ─────────────────────────────────────────────
+                CISYF_HERD     = iCandidate;
+                CISYF_USERNAME = iUsername;
+
+                // Overwrite RUNTIME_HERD and RUNTIME_USERNAME so Background login
+                // and herd search steps use the correct CISYF herd automatically
+                RUNTIME_HERD     = iCandidate;
+                RUNTIME_USERNAME = iUsername;
+
+                iFound = true;
+
+                CommonFunctions.log.info("[TC13-HOOK] ✓ CISYF herd resolved:");
+                CommonFunctions.log.info("[TC13-HOOK]   Herd     = " + CISYF_HERD);
+                CommonFunctions.log.info("[TC13-HOOK]   Username = " + CISYF_USERNAME);
+                break;
+            }
+
+            if (!iFound)
+            {
+                CommonFunctions.log.warning("[TC13-HOOK] No valid candidate in attempt " + iAttempt + " — retrying with larger limit.");
+            }
+        }
+
+        if (!iFound)
+        {
+            throw new RuntimeException(
+                    "[TC13-HOOK] Could not resolve a CISYF J-prefix herd after " + MAX_TRIES + " attempts for year=" + YEAR + ". " + "Verify the query 'List of individual herds with CISYF scheme' " + "returns rows in BISS_DATA for this environment.");
+        }
+    }
     // =================================================================================================
 // BEFORE — runs before every scenario
 // =================================================================================================
