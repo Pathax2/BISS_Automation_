@@ -68,19 +68,65 @@ public class TC_13_ENTS
     @When("the agent searches for the NRCISYF herd and opens the application")
     public void theAgentSearchesForTheNRCISYFHerdAndOpensTheApplication()
     {
-        log.info("[STEP] When the agent searches for the NRCISYF herd and opens the application");
 
-        // Type the runtime herd number into the NRCISYF search field
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), Hooks.RUNTIME_HERD);
+        log.info("[STEP] When the agent searches for the NRCISYF herd and opens the application" + " | herd=" + Hooks.CISYF_HERD);
 
-        // Click search to filter the results
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        final int    MAX_RETRIES      = 15;
+        final String NRCISYF_TAB      = "NR/CISYF";
+        final String RESULT_ROW_XPATH = ObjReader.getLocator("iNRCISYFViewLink");
 
-        // Click the View link on the first matching row
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
+        for (int iAttempt = 1; iAttempt <= MAX_RETRIES; iAttempt++)
+        {
+            log.info("[TC13-SEARCH] Attempt " + iAttempt + "/" + MAX_RETRIES
+                    + " | herd=" + Hooks.CISYF_HERD
+                    + " | agent=" + Hooks.CISYF_USERNAME);
 
-        log.info("NRCISYF herd opened: " + Hooks.RUNTIME_HERD);
+            // ── Clear + type herd into search field ───────────────────────────────────────
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), "");
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), Hooks.CISYF_HERD);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+            // ── Check if View link appears ────────────────────────────────────────────────
+            if (isVisible(By.xpath(RESULT_ROW_XPATH), 5))
+            {
+                iAction("CLICK", "XPATH", RESULT_ROW_XPATH, null);
+                log.info("[TC13-SEARCH] Herd landing page opened: " + Hooks.CISYF_HERD);
+                return;
+            }
+
+            // ── Zero rows — herd not visible for this agent ───────────────────────────────
+            log.warning("[TC13-SEARCH] No result row for herd=" + Hooks.CISYF_HERD + " on attempt " + iAttempt + " — logout + fresh login + re-navigate.");
+
+            if (iAttempt == MAX_RETRIES)
+            {
+                throw new RuntimeException("[TC13-SEARCH] Herd " + Hooks.CISYF_HERD + " not found in NR/CISYF tab after " + MAX_RETRIES + " attempts. Herd may not be accessible for agent " + Hooks.CISYF_USERNAME);
+            }
+
+            // ── Logout + Login as same agent + re-navigate ────────────────────────────────
+            // A fresh session sometimes resolves tab visibility issues
+            // caused by stale session state or portal caching.
+            performLogout();
+            performLogin(Hooks.CISYF_USERNAME);
+
+            // Abort if account expired during re-login
+            if (Hooks.EXPIRED_AGENTS.contains(Hooks.CISYF_USERNAME))
+            {
+                throw new RuntimeException("[TC13-SEARCH] Agent " + Hooks.CISYF_USERNAME + " expired during re-login — cannot continue.");
+            }
+
+            // ── Navigate back to BISS → My Clients → NR/CISYF tab ────────────────────────
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"),          null);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+
+            log.info("[TC13-SEARCH] Re-navigated to NR/CISYF tab — retrying search.");
+        }
+
+
+
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -141,7 +187,7 @@ public class TC_13_ENTS
     {
         log.info("[STEP] When the agent opens the NRCISYF Apply or Edit dialog");
 
-        final int    MAX_RETRIES      = 15;
+        final int    MAX_RETRIES      = 95;
         final String YEAR             = System.getProperty("herd.year", "2026").trim();
         final String APPLY_EDIT_XPATH = ObjReader.getLocator("iNRCISYFApplyEditBtn");
         final String VIEW_APP_XPATH   = ObjReader.getLocator("iNRCISYFViewApplicationBtn");
@@ -255,8 +301,8 @@ public class TC_13_ENTS
             }
 
             // ── Step 5: Navigate to BISS → My Clients → NR/CISYF tab ─────────────────────
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
+           // iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+           // iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
             iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
             iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
             iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
@@ -562,8 +608,14 @@ public class TC_13_ENTS
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextBtn"), null);
         // Accept the OK confirmation if displayed
 
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFOKBtn"), null);
-            log.info("OK confirmation accepted.");
+            By iOKBtn = By.xpath(ObjReader.getLocator("iNRCISYFOKBtn"));
+            if (isVisible(iOKBtn, 2)) {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFOKBtn"), null);
+                log.info("OK confirmation accepted.");
+
+            }
+
+
         }
         catch (Exception e)
         {
@@ -759,8 +811,7 @@ public class TC_13_ENTS
             String iDateValue = iData.get("dateOfCompletion").trim();
             try
             {
-                WebElement iDateInput = getDriver().findElement(
-                        By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionInput")));
+                WebElement iDateInput = getDriver().findElement(By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionInput")));
                 JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
 
                 // Step 1: Remove DOM disabled attribute so the input becomes interactable
@@ -769,9 +820,12 @@ public class TC_13_ENTS
                 // Step 2: Click to focus — Angular needs focus before it processes input events
                 iJs.executeScript("arguments[0].click();", iDateInput);
 
+                Thread.sleep(500);
+
                 // Step 3: Clear any existing value
                 iDateInput.clear();
 
+                Thread.sleep(500);
                 // Step 4: sendKeys fires real keyboard events Angular's MatDateAdapter listens to
                 iDateInput.sendKeys(iDateValue);
 
@@ -843,16 +897,20 @@ public class TC_13_ENTS
         {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),   null);
             iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"),  null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"),  null);
-            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+            By iSadPOPup = By.xpath(ObjReader.getLocator("iLogoutPopup"));
+            if (isVisible(iSadPOPup, 1)) {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"),  null);
+            }
+
+
+           // iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
             log.info("[TC13-RELOGIN] Logout complete.");
         }
         catch (Exception e)
         {
             log.warning("[TC13-RELOGIN] UI logout failed (" + e.getMessage() + ") — navigating to base URL as fallback.");
             getDriver().navigate().to(Hooks.iUrl);
-            iAction("WAITVISIBLE", "XPATH",
-                    ObjReader.getLocator("iWelcomeLoginBtn"), null);
+            //iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
         }
     }
 
@@ -870,7 +928,8 @@ public class TC_13_ENTS
     private void performLogin(String pUsername)
     {
         log.info("[TC13-RELOGIN] Logging in as: " + pUsername);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+        //iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+        getDriver().navigate().to(Hooks.iUrl);
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
         iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
@@ -881,11 +940,9 @@ public class TC_13_ENTS
         if (isVisible(iExpiredBy, 3))
         {
             String iErrText = getDriver().findElement(iExpiredBy).getText().trim();
-            if (iErrText.toLowerCase().contains("account expired")
-                    || iErrText.toLowerCase().contains("account has expired"))
+            if (iErrText.toLowerCase().contains("account expired") || iErrText.toLowerCase().contains("account has expired")|| iErrText.contains("Invalid username or password."))
             {
-                log.warning("[TC13-RELOGIN] Account Expired for: " + pUsername
-                        + " — marking expired.");
+                log.warning("[TC13-RELOGIN] Account Expired for: " + pUsername + " — marking expired.");
                 Hooks.markAgentExpired(pUsername);
                 return;
             }
@@ -1082,7 +1139,7 @@ public class TC_13_ENTS
 
         Map<String, String> iData = pDataTable.asMap(String.class, String.class);
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFMemberNameInput2"), iData.get("croNumber").trim());
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCRONumberInput"), iData.get("croNumber").trim());
 
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCompanyNameInput"), iData.get("companyName").trim());
 
@@ -1144,14 +1201,12 @@ public class TC_13_ENTS
 
             log.info("[TC13] Entering member " + iIdx + ": " + iName);
 
-            // ── Name — td[1] input, row-indexed ──────────────────────────────────────────────
-            String iNameXpath = ObjReader.getLocator("iNRCISYFMemberNameInput2").replace("{index}", iIdx);
+            // ── Name — td[1] matinput, row-indexed ───────────────────────────────────────────
+            String iNameXpath = ObjReader.getLocator("iNRCISYFMemberNameInput").replace("{index}", iIdx);
             iAction("WAITVISIBLE", "XPATH", iNameXpath, null);
             iAction("TEXTBOX",     "XPATH", iNameXpath, iName);
 
             // ── DOB — td[2] mat-datepicker, disabled by default — JS inject ──────────────────
-            // DOM has ONE single datepicker input (not split day/month/year fields).
-            // Same pattern as qualification date: removeAttribute + click + sendKeys + TAB.
             String iDobXpath = ObjReader.getLocator("iNRCISYFMemberDOBInput").replace("{index}", iIdx);
             try
             {
@@ -1165,19 +1220,14 @@ public class TC_13_ENTS
             }
             catch (Exception e)
             {
-                log.warning("[TC13] Could not set DOB for member " + iIdx
-                        + ": " + e.getMessage());
+                log.warning("[TC13] Could not set DOB for member " + iIdx + ": " + e.getMessage());
             }
 
             // ── Eligible Farmer checkbox — td[3], JS click on native input ───────────────────
-            // touch-target div covers click area — JS click on native input bypasses it.
-            // Only tick if "Yes"; leave unticked for "No".
             if ("Yes".equalsIgnoreCase(iEligible))
             {
                 String iHostXpath  = ObjReader.getLocator("iNRCISYFMemberEligibleCheckboxHost").replace("{index}", iIdx);
                 String iInputXpath = ObjReader.getLocator("iNRCISYFMemberEligibleInput").replace("{index}", iIdx);
-
-                // State check — only click if not already checked
                 try
                 {
                     WebElement iHost  = getDriver().findElement(By.xpath(iHostXpath));
@@ -1196,14 +1246,14 @@ public class TC_13_ENTS
                 }
                 catch (Exception e)
                 {
-                    log.warning("[TC13] Could not tick eligible for member " + iIdx + ": " + e.getMessage());
+                    log.warning("[TC13] Could not tick eligible for member " + iIdx
+                            + ": " + e.getMessage());
                 }
             }
 
             log.info("[TC13] Member " + iIdx + " complete: " + iName + " DOB=" + iDob);
         }
     }
-
 
     // ***************************************************************************************************************************************************************************************
 // Step          : the agent confirms group status question as {string}
@@ -1219,10 +1269,14 @@ public class TC_13_ENTS
     public void theAgentConfirmsGroupStatusQuestionAs(String pAnswer)
     {
         log.info("[STEP] And the agent confirms group status question as: " + pAnswer);
-        String iRadioXpath = ObjReader.getLocator("iNRCISYFGroupStatusRadio").replace("{answer}", pAnswer);
+
+        // DOM uses value="true"/"false" — map from human-readable Yes/No
+
+        String iValue = "Yes".equalsIgnoreCase(pAnswer.trim()) ? "true" : "false";
+        String iRadioXpath = ObjReader.getLocator("iNRCISYFGroupStatusRadio").replace("{value}", iValue);
         iAction("WAITVISIBLE", "XPATH", iRadioXpath, null);
         iAction("CLICK",       "XPATH", iRadioXpath, null);
-        log.info("[TC13] Group status confirmed: " + pAnswer);
+        log.info("[TC13] Group status confirmed: " + pAnswer + " (DOM value=" + iValue + ")");
     }
 
 
@@ -1239,70 +1293,80 @@ public class TC_13_ENTS
     {
         log.info("[STEP] When the agent completes the qualification details for each member");
 
-        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
-
-        // Determine how many members need qualification by counting available "Next Farmer" clicks.
-        // We loop: fill qualification → click Next Farmer → fill again, until Next Farmer is no longer available.
-        int iMaxMembers = 10;  // safety cap
-        int iMemberCount = 0;
+        JavascriptExecutor      iJs      = (JavascriptExecutor) getDriver();
+        Map<String, String>     iData    = pDataTable.asMap(String.class, String.class);
+        final int               iMaxMembers = 10;
+        int                     iMemberCount = 0;
 
         for (int i = 0; i < iMaxMembers; i++)
         {
             iMemberCount++;
-            log.info("Filling qualification for member " + iMemberCount);
+            log.info("[TC13] Filling qualification for member " + iMemberCount);
 
-            // Has qualification
+            // ── Has Qualification radio ───────────────────────────────────────────────────────
+            // Uses ObjReader iNRCISYFHasQualRadio with {value} replace — same as theAgentCompletesTheQualificationDetails
             String iHasQual = iData.getOrDefault("hasQualification", "Yes").trim();
-            iAction("CLICK", "XPATH",
-                    "//mat-radio-button[contains(.,'" + iHasQual + "')] | //label[contains(text(),'" + iHasQual + "')]",
-                    null);
+            String iHasQualXpath = ObjReader.getLocator("iNRCISYFHasQualRadio").replace("{value}", iHasQual);
+            iAction("WAITVISIBLE", "XPATH", iHasQualXpath, null);
+            iAction("CLICK",       "XPATH", iHasQualXpath, null);
 
-            // Date of completion
+            // ── Date of Completion — mat-datepicker, disabled by default ──────────────────────
+            // Same JS inject pattern as member DOB in theAgentEntersGroupMemberDetails.
+            // iAction("TEXTBOX",...) does not work — disabled attribute blocks sendKeys.
             if (iData.containsKey("dateOfCompletion"))
             {
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFDateOfCompletionField"), iData.get("dateOfCompletion").trim());
+                String iDate = iData.get("dateOfCompletion").trim();
+                try
+                {
+                    WebElement iDateInput = getDriver().findElement(By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionField")));
+                    iJs.executeScript("arguments[0].removeAttribute('disabled');", iDateInput);
+                    iJs.executeScript("arguments[0].click();",                     iDateInput);
+                    iDateInput.clear();
+                    iDateInput.sendKeys(iDate);
+                    iDateInput.sendKeys(org.openqa.selenium.Keys.TAB);
+                    log.info("[TC13] Date of completion set for member " + iMemberCount + ": " + iDate);
+                }
+                catch (Exception e)
+                {
+                    log.warning("[TC13] Could not set date of completion for member " + iMemberCount + ": " + e.getMessage());
+                }
             }
 
-            // Certificate awarded
+            // ── Certificate Awarded radio ─────────────────────────────────────────────────────
+            // Uses ObjReader iNRCISYFCertAwardedRadio with {value} replace
             if (iData.containsKey("certificateAwarded"))
             {
-                iAction("CLICK", "XPATH", "(//mat-radio-button[contains(.,'" + iData.get("certificateAwarded").trim() + "')])[last()]", null);
+                String iCert = iData.get("certificateAwarded").trim();
+                String iCertXpath = ObjReader.getLocator("iNRCISYFCertAwardedRadio").replace("{value}", iCert);
+                iAction("WAITVISIBLE", "XPATH", iCertXpath, null);
+                iAction("CLICK",       "XPATH", iCertXpath, null);
             }
 
-            // College
+            // ── College dropdown ──────────────────────────────────────────────────────────────
             if (iData.containsKey("college"))
             {
                 iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown"), iData.get("college").trim());
             }
 
-            // Qualification
+            // ── Qualification dropdown ────────────────────────────────────────────────────────
             if (iData.containsKey("qualification"))
             {
                 iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"), iData.get("qualification").trim());
             }
 
-            // Try clicking "Next Farmer" — if it doesn't exist, we've done all members
-            try
+            // ── Next Farmer — click if visible, exit loop if not ─────────────────────────────
+            if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNextFarmerBtn")), 3))
             {
-                if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNextFarmerBtn")), 3))
-                {
-                    iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextFarmerBtn"), null);
-                    log.info("Next Farmer clicked — proceeding to member " + (iMemberCount + 1));
-                }
-                else
-                {
-                    log.info("No more Next Farmer buttons — all " + iMemberCount + " members completed.");
-                    break;
-                }
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextFarmerBtn"), null);
+                log.info("[TC13] Next Farmer clicked — proceeding to member " + (iMemberCount + 1));
             }
-            catch (Exception e)
+            else
             {
-                log.info("Next Farmer not found — all " + iMemberCount + " members completed.");
+                log.info("[TC13] No more Next Farmer buttons — all " + iMemberCount + " member(s) completed.");
                 break;
             }
         }
     }
-
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent selects herd group type {string}
@@ -1316,8 +1380,7 @@ public class TC_13_ENTS
     public void theAgentSelectsHerdGroupType(String pGroupType)
     {
         log.info("[STEP] And the agent selects herd group type: " + pGroupType);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFHerdGroupTypeDropdown"), null);
-
+        iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFHerdGroupTypeDropdown2"), pGroupType);
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -1353,7 +1416,7 @@ public class TC_13_ENTS
     {
         log.info("[STEP] And the agent saves and exits the NRCISYF application");
         iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFStepperSaveAndExitBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSaveAndExitBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFSaveExitDialogBtn"), null);
     }
 
     // ***************************************************************************************************************************************************************************************
