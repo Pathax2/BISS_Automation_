@@ -1,42 +1,254 @@
-case "CHROME":
-{
-    ChromeOptions iOptions = new ChromeOptions();
-    iOptions.addArguments("--incognito");
-    iOptions.addArguments("--disable-application-cache");
-    iOptions.addArguments("--disable-cache");
-    iOptions.addArguments("--no-default-browser-check");
-    iOptions.addArguments("--no-first-run");
-    iOptions.addArguments("--start-maximized");
-    iOptions.addArguments("--disable-notifications");
-    iOptions.addArguments("--disable-infobars");
-    iOptions.addArguments("--disable-extensions");
-
-    // Fresh isolated Chrome profile per run
-    String iTempProfile = System.getProperty("java.io.tmpdir")
-            + "chrome_profile_" + System.currentTimeMillis();
-    iOptions.addArguments("--user-data-dir=" + iTempProfile);
-
-    // ── Zoom locked at 67% ────────────────────────────────────────────────────────────
-    // Chrome uses log base 1.2 scale: log(0.67) / log(1.2) = -2.196545
-    // profile.default_zoom_level sets the global default.
-    // partition.per_host_zoom_levels forces it for the specific BISS domain,
-    // overriding any Chrome auto-zoom behaviour for that host.
-    java.util.Map<String, Object> iHostZoom = new java.util.HashMap<>();
-    iHostZoom.put("biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie", -2.196545);
-
-    java.util.Map<String, Object> iPrefs = new java.util.HashMap<>();
-    iPrefs.put("profile.default_content_settings.popups", 0);
-    iPrefs.put("profile.default_zoom_level", -2.196545);
-    iPrefs.put("partition.per_host_zoom_levels.x", iHostZoom);
-    iOptions.setExperimentalOption("prefs", iPrefs);
-
-    if (iHeadless)
+    @And("the agent enters group member details")
+    public void theAgentEntersGroupMemberDetails(DataTable pDataTable)
     {
-        iOptions.addArguments("--headless=new");
-        iOptions.addArguments("--window-size=1920,1080");
+        log.info("[STEP] And the agent enters group member details");
+
+        JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
+        List<Map<String, String>> iMembers = pDataTable.asMaps(String.class, String.class);
+
+        for (Map<String, String> iMember : iMembers)
+        {
+            String iIdx      = iMember.get("memberIndex").trim();
+            String iName     = iMember.get("name").trim();
+            String iDob      = iMember.get("dob").trim();
+            String iEligible = iMember.get("eligible").trim();
+
+            log.info("[TC13] Entering member " + iIdx + ": " + iName);
+
+            // ── Name — td[1] matinput, row-indexed ───────────────────────────────────────────
+            String iNameXpath = ObjReader.getLocator("iNRCISYFMemberNameInput").replace("{index}", iIdx);
+            iAction("WAITVISIBLE", "XPATH", iNameXpath, null);
+            iAction("TEXTBOX",     "XPATH", iNameXpath, iName);
+
+            // ── DOB — td[2] mat-datepicker, disabled by default — JS inject ──────────────────
+            String iDobXpath = ObjReader.getLocator("iNRCISYFMemberDOBInput").replace("{index}", iIdx);
+            try
+            {
+                WebElement iDobInput = getDriver().findElement(By.xpath(iDobXpath));
+                iJs.executeScript("arguments[0].removeAttribute('disabled');", iDobInput);
+                iJs.executeScript("arguments[0].click();",                     iDobInput);
+                iDobInput.clear();
+                iDobInput.sendKeys(iDobXpath);
+                iDobInput.sendKeys(org.openqa.selenium.Keys.TAB);
+                log.info("[TC13] DOB set for member " + iIdx + ": " + iDob);
+            }
+            catch (Exception e)
+            {
+                log.warning("[TC13] Could not set DOB for member " + iIdx + ": " + e.getMessage());
+            }
+
+            // ── Eligible Farmer checkbox — td[3], JS click on native input ───────────────────
+            if ("Yes".equalsIgnoreCase(iEligible))
+            {
+                String iHostXpath  = ObjReader.getLocator("iNRCISYFMemberEligibleCheckboxHost").replace("{index}", iIdx);
+                String iInputXpath = ObjReader.getLocator("iNRCISYFMemberEligibleInput").replace("{index}", iIdx);
+                try
+                {
+                    WebElement iHost  = getDriver().findElement(By.xpath(iHostXpath));
+                    String     iClass = iHost.getAttribute("class");
+                    if (iClass != null && iClass.contains("mat-mdc-checkbox-checked"))
+                    {
+                        log.info("[TC13] Member " + iIdx + " already eligible — skipping.");
+                    }
+                    else
+                    {
+                        WebElement iNative = getDriver().findElement(By.xpath(iInputXpath));
+                        iJs.executeScript("arguments[0].scrollIntoView({block:'center'});", iNative);
+                        iJs.executeScript("arguments[0].click();", iNative);
+                        log.info("[TC13] Eligible ticked for member " + iIdx);
+                    }
+                }
+                catch (Exception e)
+                {
+                    log.warning("[TC13] Could not tick eligible for member " + iIdx
+                            + ": " + e.getMessage());
+                }
+            }
+
+            log.info("[TC13] Member " + iIdx + " complete: " + iName + " DOB=" + iDob);
+        }
     }
 
-    System.setProperty("webdriver.chrome.driver", "drivers/chromedriver.exe");
-    iDriver = new ChromeDriver(iOptions);
-    break;
-}
+
+------------------------
+    @When("the agent completes the qualification details for each member")
+    public void theAgentCompletesTheQualificationDetailsForEachMember(DataTable pDataTable)
+    {
+        log.info("[STEP] When the agent completes the qualification details for each member");
+
+        JavascriptExecutor      iJs      = (JavascriptExecutor) getDriver();
+        Map<String, String>     iData    = pDataTable.asMap(String.class, String.class);
+        final int               iMaxMembers = 10;
+        int                     iMemberCount = 0;
+
+        for (int i = 0; i < iMaxMembers; i++)
+        {
+            iMemberCount++;
+            log.info("[TC13] Filling qualification for member " + iMemberCount);
+
+            // ── Has Qualification radio ───────────────────────────────────────────────────────
+            // Uses ObjReader iNRCISYFHasQualRadio with {value} replace — same as theAgentCompletesTheQualificationDetails
+            String iHasQual = iData.getOrDefault("hasQualification", "Yes").trim();
+            String iHasQualXpath = ObjReader.getLocator("iNRCISYFHasQualRadio").replace("{value}", iHasQual);
+            iAction("WAITVISIBLE", "XPATH", iHasQualXpath, null);
+            iAction("CLICK",       "XPATH", iHasQualXpath, null);
+
+            // ── Date of Completion — mat-datepicker, disabled by default ──────────────────────
+            // Same JS inject pattern as member DOB in theAgentEntersGroupMemberDetails.
+            // iAction("TEXTBOX",...) does not work — disabled attribute blocks sendKeys.
+            if (iData.containsKey("dateOfCompletion"))
+            {
+                String iDate = iData.get("dateOfCompletion").trim();
+                try
+                {
+                    WebElement iDateInput = getDriver().findElement(By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionField")));
+                    iJs.executeScript("arguments[0].removeAttribute('disabled');", iDateInput);
+                    iJs.executeScript("arguments[0].click();",                     iDateInput);
+
+                    Thread.sleep(500);
+
+                    iDateInput.clear();
+
+                    Thread.sleep(500);
+
+                    iDateInput.sendKeys(iDate);
+
+                    iDateInput.sendKeys(org.openqa.selenium.Keys.TAB);
+                    log.info("[TC13] Date of completion set for member " + iMemberCount + ": " + iDate);
+                }
+                catch (Exception e)
+                {
+                    log.warning("[TC13] Could not set date of completion for member " + iMemberCount + ": " + e.getMessage());
+                }
+            }
+
+            // ── Certificate Awarded radio ─────────────────────────────────────────────────────
+            // Uses ObjReader iNRCISYFCertAwardedRadio with {value} replace
+            if (iData.containsKey("certificateAwarded"))
+            {
+                String iCert = iData.get("certificateAwarded").trim();
+                String iCertXpath = ObjReader.getLocator("iNRCISYFCertAwardedRadio").replace("{value}", iCert);
+                iAction("WAITVISIBLE", "XPATH", iCertXpath, null);
+                iAction("CLICK",       "XPATH", iCertXpath, null);
+            }
+
+            // ── College dropdown ──────────────────────────────────────────────────────────────
+            if (iData.containsKey("college"))
+            {
+                iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown"), iData.get("college").trim());
+            }
+
+            // ── Qualification dropdown ────────────────────────────────────────────────────────
+            if (iData.containsKey("qualification"))
+            {
+                iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"), iData.get("qualification").trim());
+            }
+
+            // ── Next Farmer — click if visible, exit loop if not ─────────────────────────────
+            if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNextFarmerBtn")), 3))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextFarmerBtn"), null);
+                log.info("[TC13] Next Farmer clicked — proceeding to member " + (iMemberCount + 1));
+            }
+            else
+            {
+                log.info("[TC13] No more Next Farmer buttons — all " + iMemberCount + " member(s) completed.");
+                break;
+            }
+        }
+    }
+-------------------------
+    @When("the agent completes the qualification details")
+    public void theAgentCompletesTheQualificationDetails(DataTable pDataTable)
+    {
+        log.info("[STEP] When the agent completes the qualification details");
+
+        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
+
+        // Has qualification — Yes / No radio
+        String iHasQual = iData.getOrDefault("hasQualification", "Yes").trim();
+        iAction("CLICK", "XPATH", "//mat-radio-button[contains(.,'" + iHasQual + "')] | //label[contains(text(),'" + iHasQual + "')]", null);
+
+        // If No — stop here, the "no qualification" path doesn't need further fields
+        if ("No".equalsIgnoreCase(iHasQual))
+        {
+            log.info("Qualification = No — no further fields to fill.");
+            return;
+        }
+
+        if (iData.containsKey("dateOfCompletion"))
+        {
+            String iDateValue = iData.get("dateOfCompletion").trim();
+            try
+            {
+                WebElement iDateInput = getDriver().findElement(By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionInput")));
+                JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
+
+                // Step 1: Remove DOM disabled attribute so the input becomes interactable
+                iJs.executeScript("arguments[0].removeAttribute('disabled');", iDateInput);
+
+                // Step 2: Click to focus — Angular needs focus before it processes input events
+                iJs.executeScript("arguments[0].click();", iDateInput);
+
+                Thread.sleep(500);
+
+                // Step 3: Clear any existing value
+                iDateInput.clear();
+
+                Thread.sleep(500);
+                // Step 4: sendKeys fires real keyboard events Angular's MatDateAdapter listens to
+                iDateInput.sendKeys(iDateValue);
+
+                // Step 5: Tab out to trigger blur + Angular change detection
+                iDateInput.sendKeys(org.openqa.selenium.Keys.TAB);
+
+                log.info("[TC13] Date of completion entered via sendKeys: " + iDateValue);
+            }
+            catch (Exception e)
+            {
+                log.warning("[TC13] Could not enter date of completion: " + e.getMessage());
+            }
+        }
+
+        // ── Certificate awarded — formcontrolname="certificateHasBeenAwarded" ─────────────
+        if (iData.containsKey("certificateAwarded"))
+        {
+            String iCert    = iData.get("certificateAwarded").trim();
+            String iCertXp  = ObjReader.getLocator("iNRCISYFCertAwardedRadio").replace("{value}", iCert);
+            iAction("WAITVISIBLE", "XPATH", iCertXp, null);
+            iAction("CLICK",       "XPATH", iCertXp, null);
+        }
+
+        // College / Institution
+        if (iData.containsKey("college"))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFDateOfCompletionField"), null);
+            iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown "), iData.get("college").trim());
+        }
+
+        // Custom college — only when "institution not in list" was selected
+        if (iData.containsKey("customCollege"))
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCustomCollegeField"), iData.get("customCollege").trim());
+        }
+
+        // Qualification
+        if (iData.containsKey("qualification"))
+        {
+            iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"), iData.get("qualification").trim());
+        }
+
+        // Custom qualification — only when "qualification not in list" was selected
+        if (iData.containsKey("customQualification"))
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCustomQualificationField"), iData.get("customQualification").trim());
+        }
+
+        log.info("Qualification details completed: college=" + iData.getOrDefault("college", "N/A"));
+    }
+
+
+in all these three date functions sometimes it happens that there is existing date in the textbox and it doesnt clear it properly and it overrides in that particular textbox 
+which is causing the test cases to fail 
+is there a way we can ensure the textbox is blank ? before entering the date value ? 
+or after the value is entered check if its in expected format.
