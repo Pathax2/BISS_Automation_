@@ -1,254 +1,78 @@
-    @And("the agent enters group member details")
-    public void theAgentEntersGroupMemberDetails(DataTable pDataTable)
+// ***************************************************************************************************************************************************************************************
+// Method        : clearAndEnterDate
+// Description   : Reliably clears and enters a date into a disabled Angular Material datepicker.
+//                 iDateInput.clear() alone does not work — Angular holds value in component state.
+//                 Fix: JS removeAttribute + select all + delete + sendKeys + TAB.
+//                 After entry, reads back the value and validates expected format DD/MM/YYYY.
+// Parameters    : pInput     — the datepicker WebElement
+//                 pDate      — date string in DD/MM/YYYY format
+//                 pLabel     — label for logging (e.g. "DOB member 1", "Date of completion")
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 03-06-2026
+// ***************************************************************************************************************************************************************************************
+private void clearAndEnterDate(WebElement pInput, String pDate, String pLabel)
+{
+    JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
+    try
     {
-        log.info("[STEP] And the agent enters group member details");
+        // Step 1: Remove disabled attribute so input is interactable
+        iJs.executeScript("arguments[0].removeAttribute('disabled');", pInput);
 
-        JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
-        List<Map<String, String>> iMembers = pDataTable.asMaps(String.class, String.class);
+        // Step 2: Scroll into view and focus
+        iJs.executeScript("arguments[0].scrollIntoView({block:'center'});", pInput);
+        iJs.executeScript("arguments[0].focus();", pInput);
 
-        for (Map<String, String> iMember : iMembers)
+        // Step 3: Select all existing content and delete — handles Angular state reset
+        // ctrl+A selects all, DELETE clears — more reliable than clear() for Angular inputs
+        pInput.sendKeys(org.openqa.selenium.Keys.chord(
+                org.openqa.selenium.Keys.CONTROL, "a"));
+        pInput.sendKeys(org.openqa.selenium.Keys.DELETE);
+
+        // Step 4: JS set value to empty string to clear Angular component state
+        iJs.executeScript(
+                "arguments[0].value = '';" +
+                "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));" +
+                "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                pInput);
+
+        // Step 5: Enter the date value via sendKeys — fires keyboard events Angular listens to
+        pInput.sendKeys(pDate);
+
+        // Step 6: TAB out to trigger blur + Angular MatDateAdapter change detection
+        pInput.sendKeys(org.openqa.selenium.Keys.TAB);
+
+        // Step 7: Verify value was set correctly — read back and validate format
+        String iActual = pInput.getAttribute("value");
+        if (iActual == null || iActual.trim().isEmpty())
         {
-            String iIdx      = iMember.get("memberIndex").trim();
-            String iName     = iMember.get("name").trim();
-            String iDob      = iMember.get("dob").trim();
-            String iEligible = iMember.get("eligible").trim();
+            log.warning("[TC13] " + pLabel + " — value empty after entry, retrying via JS value set.");
+            iJs.executeScript(
+                    "arguments[0].value = '" + pDate + "';" +
+                    "arguments[0].dispatchEvent(new Event('input',  {bubbles:true}));" +
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                    pInput);
+            pInput.sendKeys(org.openqa.selenium.Keys.TAB);
+            iActual = pInput.getAttribute("value");
+        }
 
-            log.info("[TC13] Entering member " + iIdx + ": " + iName);
-
-            // ── Name — td[1] matinput, row-indexed ───────────────────────────────────────────
-            String iNameXpath = ObjReader.getLocator("iNRCISYFMemberNameInput").replace("{index}", iIdx);
-            iAction("WAITVISIBLE", "XPATH", iNameXpath, null);
-            iAction("TEXTBOX",     "XPATH", iNameXpath, iName);
-
-            // ── DOB — td[2] mat-datepicker, disabled by default — JS inject ──────────────────
-            String iDobXpath = ObjReader.getLocator("iNRCISYFMemberDOBInput").replace("{index}", iIdx);
-            try
-            {
-                WebElement iDobInput = getDriver().findElement(By.xpath(iDobXpath));
-                iJs.executeScript("arguments[0].removeAttribute('disabled');", iDobInput);
-                iJs.executeScript("arguments[0].click();",                     iDobInput);
-                iDobInput.clear();
-                iDobInput.sendKeys(iDobXpath);
-                iDobInput.sendKeys(org.openqa.selenium.Keys.TAB);
-                log.info("[TC13] DOB set for member " + iIdx + ": " + iDob);
-            }
-            catch (Exception e)
-            {
-                log.warning("[TC13] Could not set DOB for member " + iIdx + ": " + e.getMessage());
-            }
-
-            // ── Eligible Farmer checkbox — td[3], JS click on native input ───────────────────
-            if ("Yes".equalsIgnoreCase(iEligible))
-            {
-                String iHostXpath  = ObjReader.getLocator("iNRCISYFMemberEligibleCheckboxHost").replace("{index}", iIdx);
-                String iInputXpath = ObjReader.getLocator("iNRCISYFMemberEligibleInput").replace("{index}", iIdx);
-                try
-                {
-                    WebElement iHost  = getDriver().findElement(By.xpath(iHostXpath));
-                    String     iClass = iHost.getAttribute("class");
-                    if (iClass != null && iClass.contains("mat-mdc-checkbox-checked"))
-                    {
-                        log.info("[TC13] Member " + iIdx + " already eligible — skipping.");
-                    }
-                    else
-                    {
-                        WebElement iNative = getDriver().findElement(By.xpath(iInputXpath));
-                        iJs.executeScript("arguments[0].scrollIntoView({block:'center'});", iNative);
-                        iJs.executeScript("arguments[0].click();", iNative);
-                        log.info("[TC13] Eligible ticked for member " + iIdx);
-                    }
-                }
-                catch (Exception e)
-                {
-                    log.warning("[TC13] Could not tick eligible for member " + iIdx
-                            + ": " + e.getMessage());
-                }
-            }
-
-            log.info("[TC13] Member " + iIdx + " complete: " + iName + " DOB=" + iDob);
+        if (iActual != null && iActual.trim().equals(pDate.trim()))
+        {
+            log.info("[TC13] " + pLabel + " set and verified: " + iActual);
+        }
+        else
+        {
+            log.warning("[TC13] " + pLabel + " — expected '" + pDate
+                    + "' but found '" + iActual + "' — proceeding.");
         }
     }
-
-
-------------------------
-    @When("the agent completes the qualification details for each member")
-    public void theAgentCompletesTheQualificationDetailsForEachMember(DataTable pDataTable)
+    catch (Exception e)
     {
-        log.info("[STEP] When the agent completes the qualification details for each member");
-
-        JavascriptExecutor      iJs      = (JavascriptExecutor) getDriver();
-        Map<String, String>     iData    = pDataTable.asMap(String.class, String.class);
-        final int               iMaxMembers = 10;
-        int                     iMemberCount = 0;
-
-        for (int i = 0; i < iMaxMembers; i++)
-        {
-            iMemberCount++;
-            log.info("[TC13] Filling qualification for member " + iMemberCount);
-
-            // ── Has Qualification radio ───────────────────────────────────────────────────────
-            // Uses ObjReader iNRCISYFHasQualRadio with {value} replace — same as theAgentCompletesTheQualificationDetails
-            String iHasQual = iData.getOrDefault("hasQualification", "Yes").trim();
-            String iHasQualXpath = ObjReader.getLocator("iNRCISYFHasQualRadio").replace("{value}", iHasQual);
-            iAction("WAITVISIBLE", "XPATH", iHasQualXpath, null);
-            iAction("CLICK",       "XPATH", iHasQualXpath, null);
-
-            // ── Date of Completion — mat-datepicker, disabled by default ──────────────────────
-            // Same JS inject pattern as member DOB in theAgentEntersGroupMemberDetails.
-            // iAction("TEXTBOX",...) does not work — disabled attribute blocks sendKeys.
-            if (iData.containsKey("dateOfCompletion"))
-            {
-                String iDate = iData.get("dateOfCompletion").trim();
-                try
-                {
-                    WebElement iDateInput = getDriver().findElement(By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionField")));
-                    iJs.executeScript("arguments[0].removeAttribute('disabled');", iDateInput);
-                    iJs.executeScript("arguments[0].click();",                     iDateInput);
-
-                    Thread.sleep(500);
-
-                    iDateInput.clear();
-
-                    Thread.sleep(500);
-
-                    iDateInput.sendKeys(iDate);
-
-                    iDateInput.sendKeys(org.openqa.selenium.Keys.TAB);
-                    log.info("[TC13] Date of completion set for member " + iMemberCount + ": " + iDate);
-                }
-                catch (Exception e)
-                {
-                    log.warning("[TC13] Could not set date of completion for member " + iMemberCount + ": " + e.getMessage());
-                }
-            }
-
-            // ── Certificate Awarded radio ─────────────────────────────────────────────────────
-            // Uses ObjReader iNRCISYFCertAwardedRadio with {value} replace
-            if (iData.containsKey("certificateAwarded"))
-            {
-                String iCert = iData.get("certificateAwarded").trim();
-                String iCertXpath = ObjReader.getLocator("iNRCISYFCertAwardedRadio").replace("{value}", iCert);
-                iAction("WAITVISIBLE", "XPATH", iCertXpath, null);
-                iAction("CLICK",       "XPATH", iCertXpath, null);
-            }
-
-            // ── College dropdown ──────────────────────────────────────────────────────────────
-            if (iData.containsKey("college"))
-            {
-                iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown"), iData.get("college").trim());
-            }
-
-            // ── Qualification dropdown ────────────────────────────────────────────────────────
-            if (iData.containsKey("qualification"))
-            {
-                iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"), iData.get("qualification").trim());
-            }
-
-            // ── Next Farmer — click if visible, exit loop if not ─────────────────────────────
-            if (isVisible(By.xpath(ObjReader.getLocator("iNRCISYFNextFarmerBtn")), 3))
-            {
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFNextFarmerBtn"), null);
-                log.info("[TC13] Next Farmer clicked — proceeding to member " + (iMemberCount + 1));
-            }
-            else
-            {
-                log.info("[TC13] No more Next Farmer buttons — all " + iMemberCount + " member(s) completed.");
-                break;
-            }
-        }
+        log.warning("[TC13] " + pLabel + " — clearAndEnterDate failed: " + e.getMessage());
     }
--------------------------
-    @When("the agent completes the qualification details")
-    public void theAgentCompletesTheQualificationDetails(DataTable pDataTable)
-    {
-        log.info("[STEP] When the agent completes the qualification details");
-
-        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
-
-        // Has qualification — Yes / No radio
-        String iHasQual = iData.getOrDefault("hasQualification", "Yes").trim();
-        iAction("CLICK", "XPATH", "//mat-radio-button[contains(.,'" + iHasQual + "')] | //label[contains(text(),'" + iHasQual + "')]", null);
-
-        // If No — stop here, the "no qualification" path doesn't need further fields
-        if ("No".equalsIgnoreCase(iHasQual))
-        {
-            log.info("Qualification = No — no further fields to fill.");
-            return;
-        }
-
-        if (iData.containsKey("dateOfCompletion"))
-        {
-            String iDateValue = iData.get("dateOfCompletion").trim();
-            try
-            {
-                WebElement iDateInput = getDriver().findElement(By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionInput")));
-                JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
-
-                // Step 1: Remove DOM disabled attribute so the input becomes interactable
-                iJs.executeScript("arguments[0].removeAttribute('disabled');", iDateInput);
-
-                // Step 2: Click to focus — Angular needs focus before it processes input events
-                iJs.executeScript("arguments[0].click();", iDateInput);
-
-                Thread.sleep(500);
-
-                // Step 3: Clear any existing value
-                iDateInput.clear();
-
-                Thread.sleep(500);
-                // Step 4: sendKeys fires real keyboard events Angular's MatDateAdapter listens to
-                iDateInput.sendKeys(iDateValue);
-
-                // Step 5: Tab out to trigger blur + Angular change detection
-                iDateInput.sendKeys(org.openqa.selenium.Keys.TAB);
-
-                log.info("[TC13] Date of completion entered via sendKeys: " + iDateValue);
-            }
-            catch (Exception e)
-            {
-                log.warning("[TC13] Could not enter date of completion: " + e.getMessage());
-            }
-        }
-
-        // ── Certificate awarded — formcontrolname="certificateHasBeenAwarded" ─────────────
-        if (iData.containsKey("certificateAwarded"))
-        {
-            String iCert    = iData.get("certificateAwarded").trim();
-            String iCertXp  = ObjReader.getLocator("iNRCISYFCertAwardedRadio").replace("{value}", iCert);
-            iAction("WAITVISIBLE", "XPATH", iCertXp, null);
-            iAction("CLICK",       "XPATH", iCertXp, null);
-        }
-
-        // College / Institution
-        if (iData.containsKey("college"))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFDateOfCompletionField"), null);
-            iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFCollegeDropdown "), iData.get("college").trim());
-        }
-
-        // Custom college — only when "institution not in list" was selected
-        if (iData.containsKey("customCollege"))
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCustomCollegeField"), iData.get("customCollege").trim());
-        }
-
-        // Qualification
-        if (iData.containsKey("qualification"))
-        {
-            iAction("LIST", "XPATH", ObjReader.getLocator("iNRCISYFQualificationDropdown"), iData.get("qualification").trim());
-        }
-
-        // Custom qualification — only when "qualification not in list" was selected
-        if (iData.containsKey("customQualification"))
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFCustomQualificationField"), iData.get("customQualification").trim());
-        }
-
-        log.info("Qualification details completed: college=" + iData.getOrDefault("college", "N/A"));
-    }
+}
 
 
-in all these three date functions sometimes it happens that there is existing date in the textbox and it doesnt clear it properly and it overrides in that particular textbox 
-which is causing the test cases to fail 
-is there a way we can ensure the textbox is blank ? before entering the date value ? 
-or after the value is entered check if its in expected format.
+// REPLACE the entire DOB try block with:
+String iDobXpath = ObjReader.getLocator("iNRCISYFMemberDOBInput").replace("{index}", iIdx);
+WebElement iDobInput = getDriver().findElement(By.xpath(iDobXpath));
+clearAndEnterDate(iDobInput, iDob, "DOB member " + iIdx);
