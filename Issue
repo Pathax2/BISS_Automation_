@@ -1,78 +1,24 @@
-// ***************************************************************************************************************************************************************************************
-// Method        : clearAndEnterDate
-// Description   : Reliably clears and enters a date into a disabled Angular Material datepicker.
-//                 iDateInput.clear() alone does not work — Angular holds value in component state.
-//                 Fix: JS removeAttribute + select all + delete + sendKeys + TAB.
-//                 After entry, reads back the value and validates expected format DD/MM/YYYY.
-// Parameters    : pInput     — the datepicker WebElement
-//                 pDate      — date string in DD/MM/YYYY format
-//                 pLabel     — label for logging (e.g. "DOB member 1", "Date of completion")
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 03-06-2026
-// ***************************************************************************************************************************************************************************************
-private void clearAndEnterDate(WebElement pInput, String pDate, String pLabel)
-{
-    JavascriptExecutor iJs = (JavascriptExecutor) getDriver();
-    try
-    {
-        // Step 1: Remove disabled attribute so input is interactable
-        iJs.executeScript("arguments[0].removeAttribute('disabled');", pInput);
-
-        // Step 2: Scroll into view and focus
-        iJs.executeScript("arguments[0].scrollIntoView({block:'center'});", pInput);
-        iJs.executeScript("arguments[0].focus();", pInput);
-
-        // Step 3: Select all existing content and delete — handles Angular state reset
-        // ctrl+A selects all, DELETE clears — more reliable than clear() for Angular inputs
-        pInput.sendKeys(org.openqa.selenium.Keys.chord(
-                org.openqa.selenium.Keys.CONTROL, "a"));
-        pInput.sendKeys(org.openqa.selenium.Keys.DELETE);
-
-        // Step 4: JS set value to empty string to clear Angular component state
-        iJs.executeScript(
-                "arguments[0].value = '';" +
-                "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));" +
-                "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
-                pInput);
-
-        // Step 5: Enter the date value via sendKeys — fires keyboard events Angular listens to
-        pInput.sendKeys(pDate);
-
-        // Step 6: TAB out to trigger blur + Angular MatDateAdapter change detection
-        pInput.sendKeys(org.openqa.selenium.Keys.TAB);
-
-        // Step 7: Verify value was set correctly — read back and validate format
-        String iActual = pInput.getAttribute("value");
-        if (iActual == null || iActual.trim().isEmpty())
-        {
-            log.warning("[TC13] " + pLabel + " — value empty after entry, retrying via JS value set.");
-            iJs.executeScript(
-                    "arguments[0].value = '" + pDate + "';" +
-                    "arguments[0].dispatchEvent(new Event('input',  {bubbles:true}));" +
-                    "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
-                    pInput);
-            pInput.sendKeys(org.openqa.selenium.Keys.TAB);
-            iActual = pInput.getAttribute("value");
-        }
-
-        if (iActual != null && iActual.trim().equals(pDate.trim()))
-        {
-            log.info("[TC13] " + pLabel + " set and verified: " + iActual);
-        }
-        else
-        {
-            log.warning("[TC13] " + pLabel + " — expected '" + pDate
-                    + "' but found '" + iActual + "' — proceeding.");
-        }
-    }
-    catch (Exception e)
-    {
-        log.warning("[TC13] " + pLabel + " — clearAndEnterDate failed: " + e.getMessage());
-    }
-}
-
-
 // REPLACE the entire DOB try block with:
 String iDobXpath = ObjReader.getLocator("iNRCISYFMemberDOBInput").replace("{index}", iIdx);
 WebElement iDobInput = getDriver().findElement(By.xpath(iDobXpath));
 clearAndEnterDate(iDobInput, iDob, "DOB member " + iIdx);
+
+
+// REPLACE the entire dateOfCompletion try block with:
+if (iData.containsKey("dateOfCompletion"))
+{
+    WebElement iDateInput = getDriver().findElement(
+            By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionField")));
+    clearAndEnterDate(iDateInput, iData.get("dateOfCompletion").trim(),
+            "Date of completion member " + iMemberCount);
+}
+
+
+// REPLACE the entire dateOfCompletion try block with:
+if (iData.containsKey("dateOfCompletion"))
+{
+    WebElement iDateInput = getDriver().findElement(
+            By.xpath(ObjReader.getLocator("iNRCISYFDateOfCompletionInput")));
+    clearAndEnterDate(iDateInput, iData.get("dateOfCompletion").trim(),
+            "Date of completion");
+}
