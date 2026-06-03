@@ -1,25 +1,77 @@
-Automation team is currently working on improving the framework by replacing the hardcoded test data with dynamically generated data. As static data can become unreliable between the executions, the focus now is on ensuring that valid up-to-date data is available for every test run. To achieve this, a DB Utility component has been implemented to execute SQL queries dynamically, and integrate it into test scripts, removing the need for static data. So we need support from development/database team to get those queries.
+Here’s a technical version you can paste as a Jira comment:
 
-Below are the requirements for Test Data:
+RE: Test Data Query Requirements — DB Utility Integration
 
-Transfers:
+Hi [Dev name],
 
-Agent- Login IDs and the Herd Ids under the agent with available entitlements
+As part of our automation framework migration, we have implemented a DBRouter component that executes parameterised SQL queries at runtime against BISS_DATA and BISS_INET. All test data is now resolved dynamically per execution — no static herd numbers or usernames exist anywhere in the test scripts.
 
-Individual- Login IDs and the Herds Ids with available entitlements
+To support this, we need the following queries validated and provided. Each query must return both a herd number (from BISS_DATA) and a corresponding agent login ID (from BISS_INET via tdco_customer_asscs / tdcr_user_info). The agent login is resolved separately using the herd number as the join key.
 
-ETF- Login IDs and the Herds Ids associated with the ETF with available entitlements
+Transfers Module
 
-NR-CISYF
+1. Agent — Herds with available entitlements (agent-managed)
+Required columns: herd_no, agent_login_id
+Criteria:
 
-Agent Logins with the Herd IDs that have not yet started or initiated the application process.
+	•	Herd has active entitlements (tdbs_entitlement or equivalent) for the current scheme year
+	•	Herd is associated with an active agent via tdco_customer_asscs (ca_cac_code = 194, SYSDATE BETWEEN ca_start_date AND ca_end_date)
+	•	Agent login resolvable from tdcr_user_info via uri_ccs_bus_id
+	•	Excludes herds with no land parcels and herds with payment already processed
 
-Agent Logins with the Herd IDs where the application has been initiated/ is in editable mode.
+2. Individual — Herds with available entitlements (individual login)
+Required columns: herd_no, individual_login_id
+Criteria:
 
-Agent Logins with the Herd IDs  that have successfully submitted the application.
+	•	Same entitlement conditions as above
+	•	Login resolved via individual role (bcus_role_code = 115) not agent role
+	•	bcus_role_code = 100 for the herd, 115 for the login user
 
+3. ETF (Entitlement Transfer Form) — Herds associated with an ETF with available entitlements
+Required columns: herd_no, agent_login_id, etf_reference (if applicable)
+Criteria:
 
+	•	Herd has an active or pending ETF record for the current scheme year
+	•	Entitlements available for transfer (not fully allocated)
+	•	Agent login resolvable as above
 
-as you know that we're migrating old scripts into new format and all the data is been picked up at runtime from the database 
-i've asked the develeopment team to provide SQL queries that would ease with only quality test data i explained in the above jira description but his dumb brain cannot understand it 
-is there anyway you can make it more technical and make him understand i will add that in commends what is expected by us
+NR/CISYF Module
+
+4. Not Started — Agent login + herd where application has not been initiated
+Required columns: herd_no, agent_login_id
+Criteria:
+
+	•	mde_abbrev = 'RI' on vwbs_application_herd (Not Started / preprint only)
+	•	Herd is CISYF-eligible: NVL((SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) FROM dual), 'N') = 'Y'
+	•	At least one non-deleted land parcel exists (tdbs_application_land, apl_deleted_ind = 'N')
+	•	No payment processed (tdbs_payment_application, pap_payment_ind = 'Y' absent)
+	•	SUBSTR(app_herd_no, 1, 1) > 'A' to exclude TRN reference numbers
+	•	Agent login resolvable from BISS_INET via tdco_customer_asscs
+
+5. In Progress / Editable — Agent login + herd where application is initiated but not submitted
+Required columns: herd_no, agent_login_id
+Criteria:
+
+	•	mde_abbrev = 'D' (Draft) or mde_abbrev = 'DD' (Draft Dept) on vwbs_application_herd
+	•	Same land parcel and CISYF eligibility conditions as above
+	•	Agent login resolvable from BISS_INET
+
+6. Submitted — Agent login + herd where application has been successfully submitted
+Required columns: herd_no, agent_login_id
+Criteria:
+
+	•	mde_abbrev = 'I' (iNet Submitted) on vwbs_application_herd
+	•	CISYF scheme applied: same fn_GetSchemeApplied check
+	•	Agent login resolvable from BISS_INET
+
+Notes for the DB team:
+
+	•	All queries must be parameterised by app_year (current = 2026)
+	•	fn_GetSchemeApplied must be wrapped in a scalar subquery (SELECT ... FROM dual) to prevent ORA-06503 on certain aph_app_id values
+	•	Results must be randomisable (ORDER BY DBMS_RANDOM.VALUE) so different data is returned per execution
+	•	A ROWNUM <= N limit parameter is required so the framework can control pool size
+	•	Agent login resolution always queries BISS_INET — herd data always queries BISS_DATA
+
+Please provide the validated SQL for each of the 6 scenarios above. If any criteria need clarification or the table structure differs from what is described, let us know and we can share the existing working queries we have for reference.
+
+That should give him zero room to misunderstand. Want me to also attach the working SQL we already have for NR/CISYF (Q1 and the not-started query) as reference examples in the comment?
