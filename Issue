@@ -1,88 +1,42 @@
-# Upload dialog error — shown when non-PDF file is uploaded
-# DOM: mat-error inside app-nr-cisyf-supporting-doc-upload
-iNRCISYFUploadErrorNotPdf           = //app-nr-cisyf-supporting-doc-upload//mat-error[contains(normalize-space(),'File is not a PDF')]
-
-# Upload dialog error — upload failed message
-iNRCISYFUploadErrorFailed           = //app-nr-cisyf-supporting-doc-upload//mat-error[contains(normalize-space(),'Document upload failed')]
-
-# Close button inside upload dialog
-iNRCISYFUploadDialogCloseBtn        = //app-nr-cisyf-supporting-doc-upload//button[contains(@class,'clearBtn')]
-
-
-// ***************************************************************************************************************************************************************************************
-// Step          : the agent verifies the upload control only accepts PDF format
-// Description   : Uploads a non-PDF image file to the open upload dialog, then verifies:
-//                   1. "Document upload failed" error appears
-//                   2. "File is not a PDF" error appears
-//                 After verification clicks Close so the dialog is dismissed and the
-//                 same flow can be tested on other upload sections.
-//
-//                 DOM:
-//                   - File input: input#selectedPdfFile accept="application/pdf"
-//                   - Error 1:    mat-error "Document upload failed"
-//                   - Error 2:    mat-error "File is not a PDF"
-//                   - Close btn:  button.clearBtn inside app-nr-cisyf-supporting-doc-upload
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
-// ***************************************************************************************************************************************************************************************
-@Then("the agent verifies the upload control only accepts PDF format")
-public void theAgentVerifiesTheUploadControlOnlyAcceptsPDFFormat()
+case "CHROME":
 {
-    log.info("[STEP] Then the agent verifies the upload control only accepts PDF format");
+    ChromeOptions iOptions = new ChromeOptions();
+    iOptions.addArguments("--incognito");
+    iOptions.addArguments("--disable-application-cache");
+    iOptions.addArguments("--disable-cache");
+    iOptions.addArguments("--no-default-browser-check");
+    iOptions.addArguments("--no-first-run");
+    iOptions.addArguments("--start-maximized");
+    iOptions.addArguments("--disable-notifications");
+    iOptions.addArguments("--disable-infobars");
+    iOptions.addArguments("--disable-extensions");
 
-    // ── Verify accept attribute on file input ─────────────────────────────────────────
-    // DOM: input#selectedPdfFile accept="application/pdf"
-    WebElement iFileInput = getDriver().findElement(
-            By.xpath(ObjReader.getLocator("iNRCISYFFileUploadInput")));
-    String iAccept = iFileInput.getAttribute("accept");
-    Assertions.assertTrue(
-            iAccept != null && iAccept.toLowerCase().contains("pdf"),
-            "File input accept attribute should contain 'pdf'. Actual: " + iAccept);
-    log.info("[TC13] Accept attribute verified: " + iAccept);
+    // Fresh isolated Chrome profile per run
+    String iTempProfile = System.getProperty("java.io.tmpdir")
+            + "chrome_profile_" + System.currentTimeMillis();
+    iOptions.addArguments("--user-data-dir=" + iTempProfile);
 
-    // ── Upload a non-PDF image file to trigger the error ──────────────────────────────
-    // Image file path is fixed in test resources — used only for negative validation
-    String iImagePath = System.getProperty("user.dir")
-            + java.io.File.separator + "src"
-            + java.io.File.separator + "test"
-            + java.io.File.separator + "resources"
-            + java.io.File.separator + "Test_Data"
-            + java.io.File.separator + "image.png";
+    // ── Zoom locked at 67% ────────────────────────────────────────────────────────────
+    // Chrome uses log base 1.2 scale: log(0.67) / log(1.2) = -2.196545
+    // profile.default_zoom_level sets the global default.
+    // partition.per_host_zoom_levels forces it for the specific BISS domain,
+    // overriding any Chrome auto-zoom behaviour for that host.
+    java.util.Map<String, Object> iHostZoom = new java.util.HashMap<>();
+    iHostZoom.put("biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie", -2.196545);
 
-    iAction("UPLOADFILE", "XPATH",
-            ObjReader.getLocator("iNRCISYFFileUploadInput"), iImagePath);
+    java.util.Map<String, Object> iPrefs = new java.util.HashMap<>();
+    iPrefs.put("profile.default_content_settings.popups", 0);
+    iPrefs.put("profile.default_zoom_level", -2.196545);
+    iPrefs.put("partition.per_host_zoom_levels.x", iHostZoom);
+    iOptions.setExperimentalOption("prefs", iPrefs);
 
-    // ── Click Upload Document to trigger validation ───────────────────────────────────
-    iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
-    iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
-    iAction("CLICK",         "XPATH", ObjReader.getLocator("iNRCISYFUploadDocumentBtn"), null);
+    if (iHeadless)
+    {
+        iOptions.addArguments("--headless=new");
+        iOptions.addArguments("--window-size=1920,1080");
+    }
 
-    // ── Verify "Document upload failed" error is displayed ───────────────────────────
-    iAction("WAITVISIBLE", "XPATH",
-            ObjReader.getLocator("iNRCISYFUploadErrorFailed"), null);
-    iAction("VERIFYELEMENT", "XPATH",
-            ObjReader.getLocator("iNRCISYFUploadErrorFailed"), null);
-    log.info("[TC13] Error verified: Document upload failed");
-
-    // ── Verify "File is not a PDF" error is displayed ─────────────────────────────────
-    iAction("WAITVISIBLE", "XPATH",
-            ObjReader.getLocator("iNRCISYFUploadErrorNotPdf"), null);
-    iAction("VERIFYELEMENT", "XPATH",
-            ObjReader.getLocator("iNRCISYFUploadErrorNotPdf"), null);
-    log.info("[TC13] Error verified: File is not a PDF");
-
-    // ── Close the dialog so next upload section can be tested ─────────────────────────
-    iAction("WAITVISIBLE",   "XPATH",
-            ObjReader.getLocator("iNRCISYFUploadDialogCloseBtn"), null);
-    iAction("WAITCLICKABLE", "XPATH",
-            ObjReader.getLocator("iNRCISYFUploadDialogCloseBtn"), null);
-    iAction("CLICK",         "XPATH",
-            ObjReader.getLocator("iNRCISYFUploadDialogCloseBtn"), null);
-
-    // ── Wait for dialog to fully close ────────────────────────────────────────────────
-    iAction("WAITINVISIBLE", "XPATH",
-            ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
-
-    log.info("[TC13] Upload PDF validation complete — dialog closed.");
+    System.setProperty("webdriver.chrome.driver", "drivers/chromedriver.exe");
+    iDriver = new ChromeDriver(iOptions);
+    break;
 }
