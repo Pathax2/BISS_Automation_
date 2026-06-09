@@ -1,77 +1,238 @@
-Here’s a technical version you can paste as a Jira comment:
+# BISS Automation — Jenkins on OpenShift Setup Guide
 
-RE: Test Data Query Requirements — DB Utility Integration
+Complete step-by-step guide to go from zero to a running
+nightly pipeline on Red Hat OpenShift.
 
-Hi [Dev name],
+---
 
-As part of our automation framework migration, we have implemented a DBRouter component that executes parameterised SQL queries at runtime against BISS_DATA and BISS_INET. All test data is now resolved dynamically per execution — no static herd numbers or usernames exist anywhere in the test scripts.
+## Prerequisites
 
-To support this, we need the following queries validated and provided. Each query must return both a herd number (from BISS_DATA) and a corresponding agent login ID (from BISS_INET via tdco_customer_asscs / tdcr_user_info). The agent login is resolved separately using the herd number as the join key.
+Install these tools on your local machine:
 
-Transfers Module
+- `oc` CLI — OpenShift client
+  https://docs.openshift.com/container-platform/4.14/cli_reference/openshift_cli/getting-started-cli.html
 
-1. Agent — Herds with available entitlements (agent-managed)
-Required columns: herd_no, agent_login_id
-Criteria:
+- `docker` or `podman` — for building/testing the image locally
 
-	•	Herd has active entitlements (tdbs_entitlement or equivalent) for the current scheme year
-	•	Herd is associated with an active agent via tdco_customer_asscs (ca_cac_code = 194, SYSDATE BETWEEN ca_start_date AND ca_end_date)
-	•	Agent login resolvable from tdcr_user_info via uri_ccs_bus_id
-	•	Excludes herds with no land parcels and herds with payment already processed
+Verify:
+  oc version
+  docker --version
 
-2. Individual — Herds with available entitlements (individual login)
-Required columns: herd_no, individual_login_id
-Criteria:
+---
 
-	•	Same entitlement conditions as above
-	•	Login resolved via individual role (bcus_role_code = 115) not agent role
-	•	bcus_role_code = 100 for the herd, 115 for the login user
+## Step 1 — Log into OpenShift
 
-3. ETF (Entitlement Transfer Form) — Herds associated with an ETF with available entitlements
-Required columns: herd_no, agent_login_id, etf_reference (if applicable)
-Criteria:
+  oc login https://YOUR_OPENSHIFT_CLUSTER_URL \
+    --username=YOUR_USERNAME \
+    --password=YOUR_PASSWORD
 
-	•	Herd has an active or pending ETF record for the current scheme year
-	•	Entitlements available for transfer (not fully allocated)
-	•	Agent login resolvable as above
+If your cluster uses token-based auth:
+  oc login --token=YOUR_TOKEN --server=https://YOUR_CLUSTER_URL
 
-NR/CISYF Module
+---
 
-4. Not Started — Agent login + herd where application has not been initiated
-Required columns: herd_no, agent_login_id
-Criteria:
+## Step 2 — Create the OpenShift project
 
-	•	mde_abbrev = 'RI' on vwbs_application_herd (Not Started / preprint only)
-	•	Herd is CISYF-eligible: NVL((SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) FROM dual), 'N') = 'Y'
-	•	At least one non-deleted land parcel exists (tdbs_application_land, apl_deleted_ind = 'N')
-	•	No payment processed (tdbs_payment_application, pap_payment_ind = 'Y' absent)
-	•	SUBSTR(app_herd_no, 1, 1) > 'A' to exclude TRN reference numbers
-	•	Agent login resolvable from BISS_INET via tdco_customer_asscs
+  oc new-project biss-automation
 
-5. In Progress / Editable — Agent login + herd where application is initiated but not submitted
-Required columns: herd_no, agent_login_id
-Criteria:
+---
 
-	•	mde_abbrev = 'D' (Draft) or mde_abbrev = 'DD' (Draft Dept) on vwbs_application_herd
-	•	Same land parcel and CISYF eligibility conditions as above
-	•	Agent login resolvable from BISS_INET
+## Step 3 — Apply OpenShift resources
 
-6. Submitted — Agent login + herd where application has been successfully submitted
-Required columns: herd_no, agent_login_id
-Criteria:
+  oc apply -f openshift-jenkins.yaml    -n biss-automation
+  oc apply -f openshift-pipeline-sa.yaml -n biss-automation
 
-	•	mde_abbrev = 'I' (iNet Submitted) on vwbs_application_herd
-	•	CISYF scheme applied: same fn_GetSchemeApplied check
-	•	Agent login resolvable from BISS_INET
+Verify everything is running:
+  oc get pods -n biss-automation
+  oc get routes -n biss-automation
 
-Notes for the DB team:
+Get the Jenkins URL:
+  oc get route jenkins -n biss-automation -o jsonpath='{.spec.host}'
 
-	•	All queries must be parameterised by app_year (current = 2026)
-	•	fn_GetSchemeApplied must be wrapped in a scalar subquery (SELECT ... FROM dual) to prevent ORA-06503 on certain aph_app_id values
-	•	Results must be randomisable (ORDER BY DBMS_RANDOM.VALUE) so different data is returned per execution
-	•	A ROWNUM <= N limit parameter is required so the framework can control pool size
-	•	Agent login resolution always queries BISS_INET — herd data always queries BISS_DATA
+---
 
-Please provide the validated SQL for each of the 6 scenarios above. If any criteria need clarification or the table structure differs from what is described, let us know and we can share the existing working queries we have for reference.
+## Step 4 — Fill in DB credentials
 
-That should give him zero room to misunderstand. Want me to also attach the working SQL we already have for NR/CISYF (Q1 and the not-started query) as reference examples in the comment?
+BEFORE applying the secret, edit openshift-pipeline-sa.yaml
+and replace all REPLACE_WITH_* placeholders with real values.
+
+OR create the secret directly (safer — never in a file):
+
+  oc create secret generic biss-db-credentials \
+    --from-literal=db.url='jdbc:oracle:thin:@//your-host:1521/your-svc' \
+    --from-literal=db.username='BISS_DATA_USER' \
+    --from-literal=db.password='your_password' \
+    --from-literal=db.inet.url='jdbc:oracle:thin:@//your-host:1521/your-svc' \
+    --from-literal=db.inet.username='BISS_INET_USER' \
+    --from-literal=db.inet.password='your_password' \
+    -n biss-automation
+
+---
+
+## Step 5 — Add Jenkinsfile to your GitLab repo
+
+Copy Jenkinsfile to the root of your BISS_Automation repo:
+  cp Jenkinsfile /path/to/BISS_Automation/Jenkinsfile
+  cp Dockerfile  /path/to/BISS_Automation/Dockerfile
+
+Commit and push:
+  git add Jenkinsfile Dockerfile
+  git commit -m "Add Jenkins + Docker pipeline configuration"
+  git push origin main
+
+---
+
+## Step 6 — Configure Jenkins
+
+Open Jenkins in your browser (URL from Step 3).
+
+### Install required plugins
+
+Manage Jenkins → Plugins → Available → install:
+
+  - Kubernetes Plugin         (runs pipeline pods in OpenShift)
+  - Pipeline Plugin           (declarative Jenkinsfile support)
+  - GitLab Plugin             (GitLab integration + webhooks)
+  - Git Plugin                (checkout from GitLab)
+  - JUnit Plugin              (publishes test results)
+  - HTML Publisher Plugin     (publishes HTML report as artifact)
+  - Credentials Plugin        (manages secrets)
+  - Timestamper Plugin        (timestamps log lines)
+
+### Configure Kubernetes cloud
+
+Manage Jenkins → Clouds → New Cloud → Kubernetes
+
+  Kubernetes URL:     https://kubernetes.default.svc
+  Kubernetes Namespace: biss-automation
+  Jenkins URL:        http://jenkins.biss-automation.svc:80
+  Credentials:        (use the jenkins-sa service account token)
+
+Click "Test Connection" — should show "Connected to Kubernetes"
+
+---
+
+## Step 7 — Add Jenkins Credentials
+
+Manage Jenkins → Credentials → System → Global → Add Credential
+
+Add the following (all as Secret Text unless noted):
+
+  ID                      Type                  Value
+  ─────────────────────────────────────────────────────────────
+  gitlab-credentials      Username+Password     GitLab user + access token
+  biss-db-url             Secret Text           BISS_DATA JDBC URL
+  biss-db-username        Secret Text           BISS_DATA username
+  biss-db-password        Secret Text           BISS_DATA password
+  biss-db-inet-url        Secret Text           BISS_INET JDBC URL
+  biss-db-inet-username   Secret Text           BISS_INET username
+  biss-db-inet-password   Secret Text           BISS_INET password
+  biss-email-password     Secret Text           Email SMTP password
+
+---
+
+## Step 8 — Create the Pipeline Job
+
+New Item → Pipeline → name it "BISS-Automation-Regression"
+
+Pipeline section:
+  Definition:         Pipeline script from SCM
+  SCM:                Git
+  Repository URL:     https://rhosgitlab1.agriculture.gov.ie/automation/biss-automation.git
+  Credentials:        gitlab-credentials
+  Branch:             main
+  Script Path:        Jenkinsfile
+
+Save.
+
+---
+
+## Step 9 — Build the runner image (first time only)
+
+The Jenkinsfile "Build Runner Image" stage calls oc start-build.
+For the very first run, trigger this manually:
+
+  oc start-build biss-automation \
+    --from-dir=/path/to/BISS_Automation \
+    --follow \
+    -n biss-automation
+
+Watch it build:
+  oc logs -f bc/biss-automation -n biss-automation
+
+Once complete:
+  oc get imagestream biss-automation -n biss-automation
+
+---
+
+## Step 10 — Run the pipeline
+
+In Jenkins, open "BISS-Automation-Regression" → Build with Parameters:
+
+  ENVIRONMENT  : staging
+  TAG_FILTER   : @regression
+  HERD_YEAR    : 2026
+  HERD_LIMIT   : 25
+  SEND_EMAIL   : true (or false for first test run)
+
+Click Build.
+
+Watch the console output — you should see all 6 stages execute.
+
+---
+
+## Nightly Schedule
+
+The pipeline is pre-configured to run at 22:00 Mon–Fri automatically
+(defined in the Jenkinsfile triggers block):
+
+  triggers { cron('H 22 * * 1-5') }
+
+No additional configuration needed — it activates once the job is saved.
+To change the schedule, edit the cron expression in Jenkinsfile.
+
+---
+
+## Reports Location
+
+After each run, reports are available in Jenkins:
+
+  Build → Test Results          (JUnit XML — pass/fail per TC)
+  Build → Artifacts → html/     (HTML management dashboard)
+  Build → Artifacts → docs/     (Word execution reports)
+  Build → Artifacts → logs/     (Execution and failure logs)
+
+---
+
+## Troubleshooting
+
+Pod won't start:
+  oc describe pod <pod-name> -n biss-automation
+  oc logs <pod-name> -c biss-runner -n biss-automation
+
+Chrome crashes inside container:
+  Ensure --headless=true and --no-sandbox are set in ChromeOptions.
+  The Dockerfile sets DBUS_SESSION_BUS_ADDRESS and DISPLAY env vars
+  which suppress common container Chrome warnings.
+
+DB connection refused:
+  Verify VPN is active if Oracle DB is on the internal network.
+  Check db.properties was written correctly:
+    oc exec <pod> -- cat src/test/resources/db.properties
+
+Maven cache missing:
+  Check the PVC is bound:
+    oc get pvc biss-maven-cache-pvc -n biss-automation
+  If Pending, your cluster may need a StorageClass defined.
+  Set storageClassName in openshift-jenkins.yaml.
+
+GitLab clone fails:
+  Verify gitlab-credentials are correct.
+  If internal GitLab uses a self-signed cert:
+    Add git -c http.sslVerify=false to the checkout step, OR
+    Trust the cert in the container image.
+
+---
+
+Author  : Aniket Pathare | aniket.pathare@government.ie
+Created : 09-06-2026
