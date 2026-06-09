@@ -1,238 +1,156 @@
-# BISS Automation — Jenkins on OpenShift Setup Guide
-
-Complete step-by-step guide to go from zero to a running
-nightly pipeline on Red Hat OpenShift.
-
----
-
-## Prerequisites
-
-Install these tools on your local machine:
-
-- `oc` CLI — OpenShift client
-  https://docs.openshift.com/container-platform/4.14/cli_reference/openshift_cli/getting-started-cli.html
-
-- `docker` or `podman` — for building/testing the image locally
-
-Verify:
-  oc version
-  docker --version
-
----
-
-## Step 1 — Log into OpenShift
-
-  oc login https://YOUR_OPENSHIFT_CLUSTER_URL \
-    --username=YOUR_USERNAME \
-    --password=YOUR_PASSWORD
-
-If your cluster uses token-based auth:
-  oc login --token=YOUR_TOKEN --server=https://YOUR_CLUSTER_URL
-
----
-
-## Step 2 — Create the OpenShift project
-
-  oc new-project biss-automation
-
----
-
-## Step 3 — Apply OpenShift resources
-
-  oc apply -f openshift-jenkins.yaml    -n biss-automation
-  oc apply -f openshift-pipeline-sa.yaml -n biss-automation
-
-Verify everything is running:
-  oc get pods -n biss-automation
-  oc get routes -n biss-automation
-
-Get the Jenkins URL:
-  oc get route jenkins -n biss-automation -o jsonpath='{.spec.host}'
-
----
-
-## Step 4 — Fill in DB credentials
-
-BEFORE applying the secret, edit openshift-pipeline-sa.yaml
-and replace all REPLACE_WITH_* placeholders with real values.
-
-OR create the secret directly (safer — never in a file):
-
-  oc create secret generic biss-db-credentials \
-    --from-literal=db.url='jdbc:oracle:thin:@//your-host:1521/your-svc' \
-    --from-literal=db.username='BISS_DATA_USER' \
-    --from-literal=db.password='your_password' \
-    --from-literal=db.inet.url='jdbc:oracle:thin:@//your-host:1521/your-svc' \
-    --from-literal=db.inet.username='BISS_INET_USER' \
-    --from-literal=db.inet.password='your_password' \
-    -n biss-automation
-
----
-
-## Step 5 — Add Jenkinsfile to your GitLab repo
-
-Copy Jenkinsfile to the root of your BISS_Automation repo:
-  cp Jenkinsfile /path/to/BISS_Automation/Jenkinsfile
-  cp Dockerfile  /path/to/BISS_Automation/Dockerfile
-
-Commit and push:
-  git add Jenkinsfile Dockerfile
-  git commit -m "Add Jenkins + Docker pipeline configuration"
-  git push origin main
-
----
-
-## Step 6 — Configure Jenkins
-
-Open Jenkins in your browser (URL from Step 3).
-
-### Install required plugins
-
-Manage Jenkins → Plugins → Available → install:
-
-  - Kubernetes Plugin         (runs pipeline pods in OpenShift)
-  - Pipeline Plugin           (declarative Jenkinsfile support)
-  - GitLab Plugin             (GitLab integration + webhooks)
-  - Git Plugin                (checkout from GitLab)
-  - JUnit Plugin              (publishes test results)
-  - HTML Publisher Plugin     (publishes HTML report as artifact)
-  - Credentials Plugin        (manages secrets)
-  - Timestamper Plugin        (timestamps log lines)
-
-### Configure Kubernetes cloud
-
-Manage Jenkins → Clouds → New Cloud → Kubernetes
-
-  Kubernetes URL:     https://kubernetes.default.svc
-  Kubernetes Namespace: biss-automation
-  Jenkins URL:        http://jenkins.biss-automation.svc:80
-  Credentials:        (use the jenkins-sa service account token)
-
-Click "Test Connection" — should show "Connected to Kubernetes"
-
----
-
-## Step 7 — Add Jenkins Credentials
-
-Manage Jenkins → Credentials → System → Global → Add Credential
-
-Add the following (all as Secret Text unless noted):
-
-  ID                      Type                  Value
-  ─────────────────────────────────────────────────────────────
-  gitlab-credentials      Username+Password     GitLab user + access token
-  biss-db-url             Secret Text           BISS_DATA JDBC URL
-  biss-db-username        Secret Text           BISS_DATA username
-  biss-db-password        Secret Text           BISS_DATA password
-  biss-db-inet-url        Secret Text           BISS_INET JDBC URL
-  biss-db-inet-username   Secret Text           BISS_INET username
-  biss-db-inet-password   Secret Text           BISS_INET password
-  biss-email-password     Secret Text           Email SMTP password
-
----
-
-## Step 8 — Create the Pipeline Job
-
-New Item → Pipeline → name it "BISS-Automation-Regression"
-
-Pipeline section:
-  Definition:         Pipeline script from SCM
-  SCM:                Git
-  Repository URL:     https://rhosgitlab1.agriculture.gov.ie/automation/biss-automation.git
-  Credentials:        gitlab-credentials
-  Branch:             main
-  Script Path:        Jenkinsfile
-
-Save.
-
----
-
-## Step 9 — Build the runner image (first time only)
-
-The Jenkinsfile "Build Runner Image" stage calls oc start-build.
-For the very first run, trigger this manually:
-
-  oc start-build biss-automation \
-    --from-dir=/path/to/BISS_Automation \
-    --follow \
-    -n biss-automation
-
-Watch it build:
-  oc logs -f bc/biss-automation -n biss-automation
-
-Once complete:
-  oc get imagestream biss-automation -n biss-automation
-
----
-
-## Step 10 — Run the pipeline
-
-In Jenkins, open "BISS-Automation-Regression" → Build with Parameters:
-
-  ENVIRONMENT  : staging
-  TAG_FILTER   : @regression
-  HERD_YEAR    : 2026
-  HERD_LIMIT   : 25
-  SEND_EMAIL   : true (or false for first test run)
-
-Click Build.
-
-Watch the console output — you should see all 6 stages execute.
-
----
-
-## Nightly Schedule
-
-The pipeline is pre-configured to run at 22:00 Mon–Fri automatically
-(defined in the Jenkinsfile triggers block):
-
-  triggers { cron('H 22 * * 1-5') }
-
-No additional configuration needed — it activates once the job is saved.
-To change the schedule, edit the cron expression in Jenkinsfile.
-
----
-
-## Reports Location
-
-After each run, reports are available in Jenkins:
-
-  Build → Test Results          (JUnit XML — pass/fail per TC)
-  Build → Artifacts → html/     (HTML management dashboard)
-  Build → Artifacts → docs/     (Word execution reports)
-  Build → Artifacts → logs/     (Execution and failure logs)
-
----
-
-## Troubleshooting
-
-Pod won't start:
-  oc describe pod <pod-name> -n biss-automation
-  oc logs <pod-name> -c biss-runner -n biss-automation
-
-Chrome crashes inside container:
-  Ensure --headless=true and --no-sandbox are set in ChromeOptions.
-  The Dockerfile sets DBUS_SESSION_BUS_ADDRESS and DISPLAY env vars
-  which suppress common container Chrome warnings.
-
-DB connection refused:
-  Verify VPN is active if Oracle DB is on the internal network.
-  Check db.properties was written correctly:
-    oc exec <pod> -- cat src/test/resources/db.properties
-
-Maven cache missing:
-  Check the PVC is bound:
-    oc get pvc biss-maven-cache-pvc -n biss-automation
-  If Pending, your cluster may need a StorageClass defined.
-  Set storageClassName in openshift-jenkins.yaml.
-
-GitLab clone fails:
-  Verify gitlab-credentials are correct.
-  If internal GitLab uses a self-signed cert:
-    Add git -c http.sslVerify=false to the checkout step, OR
-    Trust the cert in the container image.
-
----
-
-Author  : Aniket Pathare | aniket.pathare@government.ie
-Created : 09-06-2026
+    // ===================================================================================================================================
+    //  SECTION 14 : POST-SUBMISSION VERIFICATION
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent views the submitted NRCISYF application
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent views the submitted NRCISYF application")
+    public void theAgentViewsTheSubmittedNRCISYFApplication()
+    {
+        log.info("[STEP] And the agent views the submitted NRCISYF application");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewApplicationBtn"), null);
+    }
+
+
+    // ===================================================================================================================================
+    //  SECTION 2 : CATEGORY DIALOG — OPEN / CLOSE / INFO ICONS
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent opens the NRCISYF Apply or Edit dialog
+    // Description   : Clicks Apply/Edit button. If herd is submitted, runs 95-attempt self-healing
+    //                 recovery: re-query DB → INET validate → update Hooks → logout → login →
+    //                 navigate → search → open landing page → retry.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent opens the NRCISYF Apply or Edit dialog")
+    public void theAgentOpensTheNRCISYFApplyOrEditDialog()
+    {
+        log.info("[STEP] When the agent opens the NRCISYF Apply or Edit dialog");
+
+        final int    MAX_RETRIES      = 95;
+        final String YEAR             = System.getProperty("herd.year", "2026").trim();
+        final String APPLY_EDIT_XPATH = ObjReader.getLocator("iNRCISYFApplyEditBtn");
+        final String VIEW_APP_XPATH   = ObjReader.getLocator("iNRCISYFViewApplicationBtn");
+        final String NRCISYF_TAB      = "NR/CISYF";
+        final String RESULT_ROW_XPATH = ObjReader.getLocator("iNRCISYFViewLink");
+
+        for (int iAttempt = 1; iAttempt <= MAX_RETRIES; iAttempt++)
+        {
+            log.info("[TC13-APPLY] Attempt " + iAttempt + "/" + MAX_RETRIES + " | herd=" + Hooks.RUNTIME_HERD);
+
+            boolean iApplyEditPresent = isVisible(By.xpath(APPLY_EDIT_XPATH), 3);
+
+            if (iApplyEditPresent)
+            {
+                String iBtnText = getDriver().findElement(By.xpath(APPLY_EDIT_XPATH)).findElement(By.xpath(".//span")).getText().trim();
+                log.info("[TC13-APPLY] Button '" + iBtnText + "' found on attempt " + iAttempt);
+
+                iAction("WAITCLICKABLE", "XPATH", APPLY_EDIT_XPATH, null);
+                iAction("CLICK",         "XPATH", APPLY_EDIT_XPATH, null);
+                iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
+                log.info("[TC13-APPLY] Category dialog opened.");
+                return;
+            }
+
+            boolean iViewAppPresent = isVisible(By.xpath(VIEW_APP_XPATH), 2);
+            log.warning("[TC13-APPLY] Attempt " + iAttempt + " | herd=" + Hooks.RUNTIME_HERD + (iViewAppPresent ? " — herd is Submitted ('View Application'). Recovering..." : " — neither Apply nor Edit nor View Application found. Recovering..."));
+
+            int iLimit = 50 + (iAttempt * 25);
+            database.DBRouter.runDB("DATA", "List of individual herds with CISYF scheme", YEAR, String.valueOf(iLimit));
+            List<java.util.Map<String, Object>> iDbRows = database.DBRouter.getRows();
+
+            if (iDbRows == null || iDbRows.isEmpty())
+            {
+                log.warning("[TC13-APPLY] BISS_DATA returned 0 rows at limit=" + iLimit + " — cannot recover on attempt " + iAttempt);
+                continue;
+            }
+
+            List<String> iCandidates = new java.util.ArrayList<>();
+            for (java.util.Map<String, Object> iRow : iDbRows)
+            {
+                String iH = java.util.Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
+                if (!iH.isEmpty()) iCandidates.add(iH);
+            }
+            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
+
+            String iNextHerd     = null;
+            String iNextUsername = null;
+
+            for (String iCandidate : iCandidates)
+            {
+                if (Hooks.BLACKLISTED_HERDS.contains(iCandidate))
+                {
+                    log.warning("[TC13-APPLY] " + iCandidate + " is blacklisted — skipping.");
+                    continue;
+                }
+
+                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
+                String iUser = database.DBRouter.getValue("USERNAME");
+
+                if (iUser == null || iUser.isBlank())
+                {
+                    log.warning("[TC13-APPLY] No INET agent for " + iCandidate + " — skipping.");
+                    continue;
+                }
+                iUser = iUser.trim();
+
+                if (Hooks.EXPIRED_AGENTS.contains(iUser))
+                {
+                    log.warning("[TC13-APPLY] Agent " + iUser + " is EXPIRED for herd=" + iCandidate + " — skipping.");
+                    continue;
+                }
+
+                iNextHerd     = iCandidate;
+                iNextUsername = iUser;
+                log.info("[TC13-APPLY] Valid candidate: herd=" + iNextHerd + " | agent=" + iNextUsername);
+                break;
+            }
+
+            if (iNextHerd == null)
+            {
+                log.warning("[TC13-APPLY] All candidates exhausted at attempt " + iAttempt + " — retrying with larger limit next round.");
+                continue;
+            }
+
+            Hooks.RUNTIME_HERD     = iNextHerd;
+            Hooks.RUNTIME_USERNAME = iNextUsername;
+            Hooks.CISYF_HERD       = iNextHerd;
+            Hooks.CISYF_USERNAME   = iNextUsername;
+            log.info("[TC13-APPLY] Hooks updated: herd=" + iNextHerd + " | agent=" + iNextUsername);
+
+            performLogout();
+            performLogin(iNextUsername);
+
+            if (Hooks.EXPIRED_AGENTS.contains(iNextUsername))
+            {
+                log.warning("[TC13-APPLY] Agent " + iNextUsername + " expired during login — retrying with next candidate.");
+                continue;
+            }
+
+            iAction("CLICK",         "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+            iAction("CLICK",         "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+            log.info("[TC13-APPLY] Re-logged in and navigated to NR/CISYF tab.");
+
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), "");
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), iNextHerd);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iNRCISYFSearchBtn"), null);
+
+            if (!isVisible(By.xpath(RESULT_ROW_XPATH), 5))
+            {
+                log.warning("[TC13-APPLY] New herd " + iNextHerd + " returned no rows after search — retrying.");
+                continue;
+            }
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
+            log.info("[TC13-APPLY] Opened landing page for herd: " + iNextHerd);
+        }
+
+        throw new RuntimeException(
+                "[TC13-APPLY] Could not find Apply or Edit button after " + MAX_RETRIES + " attempts. Last herd: " + Hooks.RUNTIME_HERD + ". All candidates were submitted or exhausted.");
+    }
