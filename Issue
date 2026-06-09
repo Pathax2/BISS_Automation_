@@ -1,156 +1,208 @@
-    // ===================================================================================================================================
-    //  SECTION 14 : POST-SUBMISSION VERIFICATION
-    // ===================================================================================================================================
+// ----------------------------------------------------------------
+// DATA DB: Submitted individual herds with CISYF scheme (TC_13 post-submission)
+//
+// Returns herds where application is fully submitted (mde_abbrev = 'I')
+// and CISYF scheme was applied. Used for post-submission verification
+// flow — viewing, correspondence, document download.
+//
+// params[0] = year  (required)
+// params[1] = limit (optional — defaults to 100)
+// ----------------------------------------------------------------
+case "LIST OF SUBMITTED INDIVIDUAL HERDS WITH CISYF SCHEME":
+{
+    requireParamCountBetween(key, params, 1, 2);
+    int year    = parseInt(params[0], "year");
+    int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+    sql =
+            "SELECT app_herd_no, app_year " +
+            "FROM vwbs_application_herd " +
+            "WHERE mde_abbrev     = 'I' " +
+            "AND   applicant_type = 'I' " +
+            "AND   app_year       = ? " +
+            "AND   NVL(( " +
+            "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
+            "    FROM dual " +
+            "), 'N') = 'Y' " +
+            "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
+            "AND ROWNUM <= ? " +
+            "ORDER BY DBMS_RANDOM.VALUE";
+    jdbcParams = new Object[]{ year, maxRows };
+    break;
+}
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent views the submitted NRCISYF application
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent views the submitted NRCISYF application")
-    public void theAgentViewsTheSubmittedNRCISYFApplication()
+
+# Submitted status indicator on the NRCISYF landing page
+# Present only when the application has been submitted — "View Application" button visible
+iNRCISYFSubmittedIndicator          = //button[.//span[normalize-space()='View Application']]
+
+
+// ***************************************************************************************************************************************************************************************
+// Step          : the agent views the submitted NRCISYF application
+// Description   : Verifies the current herd is in submitted state (View Application button present).
+//                 If the herd is NOT submitted, performs self-healing recovery:
+//                   1. Re-query BISS_DATA for a submitted CISYF herd (shuffled pool)
+//                   2. INET-validate — skip BLACKLISTED + EXPIRED_AGENTS
+//                   3. Update Hooks.RUNTIME_HERD + CISYF fields
+//                   4. Logout + Login as new agent
+//                   5. Navigate: My Clients → NR/CISYF tab → search → open landing page
+//                   6. Verify submitted state again — click View Application
+//                 Up to MAX_RETRIES attempts before failing with clear message.
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 09-06-2026
+// ***************************************************************************************************************************************************************************************
+@And("the agent views the submitted NRCISYF application")
+public void theAgentViewsTheSubmittedNRCISYFApplication()
+{
+    log.info("[STEP] And the agent views the submitted NRCISYF application");
+
+    final int    MAX_RETRIES      = 10;
+    final String YEAR             = System.getProperty("herd.year", "2026").trim();
+    final String VIEW_APP_XPATH   = ObjReader.getLocator("iNRCISYFViewApplicationBtn");
+    final String NRCISYF_TAB      = "NR/CISYF";
+    final String RESULT_ROW_XPATH = ObjReader.getLocator("iNRCISYFViewLink");
+
+    for (int iAttempt = 1; iAttempt <= MAX_RETRIES; iAttempt++)
     {
-        log.info("[STEP] And the agent views the submitted NRCISYF application");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewApplicationBtn"), null);
-    }
+        log.info("[TC13-POST] Attempt " + iAttempt + "/" + MAX_RETRIES
+                + " | herd=" + Hooks.CISYF_HERD);
 
-
-    // ===================================================================================================================================
-    //  SECTION 2 : CATEGORY DIALOG — OPEN / CLOSE / INFO ICONS
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent opens the NRCISYF Apply or Edit dialog
-    // Description   : Clicks Apply/Edit button. If herd is submitted, runs 95-attempt self-healing
-    //                 recovery: re-query DB → INET validate → update Hooks → logout → login →
-    //                 navigate → search → open landing page → retry.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent opens the NRCISYF Apply or Edit dialog")
-    public void theAgentOpensTheNRCISYFApplyOrEditDialog()
-    {
-        log.info("[STEP] When the agent opens the NRCISYF Apply or Edit dialog");
-
-        final int    MAX_RETRIES      = 95;
-        final String YEAR             = System.getProperty("herd.year", "2026").trim();
-        final String APPLY_EDIT_XPATH = ObjReader.getLocator("iNRCISYFApplyEditBtn");
-        final String VIEW_APP_XPATH   = ObjReader.getLocator("iNRCISYFViewApplicationBtn");
-        final String NRCISYF_TAB      = "NR/CISYF";
-        final String RESULT_ROW_XPATH = ObjReader.getLocator("iNRCISYFViewLink");
-
-        for (int iAttempt = 1; iAttempt <= MAX_RETRIES; iAttempt++)
+        // ── Check if View Application button is present ───────────────────────────────
+        // "View Application" is only visible when the herd is fully submitted.
+        // If absent, the herd is still in draft/not-started state — recover.
+        if (isVisible(By.xpath(VIEW_APP_XPATH), 5))
         {
-            log.info("[TC13-APPLY] Attempt " + iAttempt + "/" + MAX_RETRIES + " | herd=" + Hooks.RUNTIME_HERD);
-
-            boolean iApplyEditPresent = isVisible(By.xpath(APPLY_EDIT_XPATH), 3);
-
-            if (iApplyEditPresent)
-            {
-                String iBtnText = getDriver().findElement(By.xpath(APPLY_EDIT_XPATH)).findElement(By.xpath(".//span")).getText().trim();
-                log.info("[TC13-APPLY] Button '" + iBtnText + "' found on attempt " + iAttempt);
-
-                iAction("WAITCLICKABLE", "XPATH", APPLY_EDIT_XPATH, null);
-                iAction("CLICK",         "XPATH", APPLY_EDIT_XPATH, null);
-                iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iNRCISYFDialogOverlay"), null);
-                log.info("[TC13-APPLY] Category dialog opened.");
-                return;
-            }
-
-            boolean iViewAppPresent = isVisible(By.xpath(VIEW_APP_XPATH), 2);
-            log.warning("[TC13-APPLY] Attempt " + iAttempt + " | herd=" + Hooks.RUNTIME_HERD + (iViewAppPresent ? " — herd is Submitted ('View Application'). Recovering..." : " — neither Apply nor Edit nor View Application found. Recovering..."));
-
-            int iLimit = 50 + (iAttempt * 25);
-            database.DBRouter.runDB("DATA", "List of individual herds with CISYF scheme", YEAR, String.valueOf(iLimit));
-            List<java.util.Map<String, Object>> iDbRows = database.DBRouter.getRows();
-
-            if (iDbRows == null || iDbRows.isEmpty())
-            {
-                log.warning("[TC13-APPLY] BISS_DATA returned 0 rows at limit=" + iLimit + " — cannot recover on attempt " + iAttempt);
-                continue;
-            }
-
-            List<String> iCandidates = new java.util.ArrayList<>();
-            for (java.util.Map<String, Object> iRow : iDbRows)
-            {
-                String iH = java.util.Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
-                if (!iH.isEmpty()) iCandidates.add(iH);
-            }
-            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
-
-            String iNextHerd     = null;
-            String iNextUsername = null;
-
-            for (String iCandidate : iCandidates)
-            {
-                if (Hooks.BLACKLISTED_HERDS.contains(iCandidate))
-                {
-                    log.warning("[TC13-APPLY] " + iCandidate + " is blacklisted — skipping.");
-                    continue;
-                }
-
-                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
-                String iUser = database.DBRouter.getValue("USERNAME");
-
-                if (iUser == null || iUser.isBlank())
-                {
-                    log.warning("[TC13-APPLY] No INET agent for " + iCandidate + " — skipping.");
-                    continue;
-                }
-                iUser = iUser.trim();
-
-                if (Hooks.EXPIRED_AGENTS.contains(iUser))
-                {
-                    log.warning("[TC13-APPLY] Agent " + iUser + " is EXPIRED for herd=" + iCandidate + " — skipping.");
-                    continue;
-                }
-
-                iNextHerd     = iCandidate;
-                iNextUsername = iUser;
-                log.info("[TC13-APPLY] Valid candidate: herd=" + iNextHerd + " | agent=" + iNextUsername);
-                break;
-            }
-
-            if (iNextHerd == null)
-            {
-                log.warning("[TC13-APPLY] All candidates exhausted at attempt " + iAttempt + " — retrying with larger limit next round.");
-                continue;
-            }
-
-            Hooks.RUNTIME_HERD     = iNextHerd;
-            Hooks.RUNTIME_USERNAME = iNextUsername;
-            Hooks.CISYF_HERD       = iNextHerd;
-            Hooks.CISYF_USERNAME   = iNextUsername;
-            log.info("[TC13-APPLY] Hooks updated: herd=" + iNextHerd + " | agent=" + iNextUsername);
-
-            performLogout();
-            performLogin(iNextUsername);
-
-            if (Hooks.EXPIRED_AGENTS.contains(iNextUsername))
-            {
-                log.warning("[TC13-APPLY] Agent " + iNextUsername + " expired during login — retrying with next candidate.");
-                continue;
-            }
-
-            iAction("CLICK",         "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
-            iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
-            iAction("CLICK",         "XPATH", ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
-            log.info("[TC13-APPLY] Re-logged in and navigated to NR/CISYF tab.");
-
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), "");
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iNRCISYFHerdSearchField"), iNextHerd);
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iNRCISYFSearchBtn"), null);
-
-            if (!isVisible(By.xpath(RESULT_ROW_XPATH), 5))
-            {
-                log.warning("[TC13-APPLY] New herd " + iNextHerd + " returned no rows after search — retrying.");
-                continue;
-            }
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
-            log.info("[TC13-APPLY] Opened landing page for herd: " + iNextHerd);
+            iAction("CLICK", "XPATH", VIEW_APP_XPATH, null);
+            log.info("[TC13-POST] Submitted herd confirmed — View Application clicked: "
+                    + Hooks.CISYF_HERD);
+            return;
         }
 
-        throw new RuntimeException(
-                "[TC13-APPLY] Could not find Apply or Edit button after " + MAX_RETRIES + " attempts. Last herd: " + Hooks.RUNTIME_HERD + ". All candidates were submitted or exhausted.");
+        // ── Not submitted — recover with a fresh submitted herd ───────────────────────
+        log.warning("[TC13-POST] Attempt " + iAttempt
+                + " | herd=" + Hooks.CISYF_HERD
+                + " — View Application not present (herd not submitted). Recovering...");
+
+        if (iAttempt == MAX_RETRIES)
+        {
+            throw new RuntimeException(
+                    "[TC13-POST] Could not find a submitted CISYF herd after "
+                    + MAX_RETRIES + " attempts. Last herd: " + Hooks.CISYF_HERD);
+        }
+
+        // ── Step 1: Re-query BISS_DATA for submitted CISYF herds ─────────────────────
+        int iLimit = 50 + (iAttempt * 25);
+        database.DBRouter.runDB("DATA",
+                "List of submitted individual herds with CISYF scheme",
+                YEAR, String.valueOf(iLimit));
+        List<java.util.Map<String, Object>> iDbRows = database.DBRouter.getRows();
+
+        if (iDbRows == null || iDbRows.isEmpty())
+        {
+            log.warning("[TC13-POST] BISS_DATA returned 0 submitted rows at limit="
+                    + iLimit + " — retrying.");
+            continue;
+        }
+
+        // ── Step 2: Shuffle + INET-validate ──────────────────────────────────────────
+        List<String> iCandidates = new java.util.ArrayList<>();
+        for (java.util.Map<String, Object> iRow : iDbRows)
+        {
+            String iH = java.util.Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
+            if (!iH.isEmpty()) iCandidates.add(iH);
+        }
+        java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
+
+        String iNextHerd     = null;
+        String iNextUsername = null;
+
+        for (String iCandidate : iCandidates)
+        {
+            if (Hooks.BLACKLISTED_HERDS.contains(iCandidate))
+            {
+                log.warning("[TC13-POST] " + iCandidate + " is blacklisted — skipping.");
+                continue;
+            }
+
+            database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
+            String iUser = database.DBRouter.getValue("USERNAME");
+
+            if (iUser == null || iUser.isBlank())
+            {
+                log.warning("[TC13-POST] No INET agent for " + iCandidate + " — skipping.");
+                continue;
+            }
+            iUser = iUser.trim();
+
+            if (Hooks.EXPIRED_AGENTS.contains(iUser))
+            {
+                log.warning("[TC13-POST] Agent " + iUser
+                        + " expired for herd=" + iCandidate + " — skipping.");
+                continue;
+            }
+
+            iNextHerd     = iCandidate;
+            iNextUsername = iUser;
+            log.info("[TC13-POST] Valid submitted candidate: herd=" + iNextHerd
+                    + " | agent=" + iNextUsername);
+            break;
+        }
+
+        if (iNextHerd == null)
+        {
+            log.warning("[TC13-POST] All candidates exhausted at attempt "
+                    + iAttempt + " — retrying with larger limit.");
+            continue;
+        }
+
+        // ── Step 3: Update Hooks ──────────────────────────────────────────────────────
+        Hooks.RUNTIME_HERD     = iNextHerd;
+        Hooks.RUNTIME_USERNAME = iNextUsername;
+        Hooks.CISYF_HERD       = iNextHerd;
+        Hooks.CISYF_USERNAME   = iNextUsername;
+        log.info("[TC13-POST] Hooks updated: herd=" + iNextHerd
+                + " | agent=" + iNextUsername);
+
+        // ── Step 4: Logout + Login as new agent ───────────────────────────────────────
+        performLogout();
+        performLogin(iNextUsername);
+
+        if (Hooks.EXPIRED_AGENTS.contains(iNextUsername))
+        {
+            log.warning("[TC13-POST] Agent " + iNextUsername
+                    + " expired during login — retrying.");
+            continue;
+        }
+
+        // ── Step 5: Navigate to My Clients → NR/CISYF tab ────────────────────────────
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("WAITVISIBLE",   "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+        iAction("WAITCLICKABLE", "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+        iAction("CLICK",         "XPATH",
+                ObjReader.getLocator("iMyClientsTabByName").replace("%s", NRCISYF_TAB), null);
+
+        // ── Step 6: Search for submitted herd + open landing page ────────────────────
+        iAction("TEXTBOX", "XPATH",
+                ObjReader.getLocator("iNRCISYFHerdSearchField"), "");
+        iAction("TEXTBOX", "XPATH",
+                ObjReader.getLocator("iNRCISYFHerdSearchField"), iNextHerd);
+        iAction("CLICK",   "XPATH",
+                ObjReader.getLocator("iNRCISYFSearchBtn"), null);
+
+        if (!isVisible(By.xpath(RESULT_ROW_XPATH), 5))
+        {
+            log.warning("[TC13-POST] Herd " + iNextHerd
+                    + " returned no search rows — retrying.");
+            continue;
+        }
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNRCISYFViewLink"), null);
+        log.info("[TC13-POST] Opened landing page for submitted herd: " + iNextHerd);
+        // Loop back — check for View Application on this landing page
     }
+
+    throw new RuntimeException(
+            "[TC13-POST] Could not find a submitted CISYF herd after "
+            + MAX_RETRIES + " attempts. Last herd: " + Hooks.CISYF_HERD);
+}
