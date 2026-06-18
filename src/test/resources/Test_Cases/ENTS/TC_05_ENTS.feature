@@ -38,11 +38,11 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
 
   Background:
     Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
+    When the individual logs in as transferor "agr9197"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Clients page
+    And the agent switches to the "Transfers" tab on the My Client page
 
   @regression @transfers @agent-to-individual @e2e
   Scenario: AT-ENTS-TRANSFERS-E2E-05 - Agent completes all Agent-to-Individual transfer types
@@ -55,10 +55,10 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
 
     # --- Transferor (Agent) ---
     When the agent creates a transfer application with the following details
-      | transferorHerd | C1120016        |
+      | transferorHerd | Patricia McFarland        |
       | transfereeHerd | Y104069X        |
       | transfereeName | Daniel Mulvany  |
-      | transferType   | 205             |
+      | transferType   | Change of Registration Details|
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -67,6 +67,10 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
 
     # --- Transferee (Individual — different login flow) ---
     When the agent logs out and re-logs in as the individual transferee "PAUDYFROG"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y104069X      |
       | notes          | Approved Test |
@@ -79,12 +83,14 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "agr9197"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1120016        |
+      | transferorHerd | Patricia McFarland        |
       | transfereeHerd | Y104069X        |
       | transfereeName | Daniel Mulvany  |
-      | transferType   | 201             |
+      | transferType   | Inheritance of Entitlements|
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -93,6 +99,10 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
 
     # --- Transferee (Individual) ---
     When the agent logs out and re-logs in as the individual transferee "PAUDYFROG"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y104069X      |
       | notes          | Approved Test |
@@ -105,12 +115,14 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "agr9197"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1120016        |
+      | transferorHerd | Patricia McFarland        |
       | transfereeHerd | Y1041344        |
       | transfereeName | Felim Sullivan  |
-      | transferType   | 202             |
+      | transferType   | Gift of Entitlements|
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -119,6 +131,10 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
 
     # --- Transferee (Individual — TERENCE1) ---
     When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1041344      |
       | notes          | Approved Test |
@@ -132,12 +148,14 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "agr9197"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1120016        |
+      | transferorHerd | Patricia McFarland        |
       | transfereeHerd | Y1041344        |
       | transfereeName | Felim Sullivan  |
-      | transferType   | 211             |
+      | transferType   | Lease of Entitlements|
       | entitlements   | 0.01            |
       | leaseYear      | Yes             |
       | notes          | Test Notes      |
@@ -147,6 +165,10 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
 
     # --- Transferee (Individual — TERENCE1) ---
     When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1041344      |
       | notes          | Approved Test |
