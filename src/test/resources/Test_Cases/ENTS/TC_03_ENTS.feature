@@ -36,11 +36,11 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
 
   Background:
     Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
+    When the individual logs in as transferor "aga6509"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Clients page
+    And the agent switches to the "Transfers" tab on the My Client page
 
   @regression @transfers @cross-agent @e2e
   Scenario: AT-ENTS-TRANSFERS-E2E-03 - Agent completes all cross-agent transfer types
@@ -52,10 +52,10 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
 
     # --- Transferor (Agent 3) ---
     When the agent creates a transfer application with the following details
-      | transferorHerd | H1430795        |
-      | transfereeHerd | A1080981        |
-      | transfereeName | David Milligan  |
-      | transferType   | 203             |
+      | transferorHerd | A1071109        |
+      | transfereeHerd | F1382329        |
+      | transfereeName | Smith Services|
+      | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -63,9 +63,10 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     Then the transfer key should be captured
 
     # --- Transferee (different agent — requires logout + re-login) ---
-    When the agent logs out and re-logs in as the transferee agent
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the cross-agent transferee acceptance flow
-      | transfereeHerd | A1080981      |
+      | transfereeHerd | F1382329      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -75,12 +76,16 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     # ===========================================
 
     # --- Transferor (Agent 3 — re-login back) ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the individual logs in as transferor "aga6581"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | H1610394        |
-      | transfereeHerd | A1150106        |
-      | transfereeName | Geraldine Brady |
-      | transferType   | 204             |
+      | transferorHerd | D2241413        |
+      | transfereeHerd | I1090318        |
+      | transfereeName | Annette Mccarthy & Thomas Walker |
+      | transferType   | Division of Entitlements (Scission) |
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -88,9 +93,10 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent logs out and re-logs in as the transferee agent
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the cross-agent transferee acceptance flow
-      | transfereeHerd | A1150106      |
+      | transfereeHerd | I1090318      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -100,12 +106,16 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the individual logs in as transferor "agr25315"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | H1510438        |
-      | transfereeHerd | A1151617        |
-      | transfereeName | Joseph Grennan  |
-      | transferType   | 212             |
+      | transferorHerd | C1130011        |
+      | transfereeHerd | C1170706        |
+      | transfereeName | Gabriel Rooney  |
+      | transferType   |  Sale of Entitlements |
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -113,9 +123,10 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent logs out and re-logs in as the transferee agent
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the cross-agent transferee acceptance flow
-      | transfereeHerd | A1151617      |
+      | transfereeHerd | C1170706      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -125,12 +136,16 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the individual logs in as transferor "aga6555"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | H1510438     |
-      | transfereeHerd | A1172053     |
-      | transfereeName | Sean McGinty |
-      | transferType   | 212          |
+      | transferorHerd | G186077X     |
+      | transfereeHerd | L1112039     |
+      | transfereeName | Brian O'Donovan |
+      | transferType   |  Sale of Entitlements|
       | entitlements   | 0.01         |
       | notes          | Test Notes   |
     And the agent uploads the transferor signature document
@@ -138,9 +153,10 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent logs out and re-logs in as the transferee agent
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the cross-agent transferee acceptance flow
-      | transfereeHerd | A1172053      |
+      | transfereeHerd | L1112039      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -151,12 +167,16 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the individual logs in as transferor "aga6701"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | H1510438       |
-      | transfereeHerd | A1211539       |
-      | transfereeName | John Flahavan  |
-      | transferType   | 211            |
+      | transferorHerd | A1010304       |
+      | transfereeHerd | J1890273       |
+      | transfereeName | Samuel Mc Grath  |
+      | transferType   |  Lease of Entitlements|
       | entitlements   | 0.01           |
       | leaseYear      | Yes            |
       | notes          | Test Notes     |
@@ -165,9 +185,10 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent logs out and re-logs in as the transferee agent
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the cross-agent transferee acceptance flow
-      | transfereeHerd | A1211539      |
+      | transfereeHerd | J1890273      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -177,12 +198,16 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the individual logs in as transferor "aga6743"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | H1510438      |
-      | transfereeHerd | A1284021      |
-      | transfereeName | Dan Kelleher  |
-      | transferType   | 201           |
+      | transferorHerd | Q1840313      |
+      | transfereeHerd | XFP10109      |
+      | transfereeName | Barbara O'Donoghue & Donal Rowan  |
+      | transferType   | Inheritance of Entitlements|
       | entitlements   | 0.01          |
       | notes          | Test Notes    |
     And the agent uploads the transferor signature document
@@ -190,8 +215,9 @@ Feature: TC_03_ENTS - Transfer Application E2E Regression Pack (Different Agent 
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent logs out and re-logs in as the transferee agent
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the cross-agent transferee acceptance flow
-      | transfereeHerd | A1284021      |
+      | transfereeHerd | XFP10109      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
