@@ -379,7 +379,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
 
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 01/01/2026                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -424,7 +424,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
 
     When the agent completes the qualification details for each member
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 01/01/2026                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -470,7 +470,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
 
     When the agent completes the qualification details for each member
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 01/01/2026                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -516,7 +516,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
 
     When the agent completes the qualification details for each member
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 01/01/2026                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -596,7 +596,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                                                                |
-      | dateOfCompletion   | 01/01/2026                                                                  |
+      | dateOfCompletion   | 01/01/2026                                                         |
       | certificateAwarded | Yes                                                                |
       | college            | The educational institution I attended does not appear in this list |
       | customCollege      | Dublin Institute of Technology                                     |
@@ -620,10 +620,10 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification      | Yes                                                                       |
-      | dateOfCompletion      | 01/01/2026                                                                        |
+      | dateOfCompletion      | 01/01/2026                                                                |
       | certificateAwarded    | Yes                                                                       |
       | college               | Athlone Institute of Technology                                           |
-      | qualification         | The qualification I have achieved does not appear in this list             |
+      | qualification         | My qualification does not appear in this list                             |
       | customQualification   | Advanced Certificate in Sustainable Agriculture                           |
     And the agent proceeds to the summary step
     Then the qualification should display "Advanced Certificate in Sustainable Agriculture"
@@ -632,10 +632,35 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     # SECTION 21 : Invalid file format upload error
     # Covers: TC28
     # ===========================================
+    # --- Navigate back for the next flow ---
     When the agent navigates back to the NRCISYF client list
     And the agent switches to the "NR/CISYF" tab on the My Clients page
-    And the agent searches for the NRCISYF herd and opens the application
+
+    # ===========================================
+    # SECTION 8 : Individual Cat A only — full submit
+    # Covers: TC14
+    # ===========================================
+    When the agent searches for the NRCISYF herd and opens the application
+    And the agent opens the NRCISYF Apply or Edit dialog
+    And the agent resets all category selections
+    And the agent selects NRCISYF categories
+      | A. National Reserve (as Young Farmer) |
+    And the agent proceeds past the category selection
+    And the agent skips CISYF category if prompted
+
+    And the agent selects farming entity "Individual"
+    And the agent proceeds to the qualification step
+    When the agent completes the qualification details
+      | hasQualification   | Yes                             |
+      | dateOfCompletion   | 01/01/2026                      |
+      | certificateAwarded | Yes                             |
+      | college            | Athlone Institute of Technology |
+      | qualification      | FETAC Certificate in Farming    |
+    #And the agent saves and proceeds to the declaration step
+    And the agent proceeds to the summary step
     Then the agent verifies the upload control only accepts PDF format
+      | Qualifications certificate or Confirmation of Education Form |
+      | Personal and Sensitive Documentation                         |
 
     # ===========================================
     # SECTION 22 : Close upload popup mid-flow
