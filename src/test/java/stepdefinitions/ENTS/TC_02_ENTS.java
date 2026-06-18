@@ -135,14 +135,13 @@ public class TC_02_ENTS
         log.info("[STEP] Then the Add Entitlement button should not be present");
 
         // Use findElements to avoid NoSuchElementException — returns an empty list if absent
-        List<WebElement> iAddButtons = getDriver().findElements(
-                By.xpath(ObjReader.getLocator("iTransferAddEntitlementBtn")));
+        List<WebElement> iAddButtons = getDriver().findElements(By.xpath(ObjReader.getLocator("iTransferAddEntitlementBtn")));
 
         // Filter to only visible ones — the button might exist in DOM but be hidden
         long iVisibleCount = iAddButtons.stream().filter(WebElement::isDisplayed).count();
 
-        Assertions.assertEquals(0, iVisibleCount,
-                "Add Entitlement button should NOT be present for a herd without entitlements.");
+        Assertions.assertEquals(0, iVisibleCount, "Add Entitlement button should NOT be present for a herd without entitlements.");
+        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iTransferNoEntitlementLabel"), "");
 
         log.info("Negative validation passed — Add Entitlement button is absent as expected.");
     }
