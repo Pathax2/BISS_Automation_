@@ -303,10 +303,14 @@ public class CommonFunctions
                     // This is the robust approach — sets the actual Chrome zoom (same as
                     // Ctrl+- in browser) rather than CSS zoom which only affects body element.
                     // The value is a double: 0.8 = 80%, 0.9 = 90%, 1.0 = 100%
+                    java.util.Map<String, Object> iHostZoom = new java.util.HashMap<>();
+                    iHostZoom.put("biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie", -2.196545);
                     java.util.Map<String, Object> iPrefs = new java.util.HashMap<>();
                     iPrefs.put("profile.default_content_settings.popups", 0);
-                    iPrefs.put("profile.default_zoom_level", -0.5733f);
+                    iPrefs.put("profile.default_zoom_level", -2.196545);
+                    iPrefs.put("partition.per_host_zoom_levels.x", iHostZoom);
                     iOptions.setExperimentalOption("prefs", iPrefs);
+
 
                     if (iHeadless)
                     {
@@ -1503,7 +1507,8 @@ public class CommonFunctions
         {
             WebDriver     iDriver = iDriverHolder.get();
             WebDriverWait iWait   = iWaitHolder.get();
-
+            JavascriptExecutor js = (JavascriptExecutor) iDriver;
+            js.executeScript("document.body.style.zoom='84%'");
             if (iDriver == null || iWait == null)
             {
                 throw new RuntimeException("WebDriver or WebDriverWait is not initialised on this thread. Call launchBrowser() before iAction().");
@@ -2717,5 +2722,8 @@ public class CommonFunctions
         {
             return (s == null || s.length() <= max) ? s : s.substring(0, max) + "...";
         }
+
+
+
     }
 }
