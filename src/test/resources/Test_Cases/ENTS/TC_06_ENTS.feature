@@ -31,11 +31,11 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
 
   Background:
     Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
+    When the individual logs in as transferor "aga6504"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Clients page
+    And the agent switches to the "Transfers" tab on the My Client page
 
   @regression @transfers @agent-to-individual @e2e
   Scenario: AT-ENTS-TRANSFERS-E2E-06 - Agent 6 completes all Agent-to-Individual transfer types
@@ -51,7 +51,7 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
       | transferorHerd | A1090502        |
       | transfereeHerd | Y1310159        |
       | transfereeName | Seamus Carolan  |
-      | transferType   | 203             |
+      | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -60,6 +60,10 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
 
     # --- Transferee (Individual — DANIELPAUL) ---
     When the agent logs out and re-logs in as the individual transferee "DANIELPAUL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1310159      |
       | notes          | Approved Test |
@@ -72,12 +76,14 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-logs in as the transferee agent "aga6504"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | A1090588        |
       | transfereeHerd | Y1310159        |
       | transfereeName | Seamus Carolan  |
-      | transferType   | 204             |
+      | transferType   | Division of Entitlements (Scission) |
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -86,6 +92,10 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
 
     # --- Transferee (Individual — DANIELPAUL) ---
     When the agent logs out and re-logs in as the individual transferee "DANIELPAUL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1310159      |
       | notes          | Approved Test |
@@ -98,12 +108,14 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-logs in as the transferee agent "aga6504"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | A1100087        |
       | transfereeHerd | Y1041344        |
       | transfereeName | Felim Sullivan  |
-      | transferType   | 212             |
+      | transferType   | Sale of Entitlements |
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -112,6 +124,10 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
 
     # --- Transferee (Individual — TERENCE1) ---
     When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1041344      |
       | notes          | Approved Test |
@@ -124,12 +140,14 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-logs in as the transferee agent "aga6504"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | A1100478        |
       | transfereeHerd | Y104069X        |
       | transfereeName | Daniel Mulvany  |
-      | transferType   | 206             |
+      | transferType   | Change of Legal Entity |
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -138,6 +156,10 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
 
     # --- Transferee (Individual — PAUDYFROG) ---
     When the agent logs out and re-logs in as the individual transferee "PAUDYFROG"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y104069X      |
       | notes          | Approved Test |
