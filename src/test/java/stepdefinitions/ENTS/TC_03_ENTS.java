@@ -47,8 +47,10 @@ import io.cucumber.java.en.*;
 import org.junit.jupiter.api.Assertions;
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
+import stepdefinitions.Hooks;
 import utilities.ObjReader;
 
 import java.time.Duration;
@@ -57,6 +59,7 @@ import java.util.logging.Logger;
 
 import static commonFunctions.CommonFunctions.iAction;
 import static commonFunctions.CommonFunctions.getDriver;
+import static stepdefinitions.ENTS.TC_01_ENTS.iCapturedTransferKey;
 
 public class TC_03_ENTS
 {
@@ -96,59 +99,341 @@ public class TC_03_ENTS
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent logs out and re-logs in as the transferee agent")
-    public void theAgentLogsOutAndReLogsInAsTheTransfereeAgent()
+    @When("the agent logs out and re-logs in as the transferee agent {string}")
+    public void theAgentLogsOutAndReLogsInAsTheTransfereeAgent(String pUsername)
+    {
+        log.info("[STEP] When the agent logs out and re-logs in as the transferee agent");
+        performLogout();
+
+        {
+
+            log.info("[LOGIN] Classic login detected.");
+
+            // Hit the initial 'Log In' button on the BISS landing screen to get to the Keycloak form
+            //iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+            // Type the agent's username — pulled from Hooks.RUNTIME_USERNAME which is resolved
+            // at runtime from BISS_DATA + BISS_INET before any scenario executes.
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), pUsername);
+            // Move past the username screen to get to the password entry form
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+
+            // Type the password from the test data sheet (TD:Password column)
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
+
+            // Submit the password — this either takes us to the dashboard or triggers MFA
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+
+            // ── Account Expired detection (Option 4 fix — 05-05-2026) ────────────────────
+            // Keycloak shows "Account Expired" immediately after Login click when the agent's
+            // SSO account has expired. Detect it here before waiting for PIN/OTP screen.
+            // If found: mark agent expired → Hooks.markAgentExpired() re-resolves a fresh
+            // herd+agent pair → update RUNTIME_USERNAME → re-attempt login with new agent.
+            By iExpiredMsgBy = By.xpath("//*[contains(@class,'kc-feedback-text') " + "and contains(normalize-space(),'Account Expired')]");
+
+            if (isVisible(iExpiredMsgBy, 3))
+            {
+                String iExpiredAgent = Hooks.RUNTIME_USERNAME;
+                log.warning("[LOGIN] Account Expired detected for agent: " + iExpiredAgent + " — calling Hooks.markAgentExpired() to re-resolve.");
+
+                // Mark expired + re-resolve new herd+agent into Hooks.RUNTIME_HERD / RUNTIME_USERNAME
+                Hooks.markAgentExpired(iExpiredAgent);
+
+                // Cancel the current Keycloak session and restart login with new agent
+                iAction("CLICK", "XPATH", "//button[normalize-space()='Cancel'] | //a[normalize-space()='Cancel']", null);
+
+                // Navigate back to base URL for a clean login state
+                CommonFunctions.getDriver().navigate().to(Hooks.iUrl);
+                // iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+                // Re-attempt login with the newly resolved agent
+                // iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+                getDriver().navigate().to(Hooks.iUrl);
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),       "TD:Password");
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),             null);
+
+                log.info("[LOGIN] Re-attempting login with new agent: " + pUsername);
+            }
+            // ── End Account Expired detection ──────────────────────────────────────────────
+
+            log.info("[STEP] Detect login screen and auto-login using simple PIN loop...");
+
+            WebDriver driver = CommonFunctions.getDriver();
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+
+            By pinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+
+            // Check whether the PIN login screen has appeared (give it 3 seconds — no need to wait longer)
+            if (isVisible(pinFormBy, 3)) {
+
+                log.info("[LOGIN] PIN screen detected. Using simple loop 1 → 7.");
+
+                // The PIN form has up to 7 digit slots — loop through all of them
+                // and enter '1' into each one that is enabled and visible
+                for (int idx = 1; idx <= 7; idx++) {
+
+                    // Build the XPath for this particular PIN slot dynamically using the index
+                    String dynamicXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+                    By pinInputBy = By.xpath(dynamicXpath);
+
+                    if (isVisible(pinInputBy, 1)) {
+
+                        WebElement input = driver.findElement(pinInputBy);
+
+                        boolean disabled = input.getAttribute("disabled") != null;
+
+                        if (!disabled && input.isEnabled())
+                        {
+                            // Slot is active — clear any pre-filled value and type our digit
+                            input.clear();
+                            input.sendKeys("1");
+                            log.info("[LOGIN] Entered '1' into PIN index: " + idx);
+                        }
+                        else
+                        {
+                            // Some PIN slots are disabled (grey) depending on the account setup — skip those
+                            log.info("[LOGIN] PIN index " + idx + " is DISABLED — skipping.");
+                        }
+
+                    } else {
+                        // This slot number doesn't exist in the DOM for this account — move on
+                        log.info("[LOGIN] PIN index " + idx + " not present in DOM — skipping.");
+                    }
+                }
+
+                // All available PIN digits are filled — submit the PIN form
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+                log.info("[LOGIN] PIN login submitted.");
+
+                if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 2))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                    // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                    log.info("[LOGIN] Accept Terms & Conditions completed.");
+                }
+
+                if (isVisible(By.xpath(ObjReader.getLocator("iNextBtnNewUser")), 3)) {
+                    for (int iNext = 1; iNext <= 7; iNext++)
+                    {
+                        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                    }
+                }
+                // After PIN, the system asks for a 6-digit TOTP code from the authenticator app
+                // We're using a hardcoded test value here — replace with TD lookup if needed
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"), "111111");
+
+                // Submit the TOTP code to complete the MFA flow
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+
+                log.info("[LOGIN] TOTP screen completed.");
+                // Click the Terms & Conditions checkbox
+                // Some accounts require accepting Terms & Conditions after first login or after a reset.
+                // Check if the T&C screen is there — if it is, tick the checkbox and hit Accept.
+                // If it's not there (most runs), this quietly skips without failing.
+                if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                    // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                    log.info("[LOGIN] Accept Terms & Conditions completed.");
+                }
+
+
+
+
+            }
+            else
+            {
+                // No PIN screen appeared — this is the simpler OTP-only login path
+                // Type the 6-digit OTP and submit directly
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+                log.info("[LOGIN] Classic login completed.");
+            }
+
+        }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent logs out and re-logs in as the transferee agent
+    // Description   : Exits the current BISS session, logs out fully, then performs a fresh
+    //                 login using the Transferee agent's credentials. Navigates back to
+    //                 My Clients → Transfers tab ready for the acceptance flow.
+    //
+    //                 This is the step that makes cross-agent transfers different from same-agent:
+    //                 the Transferee is a completely different user with different herds.
+    //
+    //                 Credential resolution order:
+    //                   1. System property TD:TransfereeUsername (set by Hooks from TestData.xlsx)
+    //                   2. System property transferee.username (set via -D in Maven/Bamboo)
+    //                   3. Fails if neither is available
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent logs out and re-log in as the transferee agent {string}")
+    public void theAgentLogsOutAndReLogsInAsTheTransfereAgent(String pUsername)
     {
         log.info("[STEP] When the agent logs out and re-logs in as the transferee agent");
 
-        // ── Step 1 : Exit BISS portal ────────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iExitBISSLink"), null);
 
-        // ── Step 2 : Click Logout ────────────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutBtn"), null);
-        log.info("Logged out of transferor agent session.");
-
-        // ── Step 3 : Resolve transferee credentials ──────────────────────────────────────
-        String iTransfereeUsername = System.getProperty(TRANSFEREE_USERNAME_PROP,
-                System.getProperty("transferee.username", "")).trim();
-
-        if (iTransfereeUsername.isEmpty())
         {
-            throw new RuntimeException("Transferee username not available. Set TD:TransfereeUsername in TestData.xlsx "
-                    + "or pass -Dtransferee.username=xxx on the command line.");
+
+            log.info("[LOGIN] Classic login detected.");
+
+            // Hit the initial 'Log In' button on the BISS landing screen to get to the Keycloak form
+            //iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+            // Type the agent's username — pulled from Hooks.RUNTIME_USERNAME which is resolved
+            // at runtime from BISS_DATA + BISS_INET before any scenario executes.
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), pUsername);
+            // Move past the username screen to get to the password entry form
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+
+            // Type the password from the test data sheet (TD:Password column)
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
+
+            // Submit the password — this either takes us to the dashboard or triggers MFA
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+
+            // ── Account Expired detection (Option 4 fix — 05-05-2026) ────────────────────
+            // Keycloak shows "Account Expired" immediately after Login click when the agent's
+            // SSO account has expired. Detect it here before waiting for PIN/OTP screen.
+            // If found: mark agent expired → Hooks.markAgentExpired() re-resolves a fresh
+            // herd+agent pair → update RUNTIME_USERNAME → re-attempt login with new agent.
+            By iExpiredMsgBy = By.xpath("//*[contains(@class,'kc-feedback-text') " + "and contains(normalize-space(),'Account Expired')]");
+
+            if (isVisible(iExpiredMsgBy, 3))
+            {
+                String iExpiredAgent = Hooks.RUNTIME_USERNAME;
+                log.warning("[LOGIN] Account Expired detected for agent: " + iExpiredAgent + " — calling Hooks.markAgentExpired() to re-resolve.");
+
+                // Mark expired + re-resolve new herd+agent into Hooks.RUNTIME_HERD / RUNTIME_USERNAME
+                Hooks.markAgentExpired(iExpiredAgent);
+
+                // Cancel the current Keycloak session and restart login with new agent
+                iAction("CLICK", "XPATH", "//button[normalize-space()='Cancel'] | //a[normalize-space()='Cancel']", null);
+
+                // Navigate back to base URL for a clean login state
+                CommonFunctions.getDriver().navigate().to(Hooks.iUrl);
+                // iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+                // Re-attempt login with the newly resolved agent
+                // iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+                getDriver().navigate().to(Hooks.iUrl);
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),       "TD:Password");
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),             null);
+
+                log.info("[LOGIN] Re-attempting login with new agent: " + pUsername);
+            }
+            // ── End Account Expired detection ──────────────────────────────────────────────
+
+            log.info("[STEP] Detect login screen and auto-login using simple PIN loop...");
+
+            WebDriver driver = CommonFunctions.getDriver();
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+
+            By pinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+
+            // Check whether the PIN login screen has appeared (give it 3 seconds — no need to wait longer)
+            if (isVisible(pinFormBy, 3)) {
+
+                log.info("[LOGIN] PIN screen detected. Using simple loop 1 → 7.");
+
+                // The PIN form has up to 7 digit slots — loop through all of them
+                // and enter '1' into each one that is enabled and visible
+                for (int idx = 1; idx <= 7; idx++) {
+
+                    // Build the XPath for this particular PIN slot dynamically using the index
+                    String dynamicXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+                    By pinInputBy = By.xpath(dynamicXpath);
+
+                    if (isVisible(pinInputBy, 1)) {
+
+                        WebElement input = driver.findElement(pinInputBy);
+
+                        boolean disabled = input.getAttribute("disabled") != null;
+
+                        if (!disabled && input.isEnabled())
+                        {
+                            // Slot is active — clear any pre-filled value and type our digit
+                            input.clear();
+                            input.sendKeys("1");
+                            log.info("[LOGIN] Entered '1' into PIN index: " + idx);
+                        }
+                        else
+                        {
+                            // Some PIN slots are disabled (grey) depending on the account setup — skip those
+                            log.info("[LOGIN] PIN index " + idx + " is DISABLED — skipping.");
+                        }
+
+                    } else {
+                        // This slot number doesn't exist in the DOM for this account — move on
+                        log.info("[LOGIN] PIN index " + idx + " not present in DOM — skipping.");
+                    }
+                }
+
+                // All available PIN digits are filled — submit the PIN form
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+                log.info("[LOGIN] PIN login submitted.");
+
+                if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 2))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                    // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                    log.info("[LOGIN] Accept Terms & Conditions completed.");
+                }
+
+                if (isVisible(By.xpath(ObjReader.getLocator("iNextBtnNewUser")), 3)) {
+                    for (int iNext = 1; iNext <= 7; iNext++)
+                    {
+                        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                    }
+                }
+                // After PIN, the system asks for a 6-digit TOTP code from the authenticator app
+                // We're using a hardcoded test value here — replace with TD lookup if needed
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"), "111111");
+
+                // Submit the TOTP code to complete the MFA flow
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+
+                log.info("[LOGIN] TOTP screen completed.");
+                // Click the Terms & Conditions checkbox
+                // Some accounts require accepting Terms & Conditions after first login or after a reset.
+                // Check if the T&C screen is there — if it is, tick the checkbox and hit Accept.
+                // If it's not there (most runs), this quietly skips without failing.
+                if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                    // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                    log.info("[LOGIN] Accept Terms & Conditions completed.");
+                }
+
+
+
+
+            }
+            else
+            {
+                // No PIN screen appeared — this is the simpler OTP-only login path
+                // Type the 6-digit OTP and submit directly
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+                log.info("[LOGIN] Classic login completed.");
+            }
+
         }
-
-        // ── Step 4 : Fresh login as the transferee agent ─────────────────────────────────
-        // Temporarily override the runtime username so the shared login step uses transferee creds
-        String iOriginalUsername = stepdefinitions.Hooks.RUNTIME_USERNAME;
-        stepdefinitions.Hooks.RUNTIME_USERNAME = iTransfereeUsername;
-
-        // Hit the login page — the browser should already be there after logout
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), iTransfereeUsername);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), null);
-
-        // Handle OTP/PIN — same approach as TC_03's login step
-        handlePostLoginOTP();
-
-        // ── Step 5 : Navigate to BISS → My Clients → Transfers ──────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iBissLink"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-
-        // Switch to Transfers tab
-        iAction("CLICK", "XPATH",
-                "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers']"
-                        + " | //a[normalize-space()='Transfers']",
-                null);
-
-        log.info("Re-logged in as transferee agent: " + iTransfereeUsername);
     }
-
 
     // ***************************************************************************************************************************************************************************************
     // Step          : the agent logs out and re-logs in as the transferor agent
@@ -228,8 +513,7 @@ public class TC_03_ENTS
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
     @And("the agent completes the cross-agent transferee acceptance flow")
-    public void theAgentCompletesTheCrossAgentTransfereeAcceptanceFlow(DataTable pDataTable)
-    {
+    public void theAgentCompletesTheCrossAgentTransfereeAcceptanceFlow(DataTable pDataTable) throws InterruptedException {
         log.info("[STEP] And the agent completes the cross-agent transferee acceptance flow");
 
         Map<String, String> iData = pDataTable.asMap(String.class, String.class);
@@ -239,40 +523,62 @@ public class TC_03_ENTS
 
         // ── Search for the transferee herd ───────────────────────────────────────────────
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iTransfereeHerd);
+        Thread.sleep(2000);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
-        log.info("Transferee herd opened: " + iTransfereeHerd);
+        log.info("Partner herd opened: " + iTransfereeHerd);
 
-        // ── Click View on the transferee dashboard ───────────────────────────────────────
-        // The View button in the dashboard may be scoped by herd number
-        iAction("CLICK", "XPATH",
-                "//tr[contains(.,'" + iTransfereeHerd + "')]//button[contains(text(),'View')] | "
-                        + "//button[contains(text(),'View')]",
-                null);
+        // ── Click the ETF button ─────────────────────────────────────────────────────────
+        // ETF button is unique to the Partner dashboard — it's NOT the standard View button
+        if (isVisible(By.xpath(ObjReader.getLocator("iETFBtn")), 3)) {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
+            log.info("ETF button clicked.");
+            // ── Enter the captured transfer key ──────────────────────────────────────────────
+            //String iTransferKey = System.getProperty("lastCapturedTransferKey", "");
+            //Assertions.assertFalse(iTransferKey.isEmpty(), "Transfer key must have been captured in the Transferor flow before the ETF Partner can accept.");
 
-        // ── Enter the captured transfer key ──────────────────────────────────────────────
-        String iTransferKey = System.getProperty("lastCapturedTransferKey", "");
-        Assertions.assertFalse(iTransferKey.isEmpty(),
-                "Transfer key must have been captured in the Transferor flow before the Transferee can accept.");
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey);
+            log.info("Transfer key entered: " + iCapturedTransferKey);
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iTransferKey);
-        log.info("Transfer key entered: " + iTransferKey);
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+            // ── Enter transferee notes ───────────────────────────────────────────────────────
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+            // ── Submit to DAFM ───────────────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
 
-        // ── View the transfer application ────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+            // Accept T&C
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
 
-        // ── Enter transferee notes ───────────────────────────────────────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+            // Confirm submission
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        }
+        else
+        {
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
 
-        // ── Submit to DAFM ───────────────────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
 
-        // Accept T&C
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+            // ── Enter the captured transfer key ──────────────────────────────────────────────
+            //String iTransferKey = System.getProperty("lastCapturedTransferKey", "");
+            //Assertions.assertFalse(iTransferKey.isEmpty(), "Transfer key must have been captured in the Transferor flow before the ETF Partner can accept.");
 
-        // Confirm submission
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey);
+            log.info("Transfer key entered: " + iCapturedTransferKey);
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
 
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+            // ── Submit to DAFM ───────────────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+
+            // Accept T&C
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+
+            // Confirm submission
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        }
         log.info("Cross-agent transferee acceptance completed for herd: " + iTransfereeHerd);
     }
 
@@ -345,6 +651,33 @@ public class TC_03_ENTS
         log.info("[LOGIN-XAGENT] Post-login OTP handling complete.");
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogout
+    // Description   : Logs out via Exit + Logout buttons. Falls back to navigate + deleteAllCookies.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026
+    // ***************************************************************************************************************************************************************************************
+    public void performLogout()
+    {
+        log.info("[TC13-RELOGIN] Logging out current session...");
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            By iSadPopup = By.xpath(ObjReader.getLocator("iLogoutPopup"));
+            if (isVisible(iSadPopup, 1)) iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            log.info("[TC13-RELOGIN] Logout complete.");
+            getDriver().manage().deleteAllCookies();
+            getDriver().navigate().to(Hooks.iUrl);
+        }
+        catch (Exception e)
+        {
+            log.warning("[TC13-RELOGIN] UI logout failed (" + e.getMessage() + ") — navigating to base URL as fallback.");
+            getDriver().manage().deleteAllCookies();
+            getDriver().navigate().to(Hooks.iUrl);
+        }
+    }
 
     /**
      * Short-wait visibility check — returns true if the element appears within pSeconds.
