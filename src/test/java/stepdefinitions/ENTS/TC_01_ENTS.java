@@ -35,13 +35,16 @@ import io.cucumber.datatable.DataTable;
 import io.cucumber.java.en.*;
 import org.junit.jupiter.api.Assertions;
 import org.openqa.selenium.By;
+import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
+import stepdefinitions.Hooks;
 import utilities.ObjReader;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
 
@@ -57,7 +60,7 @@ public class TC_01_ENTS
     // Scoped to this class instance — Cucumber creates one instance per scenario so this
     // is safe for the single E2E scenario pattern.
     // -------------------------------------------------------------------------------------------------------------------------------
-    private String iCapturedTransferKey = "";
+    public static String iCapturedTransferKey = "";
 
 
     // ===================================================================================================================================
@@ -88,8 +91,7 @@ public class TC_01_ENTS
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
     @When("the agent creates a transfer application with the following details")
-    public void theAgentCreatesATransferApplicationWithTheFollowingDetails(DataTable pDataTable)
-    {
+    public void theAgentCreatesATransferApplicationWithTheFollowingDetails(DataTable pDataTable) throws InterruptedException {
         log.info("[STEP] When the agent creates a transfer application with the following details");
 
         Map<String, String> iData = pDataTable.asMap(String.class, String.class);
@@ -105,6 +107,7 @@ public class TC_01_ENTS
         // ── Step 1 : Search for the transferor herd and open it ──────────────────────────
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iTransferorHerd);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        Thread.sleep(2000);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
         log.info("Transferor herd opened: " + iTransferorHerd);
 
@@ -124,12 +127,14 @@ public class TC_01_ENTS
         log.info("Transferee searched: " + iTransfereeName + " (" + iTransfereeHerd + ")");
 
         // ── Step 4 : Select the transfer type ────────────────────────────────────────────
+        Thread.sleep(1000);
         // The transfer type is a radio button or selectable row identified by its code
         iAction("CLICK", "XPATH",
                 "//mat-radio-button[contains(.,'" + iTransferType + "')] | "
                         + "//tr[contains(.,'" + iTransferType + "')]//input | "
                         + "//*[@value='" + iTransferType + "']",
                 null);
+        Thread.sleep(1000);
         log.info("Transfer type selected: " + iTransferType);
 
         // Click Next to proceed past transfer type selection
@@ -137,7 +142,52 @@ public class TC_01_ENTS
 
         // ── Step 5 : Add entitlement ─────────────────────────────────────────────────────
         // Click the first "Add" entitlement button for the transferor
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferAddEntitlementBtn"), null);
+        //iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferAddEntitlementBtn"), null);
+
+        // ── Click Add on the row with the highest Available Entitlements value ────────────
+        // Reads all entitlement value cells, parses each as double, finds the max,
+        // then clicks the Add button at the matching row index.
+        // The two NodeLists are parallel — index N in values = index N in buttons.
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferEntitlementValues"), null);
+        List<WebElement> iEntitlementCells = getDriver().findElements(By.xpath(ObjReader.getLocator("iTransferEntitlementValues")));
+        List<WebElement> iAddButtons = getDriver().findElements(By.xpath(ObjReader.getLocator("iTransferAddEntitlementBtns")));
+
+        if (iEntitlementCells.isEmpty())
+        {
+            throw new RuntimeException("[TRANSFER] No entitlement rows found in 'Entitlements available to transfer' table.");
+        }
+
+        int    iMaxIndex = 0;
+        double iMaxValue = -1.0;
+
+        for (int i = 0; i < iEntitlementCells.size(); i++)
+        {
+            String iRaw = iEntitlementCells.get(i).getText().trim();
+            try
+            {
+                double iVal = Double.parseDouble(iRaw);
+                log.info("[TRANSFER] Row " + (i + 1) + " entitlements: " + iVal);
+                if (iVal > iMaxValue)
+                {
+                    iMaxValue = iVal;
+                    iMaxIndex = i;
+                }
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[TRANSFER] Could not parse entitlement value at row "
+                        + (i + 1) + ": '" + iRaw + "' — skipping.");
+            }
+        }
+
+        log.info("[TRANSFER] Highest entitlement: " + iMaxValue + " at row " + (iMaxIndex + 1) + " — clicking Add.");
+
+        WebElement iTargetAddBtn = iAddButtons.get(iMaxIndex);
+        ((JavascriptExecutor) getDriver()).executeScript("arguments[0].scrollIntoView({block:'center'});", iTargetAddBtn);
+        ((JavascriptExecutor) getDriver()).executeScript("arguments[0].click();", iTargetAddBtn);
+
+        log.info("[TRANSFER] Add clicked for entitlement value: " + iMaxValue);
+
 
         // Enter the entitlement amount
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), iEntitlements);
@@ -161,9 +211,7 @@ public class TC_01_ENTS
         // ── Step 6 : Enter transfer notes ────────────────────────────────────────────────
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
 
-        log.info("Transfer application created | Type=" + iTransferType
-                + " | Transferor=" + iTransferorHerd + " → Transferee=" + iTransfereeHerd
-                + " | Entitlements=" + iEntitlements);
+        log.info("Transfer application created | Type=" + iTransferType + " | Transferor=" + iTransferorHerd + " → Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
     }
 
 
@@ -189,31 +237,39 @@ public class TC_01_ENTS
     {
         log.info("[STEP] And the agent uploads the transferor signature document");
 
-        // Click the "Transferor Confirmation Signature Form" link to open the upload section
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSignatureFormLink"), null);
-
-        // Click the "Upload Document" button to open the upload dialog
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferUploadDocBtn"), null);
-
-        // Select document type — always "Transferor Signature Confirmation" for this flow
-        iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"),
-                "Transferor Signature Confirmation");
-
-        // Attach the sample PDF — same pattern as TC_13_ENTS document upload
-        String iFilePath = System.getProperty("transfers.upload.path",
+        // Upload CRO document (different from agent's signature doc)
+        String iFilePath = System.getProperty("transfer.upload.path",
                 System.getProperty("user.dir")
                         + java.io.File.separator + "src"
                         + java.io.File.separator + "test"
                         + java.io.File.separator + "resources"
                         + java.io.File.separator + "Test_Data"
-                        + java.io.File.separator + "sample_upload.pdf");
+                        + java.io.File.separator + "Cover_Letter.pdf");
 
+        // ── Click "Upload Document" on the summary card ───────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+
+        // ── Wait for dialog to open ───────────────────────────────────────────────────
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
+
+        // ── Select document type ──────────────────────────────────────────────────────
+        iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), "Transferor Signature Confirmation");
+        log.info("[TRANSFER] Document type selected: " + "Companies Registrations Office (Company Printout)");
+
+        // ── Attach PDF ────────────────────────────────────────────────────────────────
         iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iTransferFileUploadInput"), iFilePath);
 
-        // Confirm the upload in the dialog
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        // ── Confirm upload ────────────────────────────────────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
 
-        log.info("Transferor signature document uploaded: " + iFilePath);
+        // ── Wait for dialog to close ──────────────────────────────────────────────────
+        iAction("WAITINVISIBLE", "XPATH", "//app-supporting-doc-upload-transfer-application-popup", null);
+
+
     }
 
 
@@ -262,11 +318,9 @@ public class TC_01_ENTS
     {
         log.info("[STEP] Then the transfer key should be captured");
 
-        iCapturedTransferKey = iAction("GETTEXT", "XPATH",
-                ObjReader.getLocator("iTransferKeySummaryField"), null);
+        iCapturedTransferKey = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iTransferKeySummaryField"), null);
 
-        Assertions.assertFalse(iCapturedTransferKey.isEmpty(),
-                "Transfer key should be visible on the summary screen.");
+        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key should be visible on the summary screen.");
 
         log.info("Transfer key captured: " + iCapturedTransferKey);
     }
@@ -300,10 +354,7 @@ public class TC_01_ENTS
 
         // Navigate to My Clients → Transfers tab
         iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-        iAction("CLICK", "XPATH",
-                "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers']"
-                        + " | //a[normalize-space()='Transfers']",
-                null);
+        iAction("CLICK", "XPATH", "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers']" + " | //a[normalize-space()='Transfers']", null);
 
         // Search for the transferee herd
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iTransfereeHerd);
@@ -314,10 +365,7 @@ public class TC_01_ENTS
 
         // Click the View button on the transferee dashboard — filtered by the herd number
         // to ensure we hit the correct row when multiple transfers are listed
-        iAction("CLICK", "XPATH",
-                "//tr[contains(.,'" + iTransfereeHerd + "')]//button[contains(text(),'View')] | "
-                        + "//button[contains(text(),'View')]",
-                null);
+        iAction("CLICK", "XPATH", "//tr[contains(.,'" + iTransfereeHerd + "')]//button[contains(text(),'View')] | " + "//button[contains(text(),'View')]", null);
 
         log.info("Navigated to transferee acceptance flow for herd: " + iTransfereeHerd);
     }
@@ -337,11 +385,10 @@ public class TC_01_ENTS
     {
         log.info("[STEP] And the agent enters the transfer key and views the application");
 
-        Assertions.assertFalse(iCapturedTransferKey.isEmpty(),
-                "Transfer key must have been captured before entering it on the transferee side.");
+        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key must have been captured before entering it on the transferee side.");
 
         // Enter the captured transfer key
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey.trim());
 
         // Click "View Transfer Application" to load the transfer details
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
@@ -376,6 +423,10 @@ public class TC_01_ENTS
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
 
         log.info("Transfer submitted to DAFM.");
+
+        String iConfirmation = iAction("GETTEXT", "XPATH", "//div[contains(@class,'success') or contains(@class,'confirmation')] | " + "//*[contains(text(),'submitted') or contains(text(),'Submitted') or contains(text(),'accepted')]", null);
+        Assertions.assertFalse(iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+        log.info("Transfer submitted successfully: " + iConfirmation);
     }
 
 
@@ -398,13 +449,11 @@ public class TC_01_ENTS
         // the transfer was accepted and submitted to DAFM
         try
         {
-            String iConfirmation = iAction("GETTEXT", "XPATH",
-                    "//div[contains(@class,'success') or contains(@class,'confirmation')] | "
-                            + "//*[contains(text(),'submitted') or contains(text(),'Submitted') or contains(text(),'accepted')]",
-                    null);
-            Assertions.assertFalse(iConfirmation.isEmpty(),
-                    "Transfer submission success indicator should be visible.");
+            String iConfirmation = iAction("GETTEXT", "XPATH", "//div[contains(@class,'success') or contains(@class,'confirmation')] | " + "//*[contains(text(),'submitted') or contains(text(),'Submitted') or contains(text(),'accepted')]", null);
+            Assertions.assertFalse(iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
             log.info("Transfer submitted successfully: " + iConfirmation);
+            performLogout();
+
         }
         catch (Exception e)
         {
@@ -447,11 +496,52 @@ public class TC_01_ENTS
 
         // Switch to the Transfers tab
         // Reuses the same tab-switching XPath pattern as TC_06.theAgentSwitchesToTheTabOnTheMyClientsPage()
-        iAction("CLICK", "XPATH",
-                "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers']"
-                        + " | //a[normalize-space()='Transfers']",
-                null);
+        iAction("CLICK", "XPATH", "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers']" + " | //a[normalize-space()='Transfers']", null);
 
         log.info("Navigated back to Transfers client list.");
+    }
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogout
+    // Description   : Logs out via Exit + Logout buttons. Falls back to navigate + deleteAllCookies.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026
+    // ***************************************************************************************************************************************************************************************
+    public void performLogout()
+    {
+        log.info("[TC13-RELOGIN] Logging out current session...");
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            By iSadPopup = By.xpath(ObjReader.getLocator("iLogoutPopup"));
+            if (isVisible(iSadPopup, 1)) iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            log.info("[TC13-RELOGIN] Logout complete.");
+            getDriver().manage().deleteAllCookies();
+            getDriver().navigate().to(Hooks.iUrl);
+        }
+        catch (Exception e)
+        {
+            log.warning("[TC13-RELOGIN] UI logout failed (" + e.getMessage() + ") — navigating to base URL as fallback.");
+            getDriver().manage().deleteAllCookies();
+            getDriver().navigate().to(Hooks.iUrl);
+        }
+    }
+    // ***************************************************************************************************************************************************************************************
+    // Method        : isVisible
+    // Description   : Short-wait visibility check — returns true/false, never throws.
+    // Parameters    : pLocator — By locator | pSeconds — max wait seconds
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private boolean isVisible(By pLocator, int pSeconds)
+    {
+        try
+        {
+            new WebDriverWait(getDriver(), Duration.ofSeconds(pSeconds))
+                    .until(ExpectedConditions.visibilityOfElementLocated(pLocator));
+            return true;
+        }
+        catch (Exception e) { return false; }
     }
 }
