@@ -438,6 +438,38 @@ public class DBRouter
                 break;
             }
             // ----------------------------------------------------------------
+            // DATA DB: Submitted individual herds with CISYF scheme (TC_13 post-submission)
+            //
+            // Returns herds where application is fully submitted (mde_abbrev = 'I')
+            // and CISYF scheme was applied. Used for post-submission verification
+            // flow — viewing, correspondence, document download.
+            //
+            // params[0] = year  (required)
+            // params[1] = limit (optional — defaults to 100)
+            // ----------------------------------------------------------------
+            case "LIST OF SUBMITTED INDIVIDUAL HERDS WITH CISYF SCHEME":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no, app_year " +
+                                "FROM vwbs_application_herd " +
+                                "WHERE mde_abbrev     = 'I' " +
+                                "AND   applicant_type = 'I' " +
+                                "AND   app_year       = ? " +
+                                "AND   NVL(( " +
+                                "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
+                                "    FROM dual " +
+                                "), 'N') = 'Y' " +
+                                "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY DBMS_RANDOM.VALUE";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
             // DATA DB: Not Started individual herds eligible for CISYF (TC_13 ENTS)
             //
             // Returns J-prefix individual herds where the CURRENT year application
