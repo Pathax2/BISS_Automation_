@@ -30,11 +30,11 @@ Feature: TC_02_ENTS - Transfer Application E2E Regression Pack (Different Agent)
 
   Background:
     Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
+    When the individual logs in as transferor "aga6535"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Clients page
+    And the agent switches to the "Transfers" tab on the My Client page
 
   @regression @transfers @e2e
   Scenario: AT-ENTS-TRANSFERS-E2E-02 - Agent completes merger transfer and validates no-entitlement herd
@@ -46,32 +46,38 @@ Feature: TC_02_ENTS - Transfer Application E2E Regression Pack (Different Agent)
 
     # --- Transferor ---
     When the agent creates a transfer application with the following details
-      | transferorHerd | H114113X   |
-      | transfereeHerd | H1360568   |
-      | transfereeName | Walsh Farm |
-      | transferType   | 203        |
-      | entitlements   | 0.01       |
-      | notes          | Test Notes |
+      | transferorHerd | H114113X         |
+      | transfereeHerd | H2454086         |
+      | transfereeName | Kathleen Mahon   |
+      | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership)|
+      | entitlements   | 0.01             |
+      | notes          | Test Notes       |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent navigates to the transferee acceptance flow
-      | transfereeHerd | H1360568 |
-    And the agent enters the transfer key and views the application
-    And the agent submits the transfer to DAFM with notes "Approved Test"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | H2454086  |
+      | notes          | Approved Test |
     Then the transfer should be submitted successfully
+
 
     # ===========================================
     # SECTION 2 : Negative — herd without entitlements
     # Covers: Commented legacy negative scenario
     # The Add Entitlement button should NOT be present
     # ===========================================
-    When the agent navigates back to the Transfers client list
+    When the individual logs in as transferor "aga6077"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent initiates a transfer search for herd without entitlements
-      | transferorHerd | V1861254       |
-      | transfereeHerd | V1880640       |
-      | transfereeName | Michael Mullin |
-      | transferType   | 203            |
+      | transferorHerd | A1374039       |
+      | transfereeHerd | C1150624       |
+      | transfereeName | Annette O'Grady |
+      | transferType   | Inheritance of Entitlements|
     Then the Add Entitlement button should not be present
