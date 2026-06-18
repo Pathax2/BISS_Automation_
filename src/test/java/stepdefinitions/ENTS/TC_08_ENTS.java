@@ -14,12 +14,16 @@
 
 package stepdefinitions.ENTS;
 
+import commonFunctions.CommonFunctions;
 import io.cucumber.datatable.DataTable;
 import io.cucumber.java.en.*;
 import org.junit.jupiter.api.Assertions;
 import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
+import stepdefinitions.Hooks;
 import utilities.ObjReader;
 import java.time.Duration;
 import java.util.Map;
@@ -35,32 +39,155 @@ public class TC_08_ENTS
     @When("the individual logs in as transferor {string}")
     public void theIndividualLogsInAsTransferor(String pUsername)
     {
-        log.info("[STEP] Individual logs in as transferor: " + pUsername);
-        // Navigate to Individual login page
-        try { iAction("CLICK", "XPATH", ObjReader.getLocator("iIndividualLoginLink"), null); }
-        catch (Exception e) { log.info("Already on login page."); }
 
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+        log.info("[LOGIN] Classic login detected.");
+
+        // Hit the initial 'Log In' button on the BISS landing screen to get to the Keycloak form
+        //iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+        // Type the agent's username — pulled from Hooks.RUNTIME_USERNAME which is resolved
+        // at runtime from BISS_DATA + BISS_INET before any scenario executes.
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), pUsername);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        // Move past the username screen to get to the password entry form
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+
+        // Type the password from the test data sheet (TD:Password column)
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), null);
 
-        // OTP
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+        // Submit the password — this either takes us to the dashboard or triggers MFA
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
 
-        // Dismiss personal details dialog if present
-        try { if (isVisible(By.xpath(ObjReader.getLocator("iPersonalDetailsCloseBtn")), 5))
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iPersonalDetailsCloseBtn"), null); }
-        catch (Exception ignored) {}
+        // ── Account Expired detection (Option 4 fix — 05-05-2026) ────────────────────
+        // Keycloak shows "Account Expired" immediately after Login click when the agent's
+        // SSO account has expired. Detect it here before waiting for PIN/OTP screen.
+        // If found: mark agent expired → Hooks.markAgentExpired() re-resolves a fresh
+        // herd+agent pair → update RUNTIME_USERNAME → re-attempt login with new agent.
+        By iExpiredMsgBy = By.xpath("//*[contains(@class,'kc-feedback-text') " + "and contains(normalize-space(),'Account Expired')]");
 
-        // Navigate to BISS → Transfers
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iBissLink"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersTabDirect"), null);
-        log.info("Individual logged in as transferor: " + pUsername);
+        if (isVisible(iExpiredMsgBy, 3))
+        {
+            String iExpiredAgent = Hooks.RUNTIME_USERNAME;
+            log.warning("[LOGIN] Account Expired detected for agent: " + iExpiredAgent + " — calling Hooks.markAgentExpired() to re-resolve.");
+
+            // Mark expired + re-resolve new herd+agent into Hooks.RUNTIME_HERD / RUNTIME_USERNAME
+            Hooks.markAgentExpired(iExpiredAgent);
+
+            // Cancel the current Keycloak session and restart login with new agent
+            iAction("CLICK", "XPATH", "//button[normalize-space()='Cancel'] | //a[normalize-space()='Cancel']", null);
+
+            // Navigate back to base URL for a clean login state
+            CommonFunctions.getDriver().navigate().to(Hooks.iUrl);
+            // iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+            // Re-attempt login with the newly resolved agent
+            // iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+            getDriver().navigate().to(Hooks.iUrl);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),       "TD:Password");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),             null);
+
+            log.info("[LOGIN] Re-attempting login with new agent: " + pUsername);
+        }
+        // ── End Account Expired detection ──────────────────────────────────────────────
+
+        log.info("[STEP] Detect login screen and auto-login using simple PIN loop...");
+
+        WebDriver driver = CommonFunctions.getDriver();
+        WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+
+        By pinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+
+        // Check whether the PIN login screen has appeared (give it 3 seconds — no need to wait longer)
+        if (isVisible(pinFormBy, 3)) {
+
+            log.info("[LOGIN] PIN screen detected. Using simple loop 1 → 7.");
+
+            // The PIN form has up to 7 digit slots — loop through all of them
+            // and enter '1' into each one that is enabled and visible
+            for (int idx = 1; idx <= 7; idx++) {
+
+                // Build the XPath for this particular PIN slot dynamically using the index
+                String dynamicXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+                By pinInputBy = By.xpath(dynamicXpath);
+
+                if (isVisible(pinInputBy, 1)) {
+
+                    WebElement input = driver.findElement(pinInputBy);
+
+                    boolean disabled = input.getAttribute("disabled") != null;
+
+                    if (!disabled && input.isEnabled())
+                    {
+                        // Slot is active — clear any pre-filled value and type our digit
+                        input.clear();
+                        input.sendKeys("1");
+                        log.info("[LOGIN] Entered '1' into PIN index: " + idx);
+                    }
+                    else
+                    {
+                        // Some PIN slots are disabled (grey) depending on the account setup — skip those
+                        log.info("[LOGIN] PIN index " + idx + " is DISABLED — skipping.");
+                    }
+
+                } else {
+                    // This slot number doesn't exist in the DOM for this account — move on
+                    log.info("[LOGIN] PIN index " + idx + " not present in DOM — skipping.");
+                }
+            }
+
+            // All available PIN digits are filled — submit the PIN form
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+            log.info("[LOGIN] PIN login submitted.");
+
+            if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 2))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                log.info("[LOGIN] Accept Terms & Conditions completed.");
+            }
+
+            if (isVisible(By.xpath(ObjReader.getLocator("iNextBtnNewUser")), 3)) {
+                for (int iNext = 1; iNext <= 7; iNext++)
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                }
+            }
+            // After PIN, the system asks for a 6-digit TOTP code from the authenticator app
+            // We're using a hardcoded test value here — replace with TD lookup if needed
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"), "111111");
+
+            // Submit the TOTP code to complete the MFA flow
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+
+            log.info("[LOGIN] TOTP screen completed.");
+            // Click the Terms & Conditions checkbox
+            // Some accounts require accepting Terms & Conditions after first login or after a reset.
+            // Check if the T&C screen is there — if it is, tick the checkbox and hit Accept.
+            // If it's not there (most runs), this quietly skips without failing.
+            if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                log.info("[LOGIN] Accept Terms & Conditions completed.");
+            }
+
+
+
+
+        }
+        else
+        {
+            // No PIN screen appeared — this is the simpler OTP-only login path
+            // Type the 6-digit OTP and submit directly
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+            log.info("[LOGIN] Classic login completed.");
+        }
+
     }
 
     // ── Individual creates transfer ──────────────────────────────────────────────
@@ -89,14 +216,18 @@ public class TC_08_ENTS
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
 
         // Select transfer type
-        iAction("CLICK", "XPATH",
-                "//mat-radio-button[contains(.,'" + iTransferType + "')] | //*[@value='" + iTransferType + "']", null);
+
+        String iTransferType1 = String.format(ObjReader.getLocator("iTransferType"), iTransferType);
+
+        iAction("CLICK", "XPATH", iTransferType1, null);
+
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
 
         // Add entitlement
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferAddEntitlementBtn"), null);
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), iEntitlements);
-        if (iHasLeaseYear) {
+        if (iHasLeaseYear)
+        {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearDropdown"), null);
             iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearFirstOption"), null);
         }
@@ -107,12 +238,37 @@ public class TC_08_ENTS
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
 
         // Upload CRO document (different from agent's signature doc)
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferUploadDocBtn"), null);
-        iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"),
-                "Companies Registrations Office (Company Printout)");
-        String iFilePath = System.getProperty("user.dir") + "/src/test/resources/Test_Data/sample_upload.pdf";
+        String iFilePath = System.getProperty("transfer.upload.path",
+                System.getProperty("user.dir")
+                        + java.io.File.separator + "src"
+                        + java.io.File.separator + "test"
+                        + java.io.File.separator + "resources"
+                        + java.io.File.separator + "Test_Data"
+                        + java.io.File.separator + "Cover_Letter.pdf");
+
+        // ── Click "Upload Document" on the summary card ───────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+
+        // ── Wait for dialog to open ───────────────────────────────────────────────────
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
+
+        // ── Select document type ──────────────────────────────────────────────────────
+        iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), "Companies Registrations Office (Company Printout)");
+        log.info("[TRANSFER] Document type selected: " + "Companies Registrations Office (Company Printout)");
+
+        // ── Attach PDF ────────────────────────────────────────────────────────────────
         iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iTransferFileUploadInput"), iFilePath);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+
+        // ── Confirm upload ────────────────────────────────────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+
+        // ── Wait for dialog to close ──────────────────────────────────────────────────
+        iAction("WAITINVISIBLE", "XPATH", "//app-supporting-doc-upload-transfer-application-popup", null);
+
 
         log.info("Individual transfer created: " + iTransferType + " → " + iTransfereeHerd);
     }
