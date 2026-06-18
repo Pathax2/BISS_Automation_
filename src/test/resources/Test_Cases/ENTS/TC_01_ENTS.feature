@@ -36,11 +36,11 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
 
   Background:
     Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
+    When the individual logs in as transferor "aga6077"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Clients page
+    And the agent switches to the "Transfers" tab on the My Client page
 
   @regression @transfers @e2e
   Scenario: AT-ENTS-TRANSFERS-E2E - Agent completes all transfer types within the same agent
@@ -55,7 +55,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
       | transferorHerd | C1010091         |
       | transfereeHerd | C1010148         |
       | transfereeName | Thomas Costelloe |
-      | transferType   | 206              |
+      | transferType   | Change of Legal Entity|
       | entitlements   | 0.01             |
       | notes          | Test Notes       |
     And the agent uploads the transferor signature document
@@ -63,10 +63,11 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent navigates to the transferee acceptance flow
-      | transfereeHerd | C1010148 |
-    And the agent enters the transfer key and views the application
-    And the agent submits the transfer to DAFM with notes "Approved Test"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | C1010148  |
+      | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
     # ===========================================
@@ -74,13 +75,17 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # Covers: TC_02
     # ===========================================
 
-    # --- Transferor ---
-    When the agent navigates back to the Transfers client list
+    # --- Transferor
+    When the individual logs in as transferor "aga6077"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1040578     |
-      | transfereeHerd | C1010334     |
-      | transfereeName | Nicola Lambe |
-      | transferType   | 201          |
+      | transferorHerd | C1010148     |
+      | transfereeHerd | C102010X     |
+      | transfereeName | John Sweeney |
+      | transferType   | Change of Registration Details|
       | entitlements   | 0.01         |
       | notes          | Test Notes   |
     And the agent uploads the transferor signature document
@@ -88,10 +93,11 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent navigates to the transferee acceptance flow
-      | transfereeHerd | C1010334 |
-    And the agent enters the transfer key and views the application
-    And the agent submits the transfer to DAFM with notes "Approved Test"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | C102010X  |
+      | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
     # ===========================================
@@ -100,12 +106,16 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the agent navigates back to the Transfers client list
+    When the individual logs in as transferor "aga6077"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1040578         |
-      | transfereeHerd | C1037011         |
-      | transfereeName | Kathleen Doherty |
-      | transferType   | 201              |
+      | transferorHerd | C2060068         |
+      | transfereeHerd | V1421165         |
+      | transfereeName | Martin Barrett |
+      | transferType   | Inheritance of Entitlements |
       | entitlements   | 0.01             |
       | notes          | Test Notes       |
     And the agent uploads the transferor signature document
@@ -113,10 +123,11 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent navigates to the transferee acceptance flow
-      | transfereeHerd | C1037011 |
-    And the agent enters the transfer key and views the application
-    And the agent submits the transfer to DAFM with notes "Approved Test"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | V1421165  |
+      | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
     # ===========================================
@@ -125,12 +136,16 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the agent navigates back to the Transfers client list
+    When the individual logs in as transferor "aga6077"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1040578            |
-      | transfereeHerd | C1010121            |
-      | transfereeName | Elizabeth Bradfield |
-      | transferType   | 202                 |
+      | transferorHerd | C1820026            |
+      | transfereeHerd | C1670423            |
+      | transfereeName | Patrick Gilmore |
+      | transferType   | Gift of Entitlements|
       | entitlements   | 0.01                |
       | notes          | Test Notes          |
     And the agent uploads the transferor signature document
@@ -138,10 +153,11 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent navigates to the transferee acceptance flow
-      | transfereeHerd | C1010121 |
-    And the agent enters the transfer key and views the application
-    And the agent submits the transfer to DAFM with notes "Approved Test"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | C1670423  |
+      | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
     # ===========================================
@@ -151,12 +167,16 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the agent navigates back to the Transfers client list
+    When the individual logs in as transferor "aga6077"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1040578    |
-      | transfereeHerd | C1050166    |
-      | transfereeName | Peter Kelly |
-      | transferType   | 211         |
+      | transferorHerd | C1880193    |
+      | transfereeHerd | G1831576    |
+      | transfereeName | Quish Mart Ltd |
+      | transferType   | Lease of Entitlements|
       | entitlements   | 0.01        |
       | leaseYear      | Yes         |
       | notes          | Test Notes  |
@@ -165,10 +185,11 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent navigates to the transferee acceptance flow
-      | transfereeHerd | C1050166 |
-    And the agent enters the transfer key and views the application
-    And the agent submits the transfer to DAFM with notes "Approved Test"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | G1831576  |
+      | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
     # ===========================================
@@ -177,12 +198,16 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the agent navigates back to the Transfers client list
+    When the individual logs in as transferor "aga6077"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1010776         |
+      | transferorHerd | C1250483         |
       | transfereeHerd | C1050212         |
       | transfereeName | Padraig Costello |
-      | transferType   | 204              |
+      | transferType   | Division of Entitlements (Scission)|
       | entitlements   | 0.01             |
       | notes          | Test Notes       |
     And the agent uploads the transferor signature document
@@ -190,10 +215,11 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent navigates to the transferee acceptance flow
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
       | transfereeHerd | C1050212 |
-    And the agent enters the transfer key and views the application
-    And the agent submits the transfer to DAFM with notes "Approved Test"
+      | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
     # ===========================================
@@ -202,12 +228,16 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the agent navigates back to the Transfers client list
+    When the individual logs in as transferor "aga6077"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1010776        |
-      | transfereeHerd | C1070124        |
-      | transfereeName | Michael Duignan |
-      | transferType   | 212             |
+      | transferorHerd | C1380352        |
+      | transfereeHerd | T1210622        |
+      | transfereeName | Seamus Ryder |
+      | transferType   | Sale of Entitlements|
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
     And the agent uploads the transferor signature document
@@ -215,8 +245,9 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     Then the transfer key should be captured
 
     # --- Transferee ---
-    When the agent navigates to the transferee acceptance flow
-      | transfereeHerd | C1070124 |
-    And the agent enters the transfer key and views the application
-    And the agent submits the transfer to DAFM with notes "Approved Test"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | T1210622 |
+      | notes          | Approved Test |
     Then the transfer should be submitted successfully
