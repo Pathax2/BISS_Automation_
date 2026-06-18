@@ -6,15 +6,23 @@ Feature: TC_10_ENTS - Transfer Application E2E (Individual to ETF Partner)
   #
   # Author: Aniket Pathare | Created: 31-03-2026
 
+  Background:
+    Given the agent user is on the login page
+    When the individual logs in as transferor "SOUTHVIEW1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+
+
   @regression @transfers @individual-to-etf @e2e
   Scenario: AT-ENTS-TRANSFERS-E2E-10 - Individual completes all transfer types to ETF
 
     # SECTION 1 : Lease (211)
-    When the individual logs in as transferor "SOUTHVIEW1"
     And the individual creates a transfer application with the following details
-      | transfereeHerd | D1051289           |
-      | transfereeName | Browne Exports Ltd   |
-      | transferType   | 211            |
+      | transfereeHerd | D1460081            |
+      | transfereeName | Timothy Mangan  |
+      | transferType   |Lease of Entitlements|
       | entitlements   | 0.01           |
       | leaseYear      | Yes            |
       | notes          | Test Notes     |
@@ -22,16 +30,20 @@ Feature: TC_10_ENTS - Transfer Application E2E (Individual to ETF Partner)
     Then the transfer key should be captured
     When the agent logs out and re-logs in as the ETF partner "agr15678"
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | D1051289  |
+      | transfereeHerd | D1460081  |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
     # SECTION 2 : Gift (202)
     When the individual logs in as transferor "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | D1190050           |
       | transfereeName | Thomas Treanor       |
-      | transferType   | 202            |
+      | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership)|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
@@ -44,10 +56,14 @@ Feature: TC_10_ENTS - Transfer Application E2E (Individual to ETF Partner)
 
     # SECTION 3 : Sale (212)
     When the individual logs in as transferor "DANIELPAUL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | D1190246           |
       | transfereeName | Oliver Griffin       |
-      | transferType   | 212            |
+      | transferType   | Sale of Entitlements|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
@@ -60,10 +76,14 @@ Feature: TC_10_ENTS - Transfer Application E2E (Individual to ETF Partner)
 
     # SECTION 4 : Inheritance (201)
     When the individual logs in as transferor "SOUTHVIEW1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | J1350309           |
       | transfereeName | Cadden Suppliers     |
-      | transferType   | 201            |
+      | transferType   | Inheritance of Entitlements|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
@@ -76,10 +96,14 @@ Feature: TC_10_ENTS - Transfer Application E2E (Individual to ETF Partner)
 
     # SECTION 5 : Merger (203)
     When the individual logs in as transferor "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | J1360045           |
       | transfereeName | Nestor Exports Ltd   |
-      | transferType   | 203            |
+      | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership)|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
@@ -92,10 +116,14 @@ Feature: TC_10_ENTS - Transfer Application E2E (Individual to ETF Partner)
 
     # SECTION 6 : Division (204)
     When the individual logs in as transferor "DANIELPAUL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | D1051289           |
       | transfereeName | Browne Exports Ltd   |
-      | transferType   | 204            |
+      | transferType   | Division of Entitlements (Scission)|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
@@ -108,10 +136,14 @@ Feature: TC_10_ENTS - Transfer Application E2E (Individual to ETF Partner)
 
     # SECTION 7 : Change of Registration (205)
     When the individual logs in as transferor "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | D1190050           |
       | transfereeName | Thomas Treanor       |
-      | transferType   | 205            |
+      | transferType   | Change of Registration Details|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
@@ -124,10 +156,14 @@ Feature: TC_10_ENTS - Transfer Application E2E (Individual to ETF Partner)
 
     # SECTION 8 : Change of Legal Entity (206)
     When the individual logs in as transferor "DANIELPAUL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | J1360045           |
       | transfereeName | Nestor Exports Ltd   |
-      | transferType   | 206            |
+      | transferType   | Change of Legal Entity|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
