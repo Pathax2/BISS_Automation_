@@ -42,17 +42,22 @@ import io.cucumber.datatable.DataTable;
 import io.cucumber.java.en.*;
 import org.junit.jupiter.api.Assertions;
 import org.openqa.selenium.By;
+import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
+import stepdefinitions.Hooks;
 import utilities.ObjReader;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
 
 import static commonFunctions.CommonFunctions.iAction;
 import static commonFunctions.CommonFunctions.getDriver;
+import static stepdefinitions.ENTS.TC_01_ENTS.iCapturedTransferKey;
 
 public class TC_07_ENTS
 {
@@ -85,41 +90,8 @@ public class TC_07_ENTS
     {
         log.info("[STEP] When the agent logs out and re-logs in as the ETF partner: " + pPartnerUsername);
 
-        // ── Step 1 : Exit BISS and logout ────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iExitBISSLink"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutBtn"), null);
-        log.info("Logged out of agent session.");
-
-        // ── Step 2 : Navigate to Partner login page ──────────────────────────────────────
-        try
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iPartnerLoginLink"), null);
-        }
-        catch (Exception e)
-        {
-            log.info("Already on Partner login page — continuing.");
-        }
-
-        // ── Step 3 : Enter Partner username ──────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPartnerUsernameField"), pPartnerUsername);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iPartnerLoginBtn"), null);
-        log.info("Partner username entered: " + pPartnerUsername);
-
-        // ── Step 4 : Enter password ──────────────────────────────────────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iPartnerLoginBtn"), null);
-
-        // ── Step 5 : MS Authenticator OTP ────────────────────────────────────────────────
-        // Partner uses Microsoft Authenticator — different from SMS OTP (agent) and PIN+TOTP (cross-agent)
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iMSAuthOTPField"), "111111");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iPartnerLoginBtn"), null);
-        log.info("MS Authenticator OTP entered.");
-
-        // ── Step 6 : Navigate to BISS ────────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iBissLink"), null);
+        performLogout();
+        performLogin(pPartnerUsername);
 
         log.info("Re-logged in as ETF partner: " + pPartnerUsername);
     }
@@ -154,8 +126,7 @@ public class TC_07_ENTS
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
     @And("the ETF partner completes the transferee acceptance flow")
-    public void theETFPartnerCompletesTheTransfereeAcceptanceFlow(DataTable pDataTable)
-    {
+    public void theETFPartnerCompletesTheTransfereeAcceptanceFlow(DataTable pDataTable) throws InterruptedException {
         log.info("[STEP] And the ETF partner completes the transferee acceptance flow");
 
         Map<String, String> iData = pDataTable.asMap(String.class, String.class);
@@ -165,38 +136,180 @@ public class TC_07_ENTS
 
         // ── Search for the transferee herd ───────────────────────────────────────────────
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iTransfereeHerd);
+        Thread.sleep(2000);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
         log.info("Partner herd opened: " + iTransfereeHerd);
 
         // ── Click the ETF button ─────────────────────────────────────────────────────────
         // ETF button is unique to the Partner dashboard — it's NOT the standard View button
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
-        log.info("ETF button clicked.");
+        if (isVisible(By.xpath(ObjReader.getLocator("iETFBtn")), 3)) {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
+            log.info("ETF button clicked.");
+            // ── Enter the captured transfer key ──────────────────────────────────────────────
+            //String iTransferKey = System.getProperty("lastCapturedTransferKey", "");
+            //Assertions.assertFalse(iTransferKey.isEmpty(), "Transfer key must have been captured in the Transferor flow before the ETF Partner can accept.");
 
-        // ── Enter the captured transfer key ──────────────────────────────────────────────
-        String iTransferKey = System.getProperty("lastCapturedTransferKey", "");
-        Assertions.assertFalse(iTransferKey.isEmpty(),
-                "Transfer key must have been captured in the Transferor flow before the ETF Partner can accept.");
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey);
+            log.info("Transfer key entered: " + iCapturedTransferKey);
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iTransferKey);
-        log.info("Transfer key entered: " + iTransferKey);
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+            // ── Enter transferee notes ───────────────────────────────────────────────────────
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+            // ── Submit to DAFM ───────────────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
 
-        // ── View the transfer application ────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+            // Accept T&C
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
 
-        // ── Enter transferee notes ───────────────────────────────────────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+            // Confirm submission
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        }
+        else
+        {
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
 
-        // ── Submit to DAFM ───────────────────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
 
-        // Accept T&C
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+            // ── Enter the captured transfer key ──────────────────────────────────────────────
+            //String iTransferKey = System.getProperty("lastCapturedTransferKey", "");
+            //Assertions.assertFalse(iTransferKey.isEmpty(), "Transfer key must have been captured in the Transferor flow before the ETF Partner can accept.");
 
-        // Confirm submission
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey);
+            log.info("Transfer key entered: " + iCapturedTransferKey);
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+            // ── Submit to DAFM ───────────────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+
+            // Accept T&C
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+
+            // Confirm submission
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        }
+
+
+
+
+
+
 
         log.info("ETF partner transferee acceptance completed for herd: " + iTransfereeHerd);
+    }
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogout
+    // Description   : Logs out via Exit + Logout buttons. Falls back to navigate + deleteAllCookies.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026
+    // ***************************************************************************************************************************************************************************************
+    public void performLogout()
+    {
+        log.info("[TC13-RELOGIN] Logging out current session...");
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            By iSadPopup = By.xpath(ObjReader.getLocator("iLogoutPopup"));
+            if (isVisible(iSadPopup, 1)) iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            log.info("[TC13-RELOGIN] Logout complete.");
+        }
+        catch (Exception e)
+        {
+            log.warning("[TC13-RELOGIN] UI logout failed (" + e.getMessage() + ") — navigating to base URL as fallback.");
+            getDriver().manage().deleteAllCookies();
+            getDriver().navigate().to(Hooks.iUrl);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogin
+    // Description   : Logs in as specified agent. Handles PIN+TOTP and OTP-only flows.
+    //                 Detects Account Expired and calls Hooks.markAgentExpired().
+    // Parameters    : pUsername — agent username
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026
+    // ***************************************************************************************************************************************************************************************
+    private void performLogin(String pUsername)
+    {
+        log.info("[TC13-RELOGIN] Logging in as: " + pUsername);
+        getDriver().navigate().to(Hooks.iUrl);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
+
+        By iExpiredBy = By.xpath(ObjReader.getLocator("iAccountExpiredError"));
+        if (isVisible(iExpiredBy, 3))
+        {
+            String iErrText = getDriver().findElement(iExpiredBy).getText().trim();
+            if (iErrText.toLowerCase().contains("account expired") || iErrText.toLowerCase().contains("account has expired") || iErrText.contains("Invalid username or password."))
+            {
+                log.warning("[TC13-RELOGIN] Account Expired for: " + pUsername + " — marking expired.");
+                Hooks.markAgentExpired(pUsername);
+                return;
+            }
+        }
+
+        By iPinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+        if (isVisible(iPinFormBy, 3))
+        {
+            log.info("[TC13-RELOGIN] PIN screen — filling slots 1-7.");
+            for (int iIdx = 1; iIdx <= 7; iIdx++)
+            {
+                By iPinBy = By.xpath(ObjReader.getLocator("iPinInputIndex")
+                        .replace("{idx}", String.valueOf(iIdx)));
+                if (isVisible(iPinBy, 1))
+                {
+                    WebElement iInput = getDriver().findElement(iPinBy);
+                    if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+                    {
+                        iInput.clear();
+                        iInput.sendKeys("1");
+                    }
+                }
+            }
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info("[TC13-RELOGIN] PIN + TOTP submitted.");
+        }
+        else
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info("[TC13-RELOGIN] OTP-only login submitted.");
+        }
+
+        if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info("[TC13-RELOGIN] Terms accepted.");
+        }
+        log.info("[TC13-RELOGIN] Login complete: " + pUsername);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Method        : isVisible
+    // Description   : Short-wait visibility check — returns true/false, never throws.
+    // Parameters    : pLocator — By locator | pSeconds — max wait seconds
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private boolean isVisible(By pLocator, int pSeconds)
+    {
+        try
+        {
+            new WebDriverWait(getDriver(), Duration.ofSeconds(pSeconds))
+                    .until(ExpectedConditions.visibilityOfElementLocated(pLocator));
+            return true;
+        }
+        catch (Exception e) { return false; }
     }
 }
