@@ -43,11 +43,11 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
 
   Background:
     Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
+    When the individual logs in as transferor "aga6322"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Clients page
+    And the agent switches to the "Transfers" tab on the My Client page
 
   @regression @transfers @agent-to-etf @e2e
   Scenario: AT-ENTS-TRANSFERS-E2E-07 - Agent completes all Agent-to-ETF Partner transfer types
@@ -63,7 +63,7 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
       | transferorHerd | J1390696      |
       | transfereeHerd | J1314060      |
       | transfereeName | Teresa Noone  |
-      | transferType   | 205           |
+      | transferType   | Change of Registration Details|
       | entitlements   | 0.01          |
       | notes          | Test Notes    |
     And the agent uploads the transferor signature document
@@ -71,7 +71,9 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     Then the transfer key should be captured
 
     # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "agr15594"
+    When the agent logs out and re-logs in as the ETF partner "aga6322"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
       | transfereeHerd | J1314060      |
       | notes          | Approved Test |
@@ -84,12 +86,16 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "aga6322"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1400039          |
       | transfereeHerd | J1350023          |
       | transfereeName | Frehill Suppliers |
-      | transferType   | 201               |
+      | transferType   | Inheritance of Entitlements|
       | entitlements   | 0.01              |
       | notes          | Test Notes        |
     And the agent uploads the transferor signature document
@@ -97,9 +103,11 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     Then the transfer key should be captured
 
     # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "agr15594"
+    When the agent logs out and re-logs in as the ETF partner "aga6322"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | J1350023      |
+      | transfereeHerd | Frehill Suppliers      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -110,12 +118,16 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "aga6322"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1410417           |
       | transfereeHerd | J1360045           |
       | transfereeName | Nestor Exports Ltd |
-      | transferType   | 202                |
+      | transferType   | Gift of Entitlements|
       | entitlements   | 0.01               |
       | notes          | Test Notes         |
     And the agent uploads the transferor signature document
@@ -123,9 +135,11 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     Then the transfer key should be captured
 
     # --- Transferee (ETF Partner — different partner account) ---
-    When the agent logs out and re-logs in as the ETF partner "agr15678"
+    When the agent logs out and re-logs in as the ETF partner "aga6454"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | J1360045      |
+      | transfereeHerd | Nestor Exports Ltd      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -137,12 +151,16 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "aga6365"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1400195          |
       | transfereeHerd | J1350309          |
       | transfereeName | Cadden Suppliers  |
-      | transferType   | 211               |
+      | transferType   | Lease of Entitlements|
       | entitlements   | 0.01              |
       | leaseYear      | Yes               |
       | notes          | Test Notes        |
@@ -151,7 +169,9 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     Then the transfer key should be captured
 
     # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "agr15678"
+    When the agent logs out and re-logs in as the ETF partner "aga6454"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
       | transfereeHerd | J1350309      |
       | notes          | Approved Test |
@@ -164,12 +184,16 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "aga6322"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1400217    |
       | transfereeHerd | J1350147    |
       | transfereeName | Sean Lally  |
-      | transferType   | 203         |
+      | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
       | entitlements   | 0.01        |
       | notes          | Test Notes  |
     And the agent uploads the transferor signature document
@@ -177,7 +201,9 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     Then the transfer key should be captured
 
     # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "agr15512"
+    When the agent logs out and re-logs in as the ETF partner "aga6066"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
       | transfereeHerd | J1350147      |
       | notes          | Approved Test |
@@ -190,12 +216,16 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "aga6322"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J140033X    |
       | transfereeHerd | V2631112    |
       | transfereeName | Nora White  |
-      | transferType   | 204         |
+      | transferType   | Division of Entitlements (Scission) |
       | entitlements   | 0.01        |
       | notes          | Test Notes  |
     And the agent uploads the transferor signature document
@@ -203,7 +233,9 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     Then the transfer key should be captured
 
     # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "agr15512"
+    When the agent logs out and re-logs in as the ETF partner "aga6322"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
       | transfereeHerd | V2631112      |
       | notes          | Approved Test |
@@ -216,12 +248,16 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "aga6322"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1400519    |
       | transfereeHerd | J1350147    |
       | transfereeName | Sean Lally  |
-      | transferType   | 212         |
+      | transferType   |  Sale of Entitlements |
       | entitlements   | 0.01        |
       | notes          | Test Notes  |
     And the agent uploads the transferor signature document
@@ -229,7 +265,9 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     Then the transfer key should be captured
 
     # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "agr15512"
+    When the agent logs out and re-logs in as the ETF partner "aga6066"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
       | transfereeHerd | J1350147      |
       | notes          | Approved Test |
@@ -242,12 +280,16 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     # ===========================================
 
     # --- Transferor ---
-    When the agent logs out and re-logs in as the transferor agent
+    When the agent logs out and re-log in as the transferee agent "aga6322"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1350350              |
       | transfereeHerd | J1350457              |
       | transfereeName | Michael Gerard Gargan |
-      | transferType   | 206                   |
+      | transferType   | Change of Legal Entity|
       | entitlements   | 0.01                  |
       | notes          | Test Notes            |
     And the agent uploads the transferor signature document
@@ -255,7 +297,9 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     Then the transfer key should be captured
 
     # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "agr15512"
+    When the agent logs out and re-logs in as the ETF partner "aga6505"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
       | transfereeHerd | J1350457      |
       | notes          | Approved Test |
