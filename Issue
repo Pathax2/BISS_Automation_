@@ -1,25 +1,97 @@
-Feature: TC_14_ENTS - ETF Authorisation (Individual adds ETF auth)
+// ===================================================================================================================================
+// TC_14_ENTS.java | package stepdefinitions.ENTS
+// ETF Authorisation steps (Individual adds ETF auth with integrated ETF00009 management)
+// Author: Aniket Pathare | Created: 31-03-2026 | Updated: 01-07-2026
+// ===================================================================================================================================
 
-  # Migrated from: TC_14_ENTS.feature (1 scenario)
-  # Individual logs in, adds ETF authorisation, then ETF partner verifies
-  # Author: Aniket Pathare | Created: 31-03-2026
+package stepdefinitions.ENTS;
 
-  @sanity @etf-auth
-  Scenario: AT-ENTS-ETF-AUTH - Individual adds ETF Authorisation and ETF partner verifies
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import utilities.ObjReader;
+import java.util.Map;
+import java.util.logging.Logger;
+import static commonFunctions.CommonFunctions.iAction;
+import static commonFunctions.CommonFunctions.getDriver;
+import org.openqa.selenium.By;
+import java.util.List;
 
-    # --- Individual adds ETF authorisation ---
-    When the individual logs in as transferor "PAUDYFROG"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers                 |
-    #
-    And the individual adds ETF authorisation with the following details
-      | etfCode          | SMYTH, SHEILA - [ETF00009] |
-      | txorEntsAllowed  | 2        |
-      | txeeEntsAllowed  | 3        |
+public class TC_14_ENTS
+{
+    private static final Logger log = Logger.getLogger(TC_14_ENTS.class.getName());
 
-    # --- ETF Partner verifies ---
-    When the agent logs out and re-logs in as the ETF partner "agr15512"
-    And the ETF partner searches for herd "Y104069X" and opens it
-    Then the ETF authorisation should be visible
+    @And("the individual adds ETF authorisation with the following details")
+    public void theIndividualAddsETFAuthorisation(DataTable pDataTable)
+    {
+        log.info("[STEP] Individual adds ETF authorisation");
+        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
+        
+        // Check if ETF00009 exists and delete if found
+        try
+        {
+            log.info("Checking if ETF00009 exists in the table");
+            String iETF00009RowXPath = ObjReader.getLocator("iETF00009TableRow");
+            List<org.openqa.selenium.WebElement> iRowElements = getDriver().findElements(By.xpath(iETF00009RowXPath));
+            
+            if(iRowElements != null && !iRowElements.isEmpty())
+            {
+                log.info("ETF00009 found - deleting and re-entering");
+                
+                String iDeleteButtonXPath = ObjReader.getLocator("iETF00009DeleteBtn");
+                String iEditButtonXPath = ObjReader.getLocator("iETF00009EditBtn");
+                
+                iAction("CLICK", "XPATH", iDeleteButtonXPath, null);
+                log.info("Delete button clicked for ETF00009");
+                
+                Thread.sleep(500);
+                
+                iAction("CLICK", "XPATH", iEditButtonXPath, null);
+                log.info("Edit button clicked for ETF00009");
+                
+                Thread.sleep(500);
+                
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTxorEntsAllowedField"), iData.get("txorEntsAllowed").trim());
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTxeeEntsAllowedField"), iData.get("txeeEntsAllowed").trim());
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAddETFAuthorisationConfirmBtn"), null);
+                
+                log.info("ETF00009 updated - txorEntsAllowed: " + iData.get("txorEntsAllowed") + 
+                         ", txeeEntsAllowed: " + iData.get("txeeEntsAllowed"));
+            }
+            else
+            {
+                log.info("ETF00009 not found - proceeding with normal flow");
+            }
+        }
+        catch(Exception e)
+        {
+            log.info("ETF00009 check completed (not found or error) - proceeding with normal flow");
+        }
+
+        // Add ETF authorisation (normal flow)
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAllowEntitlementBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAddETFAuthorisationBtn"), null);
+        
+        iAction("LIST", "XPATH", ObjReader.getLocator("iETFAvailableDropdown"), iData.get("etfCode").trim());
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTxorEntsAllowedField"), iData.get("txorEntsAllowed").trim());
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTxeeEntsAllowedField"), iData.get("txeeEntsAllowed").trim());
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAddETFAuthorisationConfirmBtn"), null);
+        
+        log.info("ETF authorisation added: " + iData.get("etfCode"));
+    }
+
+    @And("the ETF partner searches for herd {string} and opens it")
+    public void theETFPartnerSearchesForHerdAndOpensIt(String pHerd)
+    {
+        log.info("[STEP] ETF partner searches for herd: " + pHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
+    }
+
+    @Then("the ETF authorisation should be visible")
+    public void theETFAuthorisationShouldBeVisible()
+    {
+        log.info("[STEP] Verifying ETF authorisation is visible");
+        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iETFAuthorisationRow"), null);
+    }
+}
