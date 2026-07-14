@@ -1,70 +1,394 @@
-Feature: TC_01_STAFF - Map Printing by Herd Number E2E Regression Pack
+// ===================================================================================================================================
+// File          : StaffSteps.java
+// Package       : stepdefinitions.STAFF
+// Description   : Single shared step-definition class for the modernised BISS Staff (internal
+//                 portal) E2E regression packs. Every repeated action across the legacy Staff
+//                 feature files — login, data-protection consent, application entry, tab
+//                 switching, search, dropdown handling, navigation, and error validation — is
+//                 defined ONCE here as a parameterised step and reused by every TC_xx_STAFF
+//                 feature.
+//
+//                 Design principles (aligned with the framework conventions):
+//                   - iAction() for every UI interaction
+//                   - ObjReader.getLocator("key") for every locator lookup
+//                   - i-prefixed local variables, p-prefixed parameters
+//                   - DataTable.asMap() for feature-supplied data
+//                   - Per-step comment blocks (description, parameters, author, date)
+//
+//                 Data source:
+//                   Herd / parcel / reference values are supplied by the feature via DataTable
+//                   (no "from row N" DB coupling). This keeps each E2E flow self-describing.
+//
+// Locator keys used (add any missing keys to ObjectRepository.properties, Staff sections):
+//   iStaffUsernameField, iStaffPasswordField, iStaffDataProtectionCheckbox, iStaffLoginBtn,
+//   iAppSearchBar, iStaffMapPrintingTab, iStaffGenericTab (parameterised via text),
+//   iStaffHerdNumberField, iStaffParcelNumberField, iStaffReferenceNumberField,
+//   iStaffSchemeYearDropdown, iStaffSchemeYearOption (parameterised), iStaffSearchBtn,
+//   iStaffGenericButton (parameterised by visible text), iStaffMultiDropdown (parameterised),
+//   iStaffMultiDropdownSelectAll, iStaffMapTypeDropdown, iStaffMapTypeOption (parameterised),
+//   iStaffLegendIndicatorCheckbox, iStaffGenerateMapBtn, iStaffErrorMessage (parameterised),
+//   iStaffNavbarLink (parameterised), iStaffAppSearchTableViewLink (parameterised by action+number)
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 14-07-2026
+// ===================================================================================================================================
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Single end-to-end regression journey covering Map Printing by Herd Number Search on the
-  #   BISS Staff (internal) portal. Consolidates the legacy multi-scenario Map-Printing-with-Herd
-  #   pack (AT-TC-01, AT-TC-02, AT-TC-04) into one continuous E2E flow.
-  #
-  #   Sections covered:
-  #     Section 1 : Generate map by herd - single parcel change   (legacy AT-TC-01)
-  #     Section 2 : Herd number required validation                (legacy AT-TC-02)
-  #     Section 3 : Generate map by herd - all parcels selected    (legacy AT-TC-04)
-  #
-  # Migrated from: Feature "Regression Suite for Map Printing with Herd" (3 separate scenarios)
-  #
-  # Modernisation notes:
-  #   - Login block collapsed into Background (was repeated in every scenario)
-  #   - Herd values now supplied via DataTable in the feature (no "from row N" DB coupling)
-  #   - Search + generate settings expressed as DataTables for readability
-  #   - Env-dependent map generation left as-is; validation steps are soft where optional
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 14-07-2026
-  # --------------------------------------------------------------------------------------------------------------------
+package stepdefinitions.STAFF;
 
-  Background:
-    Given user on staff login page
-    When Staff logs in with the following credentials
-      | username        | agr11612 |
-    And Staff opens the "Basic Income Support for Sustainability" application
-    And Staff switches to the "Map Printing" tab
+import commonFunctions.CommonFunctions;
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.And;
+import io.cucumber.java.en.Given;
+import io.cucumber.java.en.Then;
+import io.cucumber.java.en.When;
+import org.junit.jupiter.api.Assertions;
+import org.openqa.selenium.By;
 
-  @regression @staff @map-printing @herd @e2e
-  Scenario: AT-STAFF-MAP-HERD-E2E-01 - Staff generates maps by herd number and validates required-field errors
+import utilities.ObjReader;
 
-    # ===========================================
-    # SECTION 1 : Generate map by herd (single parcel change)
-    # Covers: AT-TC-01  (BISSAGL-14969)
-    # ===========================================
-    When Staff searches on the Map Printing screen with the following details
-      | field       | herdNumber |
-      | herdValue   | N106036X   |
-      | schemeYear  | 2023       |
-    And Staff changes the "parcelSelect" multi-option dropdown value
-    And Staff selects the following map generation settings
-      | mapTypeSelect | Full Color Ortho A4 |
-    And Staff clicks the Legend Indicator checkbox
-    Then Staff clicks the "Generate map" button
+import java.util.Map;
+import java.util.logging.Logger;
 
-    # ===========================================
-    # SECTION 2 : Herd number required validation
-    # Covers: AT-TC-02  (BISSAGL-14968)
-    # ===========================================
-    When Staff switches to the "Map Printing" tab
-    And Staff clicks the "Search" button
-    Then Staff should see the error message "Herd number required."
+import static commonFunctions.CommonFunctions.iAction;
+import static commonFunctions.CommonFunctions.getDriver;
 
-    # ===========================================
-    # SECTION 3 : Generate map by herd (all parcels selected)
-    # Covers: AT-TC-04  (BISSAGL-14966)
-    # ===========================================
-    When Staff searches on the Map Printing screen with the following details
-      | field       | herdNumber |
-      | herdValue   | N106036X   |
-      | schemeYear  | 2023       |
-    And Staff selects all values in the "parcelSelect" multi-option dropdown
-    And Staff selects the following map generation settings
-      | mapTypeSelect | Full Color Ortho A4 |
-    And Staff clicks the Legend Indicator checkbox
-    Then Staff clicks the "Generate map" button
+public class StaffSteps
+{
+    private static final Logger log = Logger.getLogger(StaffSteps.class.getName());
+
+    // ===============================================================================================================================
+    //  LOGIN / SESSION  (shared Background steps)
+    // ===============================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff logs in with the following credentials (DataTable)
+    // Description    : Full staff login flow in one reusable step — enters the username supplied
+    //                  by the feature, enters the password (from config/secure store via the
+    //                  existing enterPassword mechanism), ticks the Data Protection consent
+    //                  checkbox, and clicks the Login button.
+    // Parameters     : pDataTable (DataTable) - single-row map with key:
+    //                    username (String) - the staff account, e.g. "agr11612"
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("Staff logs in with the following credentials")
+    public void staffLogsInWithTheFollowingCredentials(DataTable pDataTable)
+    {
+        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
+        String iUsername = iData.get("username").trim();
+        log.info("[STEP] Staff logs in with username: " + iUsername);
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iStaffUsernameField"), iUsername);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iStaffPasswordField"), CommonFunctions.getStaffPassword());
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iStaffDataProtectionCheckbox"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iStaffLoginBtn"), null);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff opens the "<application>" application
+    // Description    : Clicks the named application tile on the Authorised Applications home
+    //                  screen (e.g. "Basic Income Support for Sustainability"). Parameterised so
+    //                  the same step opens BISS, SSO Administration, etc.
+    // Parameters     : pApplication (String) - the application tile display name
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff opens the {string} application")
+    public void staffOpensTheApplication(String pApplication)
+    {
+        log.info("[STEP] Staff opens the application: " + pApplication);
+        String iLocator = ObjReader.getLocator("iStaffApplicationTile").replace("{APP}", pApplication);
+        iAction("CLICK", "XPATH", iLocator, null);
+    }
+
+    // ===============================================================================================================================
+    //  TAB SWITCHING / NAVIGATION
+    // ===============================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff switches to the "<tab>" tab
+    // Description    : Switches to the named top-level tab on the Staff portal (e.g.
+    //                  "Map Printing", "Parcels", "Online Response", "Reference No.").
+    // Parameters     : pTab (String) - visible tab label
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff switches to the {string} tab")
+    public void staffSwitchesToTheTab(String pTab)
+    {
+        log.info("[STEP] Staff switches to the tab: " + pTab);
+        String iLocator = ObjReader.getLocator("iStaffGenericTab").replace("{TAB}", pTab);
+        iAction("CLICK", "XPATH", iLocator, null);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff clicks on "<link>" Link in Navbar
+    // Description    : Clicks a left-hand navigation-bar link within an opened application
+    //                  (e.g. "SIM", "Payments", "Notes/History", "Inspections", "Home").
+    // Parameters     : pLink (String) - visible navbar link text
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("Staff clicks on {string} Link in Navbar")
+    public void staffClicksOnLinkInNavbar(String pLink)
+    {
+        log.info("[STEP] Staff clicks navbar link: " + pLink);
+        String iLocator = ObjReader.getLocator("iStaffNavbarLink").replace("{LINK}", pLink);
+        iAction("CLICK", "XPATH", iLocator, null);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff clicks the "<action>" link number <n> in the "<table>" table
+    // Description    : Clicks the View / Amend action link on a given row of a named results
+    //                  table (e.g. the "application-search-table"). Row is 1-indexed.
+    // Parameters     : pAction (String) - link text, e.g. "View" or "Amend"
+    //                  pRow (int)       - 1-based row number
+    //                  pTable (String)  - table identifier, e.g. "application-search-table"
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff clicks the {string} link number {int} in the {string} table")
+    public void staffClicksTheLinkNumberInTheTable(String pAction, int pRow, String pTable)
+    {
+        log.info("[STEP] Staff clicks '" + pAction + "' link number " + pRow + " in table '" + pTable + "'");
+        String iLocator = ObjReader.getLocator("iStaffTableActionLink")
+                .replace("{TABLE}", pTable)
+                .replace("{ACTION}", pAction)
+                .replace("{ROW}", String.valueOf(pRow));
+        iAction("CLICK", "XPATH", iLocator, null);
+    }
+
+    // ===============================================================================================================================
+    //  SEARCH  (herd / parcel / reference)  — DataTable-driven
+    // ===============================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff searches on the Map Printing screen with the following details (DataTable)
+    // Description    : Enters a herd (or parcel) value into the named field, selects the scheme
+    //                  year, and clicks Search — all from a single DataTable. The field key names
+    //                  which input to use ("herdNumber" or "parcelNumber"); the corresponding
+    //                  value key ("herdValue" / "parcelValue") supplies the text.
+    // Parameters     : pDataTable (DataTable) - keys:
+    //                    field       (String) - "herdNumber" or "parcelNumber"
+    //                    herdValue   (String) - value when field is herdNumber   (optional)
+    //                    parcelValue (String) - value when field is parcelNumber (optional)
+    //                    schemeYear  (String) - scheme year to select, e.g. "2023"
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("Staff searches on the Map Printing screen with the following details")
+    public void staffSearchesOnTheMapPrintingScreenWithTheFollowingDetails(DataTable pDataTable)
+    {
+        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
+        String iField      = iData.get("field").trim();
+        String iSchemeYear = iData.get("schemeYear").trim();
+        String iValue      = iData.containsKey("herdValue") ? iData.get("herdValue") : iData.get("parcelValue");
+        iValue = (iValue == null) ? null : iValue.trim();
+
+        log.info("[STEP] Staff Map Printing search — field=" + iField + ", value=" + iValue + ", year=" + iSchemeYear);
+
+        staffEntersValueInField(iValue, iField);
+        staffSelectsSchemeYear(iSchemeYear);
+        staffClicksButton("Search");
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff enters value "<value>" in the "<field>" field
+    // Description    : Generic text entry into a named Staff input field. The field name maps to
+    //                  a locator key (herdNumber -> iStaffHerdNumberField, etc.). Reusable for
+    //                  herd, parcel, reference, surname and helpdesk-username fields.
+    // Parameters     : pValue (String) - text to enter (null/blank simply clears/enters nothing)
+    //                  pField (String) - logical field name
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("Staff enters value {string} in the {string} field")
+    public void staffEntersValueInField(String pValue, String pField)
+    {
+        log.info("[STEP] Staff enters '" + pValue + "' in field '" + pField + "'");
+        String iLocator = ObjReader.getLocator("iStaffInputField").replace("{FIELD}", pField);
+        iAction("TEXTBOX", "XPATH", iLocator, pValue);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff selects scheme year "<year>"
+    // Description    : Opens the schemeYear dropdown and selects the supplied year value.
+    // Parameters     : pYear (String) - scheme year, e.g. "2023"
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("Staff selects scheme year {string}")
+    public void staffSelectsSchemeYear(String pYear)
+    {
+        log.info("[STEP] Staff selects scheme year: " + pYear);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStaffSchemeYearDropdown"), null);
+        String iOption = ObjReader.getLocator("iStaffSchemeYearOption").replace("{YEAR}", pYear);
+        iAction("CLICK", "XPATH", iOption, null);
+    }
+
+    // ===============================================================================================================================
+    //  GENERIC BUTTONS
+    // ===============================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff clicks the "<button>" button
+    // Description    : Clicks any button identified by its visible text (e.g. "Search",
+    //                  "Generate map", "Save changes", "Next", "Submit Changes", "Finish").
+    //                  A single parameterised step replaces the dozens of literal button steps
+    //                  in the legacy files.
+    // Parameters     : pButton (String) - the button's visible label
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("Staff clicks the {string} button")
+    public void staffClicksButton(String pButton)
+    {
+        log.info("[STEP] Staff clicks button: " + pButton);
+        String iLocator = ObjReader.getLocator("iStaffGenericButton").replace("{BTN}", pButton);
+        iAction("CLICK", "XPATH", iLocator, null);
+    }
+
+    // ===============================================================================================================================
+    //  MULTI-OPTION DROPDOWNS  (Map Printing parcel/vector/imagery selectors)
+    // ===============================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff changes the "<dropdown>" multi-option dropdown value
+    // Description    : Opens a multi-select dropdown (e.g. "parcelSelect", "vectorSelect") and
+    //                  changes its selection using the framework's standard toggle behaviour,
+    //                  then closes the panel.
+    // Parameters     : pDropdown (String) - formcontrol/logical name of the multi-select
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff changes the {string} multi-option dropdown value")
+    public void staffChangesTheMultiOptionDropdownValue(String pDropdown)
+    {
+        log.info("[STEP] Staff changes multi-option dropdown: " + pDropdown);
+        String iOpen = ObjReader.getLocator("iStaffMultiDropdown").replace("{DD}", pDropdown);
+        iAction("CLICK", "XPATH", iOpen, null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStaffMultiDropdownFirstOption"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStaffMultiDropdownClosePanel"), null);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff selects all values in the "<dropdown>" multi-option dropdown
+    // Description    : Opens a multi-select dropdown and clicks its "select all" control, then
+    //                  closes the panel.
+    // Parameters     : pDropdown (String) - formcontrol/logical name of the multi-select
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff selects all values in the {string} multi-option dropdown")
+    public void staffSelectsAllValuesInTheMultiOptionDropdown(String pDropdown)
+    {
+        log.info("[STEP] Staff selects all values in multi-option dropdown: " + pDropdown);
+        String iOpen = ObjReader.getLocator("iStaffMultiDropdown").replace("{DD}", pDropdown);
+        iAction("CLICK", "XPATH", iOpen, null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStaffMultiDropdownSelectAll"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStaffMultiDropdownClosePanel"), null);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff opens and closes the "<dropdown>" multi-option dropdown value
+    // Description    : Opens a multi-select dropdown and immediately closes it without selecting
+    //                  — used by the "required" validation cases where leaving a selector empty
+    //                  should raise an error.
+    // Parameters     : pDropdown (String) - formcontrol/logical name of the multi-select
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff opens and closes the {string} multi-option dropdown value")
+    public void staffOpensAndClosesTheMultiOptionDropdownValue(String pDropdown)
+    {
+        log.info("[STEP] Staff opens and closes multi-option dropdown: " + pDropdown);
+        String iOpen = ObjReader.getLocator("iStaffMultiDropdown").replace("{DD}", pDropdown);
+        iAction("CLICK", "XPATH", iOpen, null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStaffMultiDropdownClosePanel"), null);
+    }
+
+    // ===============================================================================================================================
+    //  MAP GENERATION SETTINGS
+    // ===============================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff selects the following map generation settings (DataTable)
+    // Description    : Applies one or more single-select map generation dropdowns from a
+    //                  DataTable. Each key is the dropdown's logical name (mapTypeSelect,
+    //                  imagerySelect, rasterSelect) and each value is the option to select.
+    //                  Keys are applied in row order, so a feature can set map type then imagery
+    //                  then raster in one readable block.
+    // Parameters     : pDataTable (DataTable) - dropdownName -> optionValue pairs
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff selects the following map generation settings")
+    public void staffSelectsTheFollowingMapGenerationSettings(DataTable pDataTable)
+    {
+        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
+        for (Map.Entry<String, String> iEntry : iData.entrySet())
+        {
+            String iDropdown = iEntry.getKey().trim();
+            String iOption   = iEntry.getValue().trim();
+            log.info("[STEP] Staff selects map setting — " + iDropdown + " = " + iOption);
+
+            String iDdLocator = ObjReader.getLocator("iStaffSingleSelectDropdown").replace("{DD}", iDropdown);
+            iAction("CLICK", "XPATH", iDdLocator, null);
+
+            String iOptLocator = ObjReader.getLocator("iStaffSingleSelectOption").replace("{OPT}", iOption);
+            iAction("CLICK", "XPATH", iOptLocator, null);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff selects "<type>" as Map Printing Type
+    // Description    : Selects the Map Printing type radio/segmented control (e.g. "Parcel" or
+    //                  "Herd") that switches the search mode on the Map Printing screen.
+    // Parameters     : pType (String) - the map printing type label
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff selects {string} as Map Printing Type")
+    public void staffSelectsAsMapPrintingType(String pType)
+    {
+        log.info("[STEP] Staff selects Map Printing type: " + pType);
+        String iLocator = ObjReader.getLocator("iStaffMapPrintingType").replace("{TYPE}", pType);
+        iAction("CLICK", "XPATH", iLocator, null);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff clicks the Legend Indicator checkbox
+    // Description    : Ticks the Legend Indicator checkbox in the map generation settings panel.
+    // Parameters     : None
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("Staff clicks the Legend Indicator checkbox")
+    public void staffClicksTheLegendIndicatorCheckbox()
+    {
+        log.info("[STEP] Staff clicks the Legend Indicator checkbox");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStaffLegendIndicatorCheckbox"), null);
+    }
+
+    // ===============================================================================================================================
+    //  VALIDATION / ASSERTIONS
+    // ===============================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Staff should see the error message "<message>"
+    // Description    : Asserts that the given validation error message is visible on screen.
+    //                  Uses a parameterised locator matching the message text so one step covers
+    //                  every "X required." / "X invalid" validation in the legacy files.
+    // Parameters     : pMessage (String) - the exact error text expected
+    // Author         : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created   : 14-07-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("Staff should see the error message {string}")
+    public void staffShouldSeeTheErrorMessage(String pMessage)
+    {
+        log.info("[STEP] Staff verifies error message: " + pMessage);
+        String iLocator = ObjReader.getLocator("iStaffErrorMessage").replace("{MSG}", pMessage);
+        boolean iVisible = !getDriver().findElements(By.xpath(iLocator)).isEmpty();
+        Assertions.assertTrue(iVisible, "Expected error message not displayed: " + pMessage);
+    }
+}
