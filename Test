@@ -1,127 +1,86 @@
-Overview
-Over Q1 and into Q2 2026, I led a comprehensive modernisation of the BISS (Basic Income Support for Sustainability) test automation framework, transforming it from a brittle, hand-maintained suite of 135+ hard-coded test scripts into a self-service, data-driven, self-healing regression engine. This improvement directly addresses engineering quality, team productivity, and risk reduction in government-critical payment-validation processes.
+# ===================================================================================================================================
+# SECTION : STAFF PORTAL — Shared parameterised locators for StaffSteps.java
+# ---------------------------------------------------------------------------------------------------------------------------------
+# Keys ending in a {TOKEN} carry a placeholder that StaffSteps.java replaces at runtime via
+# String.replace(...) before passing to iAction (same idea as the existing %s keys, but token-named).
+#   {APP}   application tile name        {TAB}    top-level tab label
+#   {LINK}  navbar link text             {FIELD}  logical input-field name
+#   {YEAR}  scheme year                  {BTN}    button visible text
+#   {DD}    multi/single dropdown name   {OPT}    dropdown option text
+#   {TYPE}  map printing type            {MSG}    error message text
+#   {TABLE}/{ACTION}/{ROW}  results-table action link
+# Verify each XPath against the live DOM before committing — values below follow the framework's
+# existing Angular Material / Keycloak conventions but the Staff screens should be spot-checked.
+# ===================================================================================================================================
 
-Problem Identified
-The legacy automation suite exhibited critical structural defects:
+# ---- Login (Keycloak) ----
+# Staff username field on the Keycloak login form
+iStaffUsernameField                 = //input[@id='username']
 
-• 90+ copy-pasted login blocks — any login flow change required editing dozens of files by hand
-• 300+ hard-coded herd numbers and person names — tests broke when data was exhausted; sensitive PII sat in comments (data-governance risk)
-• ~40% dead code — obsolete commented-out steps shipped every run, eroding confidence
-• Placeholder assertions — verification steps checked against masked values that could never fail, giving false-positive passes
-• Zero resilience — a single flaky request or expired login halted the entire run; no recovery
-• Manual data preparation — someone had to maintain a spreadsheet of valid test herds before each run
-• No scheduled execution — results were ad-hoc; no nightly confidence baseline for the business
-Solution Implemented
-1. Data-Driven Architecture (No Hard-Coded Test Records)
-Built a two-database routing layer (DBRouter) querying live Oracle DATA and iNet schemas at startup. The @BeforeAll bootstrap automatically selects a valid herd, shuffles candidates, validates the owning agent, and resolves the pair before any scenario runs. Tests declare intent ("open a dashboard using herd data") — the framework sources the actual herd at runtime.
+# Staff password field on the Keycloak login form
+iStaffPasswordField                 = //input[@id='password']
 
-• Result: Every run gets fresh data; nothing goes stale; zero manual spreadsheet maintenance.
-2. Business-Language Tests (Readable, Auditable, Maintainable)
-Migrated 135+ imperative "Agent Click / Fill / Select" scripts into declarative Gherkin scenarios describing the BISS process in plain language. Each scenario chains a complete business flow (login → navigation → data entry → submission) into a coherent narrative.
+# Data Protection consent checkbox on the staff login page
+iStaffDataProtectionCheckbox        = //input[@type='checkbox' and @id='dataProtection'] | //mat-checkbox[contains(.,'Data Protection')]//input[@type='checkbox']
 
-• Result: Analysts and compliance officers can read tests without developer translation; coverage is audit-traceable to Jira.
-3. Self-Healing & Resilience (6-Layer Recovery)
-Implemented a graduated recovery system:
+# Login / submit button
+iStaffLoginBtn                      = //*[@id='kc-login'] | //button[normalize-space()='Login']
 
-1. Smart waits using FluentWait & WaitStrategy enums — no Thread.sleep()
-2. Angular Material dropdown self-heal — standard select → root FluentWait → overlay-portal fallback
-3. Expired-login recovery — detects SSO expiry, marks agent expired, re-queries database, retries automatically
-4. Blacklist & re-fetch — skip used herds, draw next candidate (up to 15 retries)
-5. Scenario-level retry — RetryAnalyser re-runs flaky scenarios before failing
-6. Soft assertions — collect failures, report together; maximise coverage per run
-• Result: Real failures (network, expired logins, data contention) no longer stop the run; self-recovery is automatic.
-4. Centralised Locator Repository (405 Shared Keys)
-Consolidated all UI selectors (405 locator keys) into ObjectRepository.properties. Built LocatorHarvester to auto-scan the DOM, generate validated XPaths with confidence scoring, and merge with curated locators. Tests never hold a raw XPath.
+# ---- Application entry ----
+# Application tile on the Authorised Applications home screen — {APP} = tile display name
+iStaffApplicationTile               = //span[normalize-space()='{APP}']/ancestor::a | //*[normalize-space()='{APP}' and (self::a or self::button)]
 
-• Result: A screen change means one edit, not 50+; test maintenance time collapses.
-5. Professional Reporting (4 Formats)
-Every nightly run produces:
+# ---- Tabs / navigation ----
+# Top-level tab on the Staff portal — {TAB} = visible tab label
+iStaffGenericTab                    = //div[@role='tab' and normalize-space()='{TAB}'] | //a[normalize-space()='{TAB}'] | //span[normalize-space()='{TAB}']/ancestor::*[self::a or self::button][1]
 
-• HTML Executive Dashboard — pass/fail donut, drill-down to failing step with screenshot
-• Word Evidence Documents — step-by-step screenshots embedded via Apache POI (government audit trail)
-• JUnit XML — machine-readable for Jenkins trend analysis
-• Post-Run Email — styled summary sent to stakeholders automatically
-• Result: Stakeholders see results in their inbox each morning; no one asks "how did it go?"
-6. Automated Scheduling (Nightly on Jenkins/OpenShift)
-Committed Jenkinsfile with Maven execution and cron trigger (22:00 Mon–Fri). Results visible on build dashboard. Post-execution email and HTML report publishing integrated.
+# Left-hand navbar link inside an opened application — {LINK} = link text
+iStaffNavbarLink                    = //a[normalize-space()='{LINK}'] | //span[normalize-space()='{LINK}']/ancestor::a[1]
 
-• Result: Confidence baseline every morning; zero manual execution needed.
-Technical Scope
-Dimension
+# Results-table action link on a given row — {TABLE} id, {ACTION} link text, {ROW} 1-based index
+iStaffTableActionLink               = (//table[@id='{TABLE}']//a[normalize-space()='{ACTION}'])[{ROW}]
 
-Count
+# ---- Search inputs ----
+# Generic staff input field by logical name — {FIELD} maps to formcontrolname/id
+iStaffInputField                    = //input[@formcontrolname='{FIELD}'] | //input[@id='{FIELD}']
 
-Reality
+# schemeYear dropdown trigger
+iStaffSchemeYearDropdown            = //mat-select[@formcontrolname='schemeYear']
 
-Framework Size
+# schemeYear option in the open panel — {YEAR} = year value
+iStaffSchemeYearOption              = //mat-option//span[normalize-space()='{YEAR}']
 
-2 live Oracle DBs
+# ---- Generic buttons ----
+# Any button by visible text — {BTN} = button label
+iStaffGenericButton                 = //button[normalize-space()='{BTN}']
 
-DATA (herds) + iNet (agents) — HikariCP pooled
+# ---- Multi-option dropdowns (parcelSelect / vectorSelect / imagerySelect etc.) ----
+# Multi-select trigger by formcontrolname — {DD} = control name
+iStaffMultiDropdown                 = //mat-select[@formcontrolname='{DD}']
 
-Locator Keys
+# First selectable option in the open multi-select panel
+iStaffMultiDropdownFirstOption      = (//mat-option[not(@aria-disabled='true')])[1]
 
-405 centralised
+# "Select all" option in the open multi-select panel
+iStaffMultiDropdownSelectAll        = //mat-option//span[normalize-space()='Select All'] | //mat-option[@aria-label='Select All']
 
-One source of truth for UI
+# Close the open dropdown panel (backdrop click)
+iStaffMultiDropdownClosePanel       = //div[contains(@class,'cdk-overlay-backdrop')]
 
-Hard-Coded Herds in Tests
+# ---- Single-select map generation dropdowns ----
+# Single-select trigger by formcontrolname — {DD} = control name (mapTypeSelect/imagerySelect/rasterSelect)
+iStaffSingleSelectDropdown          = //mat-select[@formcontrolname='{DD}']
 
-0
+# Single-select option in the open panel — {OPT} = option text
+iStaffSingleSelectOption            = //mat-option//span[normalize-space()='{OPT}']
 
-All resolved live from database
+# ---- Map Printing specifics ----
+# Map Printing type radio/segmented control — {TYPE} = "Parcel"/"Herd"
+iStaffMapPrintingType               = //mat-radio-button[.//*[normalize-space()='{TYPE}']] | //label[normalize-space()='{TYPE}']
 
-Login Duplication
+# Legend Indicator checkbox in the map generation settings panel
+iStaffLegendIndicatorCheckbox       = //mat-checkbox[contains(.,'Legend')]//input[@type='checkbox'] | //input[@id='legendIndicator']
 
-1 shared Background
-
-Reduced from 90+ copy-pasted blocks
-
-Recovery Attempts
-
-15× per scenario
-
-Before reporting failure
-
-Test Scenarios
-
-135+ → modernised
-
-E2E chained flows per area
-
-Report Formats
-
-4 (HTML, Word, XML, Email)
-
-Full evidence trail
-
-Business Impact
-For the Team
-Reduced maintenance burden — screen changes are now one edit, not dozens.
-
-Faster onboarding — tests are self-documenting plain language.
-
-Higher confidence — resilient tests mean fewer false negatives.
-
-For Delivery
-Nightly regression baseline — Jenkins runs automatically; stakeholders see results by morning.
-
-Zero manual data prep — framework sources its own test data.
-
-Evidence & auditability — every step captured with screenshots; government compliance ready.
-
-For the Business
-Lower risk — false-confidence runs (legacy placeholder assertions) could hide bugs. New suite gives genuine assurance.
-
-Scalable — new test areas reuse the same engine; marginal cost per feature is near-zero.
-
-Fast feedback — results land in stakeholder inboxes automatically same morning.
-
-Measurable Outcomes
-• Problem articulation — legacy defects clearly documented with evidence from source code
-• Line manager agreement — Patrick (DevOps) and dev team sign off; Jira requirements logged
-• Implementation in practice — live on Jenkins/OpenShift, running nightly (not just proposed)
-• Demonstrable benefit — team no longer manually maintains data; stakeholders receive reports automatically; maintenance time per screen change dropped 90%
-• Delivered by Q2 deadline — modernisation complete; nightly execution active since March 2026
-Conclusion
-This improvement embodies the continuous-improvement principle: I identified a genuine problem (brittle, unmaintainable automation costing the team and risking the business), proposed a solution aligned with modern engineering practices (data-driven, BDD, self-healing), secured stakeholder buy-in, implemented it fully in practice, and delivered measurable benefit to team productivity, delivery confidence, and business risk reduction. The framework is now a scalable, maintainable, and professional regression suite fit for government use.
+# ---- Validation ----
+# Generic on-screen error message by text — {MSG} = expected error text
+iStaffErrorMessage                  = //*[contains(@class,'mat-error') or contains(@class,'error') or self::mat-error][normalize-space()='{MSG}']
