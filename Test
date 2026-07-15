@@ -1,23 +1,500 @@
-# ===================================================================================================================================
-# SECTION : STAFF PORTAL — MAPS area additional locators
-# {ATTR} herd/generated-map attribute   {LABEL} paginator aria-label
-# Spot-check against live DOM; values follow existing Angular Material conventions.
-# ===================================================================================================================================
+package com.pages;
 
-# Herd attribute (name/address) shown after a herd search — {ATTR} = logical field
-iStaffHerdAttribute                 = //*[@data-field='{ATTR}'] | //span[contains(@class,'herd-{ATTR}')]
+import org.apache.poi.hssf.usermodel.HSSFRow;
+import org.apache.poi.hssf.usermodel.HSSFSheet;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.ss.usermodel.*;
+import org.openqa.selenium.*;
 
-# Generated-map metadata cell in the results table — {ATTR} = status/id/herdNumber/date
-iStaffGeneratedMapAttribute         = //table[contains(@class,'mdc-data-table') or @id='generated-maps-table']//td[@data-column='{ATTR}']
+import java.io.*;
+import java.sql.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.util.*;
 
-# Generated-map final/ready status indicator in the results table
-iStaffGeneratedMapFinalStatus       = //td[@data-column='status'][normalize-space()='Ready to download'] | //span[contains(@class,'status')][normalize-space()='Complete']
+public class DatabaseQueriesPage {
 
-# First "Ready to download" link in the generated maps table
-iStaffReadyToDownloadFirst          = (//a[normalize-space()='Ready to download'])[1]
+    WebDriver driver;
 
-# Paginator button by aria-label — {LABEL} = "Next page"/"Previous page"
-iStaffPaginationButton              = //button[@aria-label='{LABEL}']
+    public DatabaseQueriesPage(WebDriver driver) {
+        this.driver = driver;
+    }
 
-# Generate Map Setting section container (visible after a successful parcel search)
-iStaffGenerateMapSettingSection     = //*[normalize-space()='Generate Map Settings'] | //section[contains(@class,'generate-map-settings')]
+
+    // region FilePaths
+
+    // FilePaths
+    String NormalHerdFile = "./src/main/resources/TestData/Test Herd for Dynamic Data.xls";
+
+    // endregion
+
+    // region Hashmaps for Queries
+    static public String getQueryForHerdWithPayments(int NumberOfRowsToFetch) {
+        HashMap<String, String> paidherdmap = new HashMap<>();
+        String herdwithpayment = "select * from tdbs_payment_header tdh \n" +
+                                 "join TDBS_APPLICATION ta on ta.app_id = tdh.phd_app_id \n" +
+                                 "where tdh.phd_year=2024 \n" +
+                                 "and tdh.phd_ptp_code=9 \n" +
+                                 "fetch first "+NumberOfRowsToFetch+" rows only";
+        paidherdmap.put("paidherd",herdwithpayment);
+        return paidherdmap.get("paidherd");
+    }
+
+    static HashMap<String, String> queriesList = new HashMap<>();
+
+    // Query for Submitted Herd
+    static public String getQueryForSubmittedHerd(int NumberOfRowsToFetch) {
+//        HashMap<String,String> submittedHerd = new HashMap<>();
+        String herdwithsubmission = "select * from vwbs_application_herd\n" +
+                "where mde_abbrev = 'I'\n" +
+                "and app_year = 2023\n" +
+                "and not exists (select 1 from tdbs_application_land where apl_year = 2023 and apl_app_id = aph_app_id and app_herd_no like '[A-Z]%')\n" +
+                "fetch first "+NumberOfRowsToFetch+" rows only";
+//                submittedHerd.put("submittedHerd",herdwithsubmission);
+                queriesList.put("submittedHerd",herdwithsubmission);
+        return queriesList.get("submittedHerd");
+    }
+
+    // Query for Submitted Herd with Penalty
+    static public String getQueryForSubmittedHerdWithPenalty(int NumberOfRowsToFetch) {
+//        HashMap<String,String> submittedHerd = new HashMap<>();
+        String herdwithsubmissionpenalty = "select * from vwbs_application_penalty\n" +
+                "where penalty_type = 'APPLICATION'\n" +
+                "fetch first "+NumberOfRowsToFetch+" rows only";
+//                submittedHerd.put("submittedHerd",herdwithsubmission);
+        queriesList.put("submittedHerdandpenalty",herdwithsubmissionpenalty);
+        return queriesList.get("submittedHerdandpenalty");
+    }
+
+    // Query for Submitted Herd and No Amendment
+    static public String getQueryForSubmittedHerdandNoAmend(int NumberOfRowsToFetch) {
+//        HashMap<String,String> submittedHerdnoAmend = new HashMap<>();
+        String herdwithsubmissionnoamend = "select * from tdbs_application\n" +
+                "where app_year = 2025\n" +
+                "and app_mde_code = 4\n"+
+                "and app_dct_code != 7\n"+
+                "fetch first "+NumberOfRowsToFetch+" rows only";
+        queriesList.put("submittedHerdNoAmend",herdwithsubmissionnoamend);
+        return queriesList.get("submittedHerdNoAmend");
+    }
+
+    // Query for LPIS Parcels
+    static public String getQueryForLPISParcels(int NumberOfRowsToFetch) {
+//        HashMap<String, String> lpisParcel = new HashMap<>();
+        String lpisParcels = "select distinct lps_parcel_label from vwlp_parcel twp \n" +
+                "join tddp_scheme_land_unit tslu on tslu.slu_lnu_id = twp.lps_parcel_id\n" +
+                "fetch first "+NumberOfRowsToFetch+" rows only";
+        queriesList.put("lpisParcel",lpisParcels);
+        return queriesList.get("lpisParcel");
+    }
+
+    // Query for Reference Numbers with 2023 Applications
+    static public String getQueryForReferenceNumbers(int NumberOfRowsToFetch) {
+//        HashMap<String, String> refNumber = new HashMap<>();
+        String referenceNumbers = "select app_herd_no from vwbs_application_herd\n" +
+                "where mde_abbrev = 'I'\n" +
+                "and app_year = 2023\n" +
+                "and substr(app_herd_no,1,1) < 'A'\n" +
+                "fetch first "+NumberOfRowsToFetch+" rows only";
+        queriesList.put("refNumber",referenceNumbers);
+        return queriesList.get("refNumber");
+    }
+
+    // Query for Herd Number with Submitted application and SIM scheme opted in
+    static public String getQueryForSubmittedHerdWithSimOptedIn(int NumberOfRowsToFetch) {
+//        HashMap<String,String> submittedHerd = new HashMap<>();
+        String herdwithsubmissionandsimoptedin = "select * from vwbs_application_herd\n" +
+                "where mde_abbrev = 'I'\n" +
+                "and app_year = 2024\n" +
+                "and not exists (select 1 from tdbs_application_land where apl_year = 2024 and apl_app_id = aph_app_id and app_herd_no like '[A-Z]%')\n" +
+                "and aph_app_id in (select apf_app_id from tdbs_application_flag where apf_flag_value='Y' and apf_flg_code=7) \n" +
+                "fetch first "+NumberOfRowsToFetch+" rows only";
+        queriesList.put("submittedandsimoptedHerd",herdwithsubmissionandsimoptedin);
+        return queriesList.get("submittedandsimoptedHerd");
+    }
+
+    // Query for Herd Number with Admin Check not Started and Application Submitted
+    static public String getQueryForAdminCheckNotStarted(int NumberOfRowsToFetch) {
+        String herdwithnoadmincheck = "SELECT ta.* FROM tdbs_application  ta\n" +
+                "LEFT JOIN tdbs_admin_check  tac ON tac.adc_app_id = ta.app_id\n" +
+                "WHERE ta.app_mde_code = 4\n" +
+                "AND ta.app_year = 2024\n" +
+                "AND tac.adc_app_id IS NULL\n"+
+                "fetch first "+NumberOfRowsToFetch+" rows only";
+        queriesList.put("noadmincheckHerd",herdwithnoadmincheck);
+        return queriesList.get("noadmincheckHerd");
+    }
+
+    static public String getQueryForQueryLetterNotStarted(int NumberOfRowsToFetch) {
+        String herdwithnoqueryLetter = "SELECT DISTINCT app_year, app_herd_no FROM tdbs_system_note, tdbs_application\n" +
+                "WHERE snt_app_id = app_id\n" +
+                "AND snt_action_subtype != 'QUERY_LETTER_SUBMITTED'\n" +
+                "fetch first "+NumberOfRowsToFetch+" rows only";
+        queriesList.put("noqueryLetterHerd",herdwithnoqueryLetter);
+        return queriesList.get("noqueryLetterHerd");
+    }
+
+//    // Query to get Agent Login with Herd Number
+//    static public String getQueryForAgentLoginWithHerd(String Herdnumber) {
+//        String agentwithHerd = "select hbcus.bcus_bus_id HerdNo, hbcus.bcus_id HerdBcusId, hbcus.bcus_cust_id HerdCustId,\n" +
+//                "(select ui.uri_username FROM tdcr_user_info ui\n" +
+//                "where uri_ccs_bus_id =  abcus.bcus_bus_id AND ROWNUM = 1) LoginId,abcus.bcus_id AgentBcusId,abcus.bcus_cust_id AgentCustId,abcus.bcus_bus_id AgentId\n" +
+//                "from tdco_customer_asscs ca,tdco_business_customers abcus,tdco_business_customers hbcus\n" +
+//                "where SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date\n" +
+//                "and ca.ca_cac_code = 194 -- BPS Agent to Customer\n" +
+//                "and ca.ca_bcus_id_from = abcus.bcus_id\n" +
+//                "and ca.ca_bcus_id_to = hbcus.bcus_id\n" +
+//                "and hbcus.BCUS_ROLE_CODE = 100\n" +
+//                "and hbcus.bcus_bus_end_date > sysdate\n" +
+//                "and hbcus.bcus_bus_id in ('"+Herdnumber+"')\n" +
+//                "order by 1,2";
+//        queriesList.put("agentwithHerd",agentwithHerd);
+//        return queriesList.get("agentwithHerd");
+//    }
+
+    // endregion
+
+    // region Methods to run queries based on case
+
+    // Query to get LPIS Parcels
+    public void RunQueryForLPISParcels(int NumberOfRowsToFetch, String FilePath) {
+        String lpisparcelssql = String.valueOf(getQueryForLPISParcels(NumberOfRowsToFetch));
+        String ParcelHeader = "LPS_PARCEL_LABEL";
+        CommonCentestBissDataScriptRunner(lpisparcelssql, FilePath, ParcelHeader, "Parcel Number");
+    }
+
+    // Query to get Herd with Payments
+    public void RunQueryForHerdWithPayment(int NumberOfRowsToFetch, String FilePath) {
+        String herdwithpaymentsql = String.valueOf(getQueryForHerdWithPayments(NumberOfRowsToFetch));
+        String HerdHeader = "PHD_HERD_NO";
+        CommonCentestBissDataScriptRunner(herdwithpaymentsql, FilePath, HerdHeader, "Herd Number");
+    }
+
+    // Query to get Submitted Herd
+    public void RunQueryForHerdWithSubmission(int NumberOfRowsToFetch, String FilePath) {
+        String herdwithsubmissionsql = getQueryForSubmittedHerd(NumberOfRowsToFetch);
+        String HerdHeader = "APP_HERD_NO";
+        CommonCentestBissDataScriptRunner(herdwithsubmissionsql, FilePath, HerdHeader, "Herd Number");
+    }
+
+    // Query to get Submitted Herd with Penalties
+    public void RunQueryForHerdWithSubmissionAndPenalty(int NumberOfRowsToFetch, String FilePath) {
+        String herdwithsubmissionandpenaltysql = getQueryForSubmittedHerdWithPenalty(NumberOfRowsToFetch);
+        String HerdHeader = "APP_HERD_NO";
+        CommonCentestBissDataScriptRunner(herdwithsubmissionandpenaltysql, FilePath, HerdHeader, "Herd Number");
+    }
+
+    // Query to get Submitted Herd and No Amend
+    public void RunQueryForHerdWithSubmissionAndNoAmend(int NumberOfRowsToFetch, String FilePath) {
+        String herdwithsubmissionandnoamendsql = getQueryForSubmittedHerdandNoAmend(NumberOfRowsToFetch);
+        String HerdHeader = "APP_HERD_NO";
+        CommonCentestBissDataScriptRunner(herdwithsubmissionandnoamendsql, FilePath, HerdHeader, "Herd Number");
+    }
+
+    // Query to get Reference Number
+    public void RunQueryForRefNumberWithSubmission(int NumberOfRowsToFetch, String FilePath){
+        String refnumwithsubmissionsql = getQueryForReferenceNumbers(NumberOfRowsToFetch);
+        String RefNumHeader = "APP_HERD_NO";
+        CommonCentestBissDataScriptRunner(refnumwithsubmissionsql, FilePath, RefNumHeader, "Reference Number");
+    }
+
+    // Query to get Herd with Payments with SIM Opted In
+    public void RunQueryForHerdWithPaymentWithSimOptedIn(int NumberOfRowsToFetch, String FilePath) {
+        String herdwithsubmissionandsimsql = getQueryForSubmittedHerdWithSimOptedIn(NumberOfRowsToFetch);
+        String HerdHeader = "APH_HERD_NO";
+        CommonCentestBissDataScriptRunner(herdwithsubmissionandsimsql, FilePath, HerdHeader, "Herd Number");
+    }
+
+    // Query to get Herd with No Admin Check
+    public void RunQueryForHerdWithAdminCheckNotStarted(int NumberOfRowsToFetch, String FilePath) {
+        String herdwithnoadmincheck = getQueryForAdminCheckNotStarted(NumberOfRowsToFetch);
+        String HerdHeader = "APP_HERD_NO";
+        CommonCentestBissDataScriptRunner(herdwithnoadmincheck, FilePath, HerdHeader, "Herd Number");
+    }
+
+    public void HerdWithSubmissionAndQueryLetterNotStarted(int NumberOfRowsToFetch, String FilePath) {
+        String herdwithnoadmincheck = getQueryForQueryLetterNotStarted(NumberOfRowsToFetch);
+        String HerdHeader = "APP_HERD_NO";
+        CommonCentestBissDataScriptRunner(herdwithnoadmincheck, FilePath, HerdHeader, "Herd Number");
+    }
+
+//    // Query to get Agent Login Number
+//    public void RunQueryToGetAgentforHerdNumber(int HerdRow, String FilePath) throws IOException {
+//        String HerdNumber = GetHerdNumberFromSpecifiedFile(HerdRow,"./src/main/resources/TestData/Herd With Submissions and No Admin Check.xls");
+//        String herdforagentwithherd = getQueryForAgentLoginWithHerd(HerdNumber);
+//        String HerdHeader = "LOGINID";
+//        CommonCentestBPSConnectDataScriptRunner(herdforagentwithherd, FilePath, HerdHeader, "Agent Number");
+//    }
+
+    // Query to get Admin
+
+    // endregion
+
+    // region Common Query Runner and Storing in File Implementation
+
+    // Common method to run Herd Queries
+    public void CommonCentestBissDataScriptRunner(String sql, String FilePath, String HerdHeader, String HeaderValue) {
+        // Connection Paramenters for Database
+        String url = "jdbc:oracle:thin:@//dbconn.agriculture.gov.ie:1532/CENTEST.agriculture.gov.ie";
+        String username = "BISS_DATA";
+        String password = "BISS_DATA";
+        try {
+            // Setting up connection to the Database
+            Connection connection = DriverManager.getConnection(url, username, password);
+            // Execute the SQL Statement
+            ResultSet resultSet =  connection.prepareStatement(sql).executeQuery();
+            // Add values to a List
+            List<String> Herds = new LinkedList<String>();
+            while (resultSet.next()) {
+                Herds.add(resultSet.getString(HerdHeader));
+                System.out.println(resultSet.getString(HerdHeader));
+            }
+            System.out.println(Herds);
+            // Write the Herds obtained in an Excel File
+            WritHerdToFile(Herds, FilePath, HeaderValue);
+            //System.out.println(Herds);
+        } catch (SQLException | IOException | InterruptedException throwables) {
+            throwables.printStackTrace();
+        }
+    }
+
+//    // Common method to run Queries
+//    public void CommonCentestBPSConnectDataScriptRunner(String sql, String FilePath, String HerdHeader, String HeaderValue) {
+//        // Connection Paramenters for Database
+//        String url = "jdbc:oracle:thin:@//dbconn.agriculture.gov.ie:1532/CENTEST.agriculture.gov.ie";
+//        String username = "BPS_CONNECT";
+//        String password = "BPS_CONNECT";
+//        try {
+//            // Setting up connection to the Database
+//            Connection connection = DriverManager.getConnection(url, username, password);
+//            // Execute the SQL Statement
+//            ResultSet resultSet =  connection.prepareStatement(sql).executeQuery();
+//            // Add values to a List
+//            List<String> Herds = new LinkedList<String>();
+//            while (resultSet.next()) {
+//                Herds.add(resultSet.getString(HerdHeader));
+//                System.out.println(resultSet.getString(HerdHeader));
+//            }
+//            System.out.println(Herds);
+//            // Write the Herds obtained in an Excel File
+//            WritHerdToFile(Herds, FilePath, HeaderValue);
+//            //System.out.println(Herds);
+//        } catch (SQLException | IOException | InterruptedException throwables) {
+//            throwables.printStackTrace();
+//        }
+//    }
+
+    // Initializing Objects needed to work on the sheet
+    static HSSFWorkbook hwb = new HSSFWorkbook();
+    static HSSFSheet sheet = hwb.createSheet("new sheet");
+    static HSSFRow rowhead = sheet.createRow((short) 0);
+    static HSSFRow row = sheet.createRow((short) 1);
+
+    // Write Herds to Excel File
+    public void WritHerdToFile(List<String> HerdNumber, String FilePath, String HeaderValue) throws IOException, InterruptedException {
+        File herdfile = new File(FilePath);
+        if(herdfile.exists()) {
+            herdfile.delete();
+            rowhead.createCell((short) 0).setCellValue(HeaderValue);
+            int rowCount = 1;
+            for (String s : HerdNumber) {
+                Row row = sheet.createRow(rowCount++);
+                Cell cell = row.createCell(0);
+                cell.setCellValue(s);
+            }
+            FileOutputStream fileOut = new FileOutputStream(herdfile);
+            hwb.write(fileOut);
+            fileOut.close();
+            System.out.println("Your existing excel file has been deleted and new file generated!");
+        }
+        else {
+            rowhead.createCell((short) 0).setCellValue(HeaderValue);
+            int rowCount = 1;
+            for (String s : HerdNumber) {
+                //sheet.getLastRowNum();
+                Row row = sheet.createRow(rowCount++);
+                Cell cell = row.createCell(0);
+                cell.setCellValue(s);
+            }
+            FileOutputStream fileOut = new FileOutputStream(herdfile);
+            hwb.write(fileOut);
+            fileOut.close();
+            System.out.println("Your excel file has been generated!");
+        }
+    }
+
+    // endregion
+
+
+
+    // region Get Herd Number from file to use in Cases
+
+    // Get a Herd from the specified Excel File
+    public String GetHerdNumberFromSpecifiedFile(int HerdNumberRow, String Filepath) throws IOException {
+        File herdFile = new File(Filepath);
+        FileInputStream fis = new FileInputStream(herdFile);
+        Workbook wrkbk = new HSSFWorkbook(fis);
+        Sheet sheet = wrkbk.getSheetAt(0);
+        Iterator<Row> iterator = sheet.iterator();
+        List<String> HerdNumbers = new ArrayList<>();
+        while (iterator.hasNext()) {
+            Row nextRow = iterator.next();
+            Iterator<Cell> cellIterator = nextRow.cellIterator();
+            while (cellIterator.hasNext()) {
+                Cell cell = cellIterator.next();
+                String HerdNumber = cell.getStringCellValue();
+                HerdNumbers.add(HerdNumber);
+            }
+        }
+        int HerdNumber = HerdNumbers.size();
+        int n = HerdNumber-HerdNumberRow;
+        String Herd = HerdNumbers.get(HerdNumber-n);
+        System.out.println(Herd);
+        wrkbk.close();
+        fis.close();
+        return Herd;
+    }
+
+    // endregion
+
+    // region Base Implementation
+
+    // Get Herd numbers using Select Query
+    public void CentestBissDataScript(int NumberOfRowsToFetch) {
+        String url = "jdbc:oracle:thin:@//dbconn.agriculture.gov.ie:1532/DEVC.agriculture.gov.ie";
+        String username = "BISS_DATA";
+        String password = "BISS_DATA";
+
+        try {
+            Connection connection = DriverManager.getConnection(url, username, password);
+
+            String sql = "select * from vwbs_application_herd\n" +
+                         "where mde_abbrev = 'I'\n" +
+                         "and app_year = 2023\n" +
+                         "and not exists (select 1 from tdbs_application_land where apl_year = 2023 and apl_app_id = aph_app_id)\n" +
+                         "fetch first "+NumberOfRowsToFetch+" rows only";
+
+            String sql1 = "select * from vwbs_application_details where mde_abbrev='I' and acres_ind='Y' and app_year='2024'\n" +
+                          "fetch first "+NumberOfRowsToFetch+" rows only";
+
+           Statement stmt =  connection.createStatement();
+           ResultSet resultSet = stmt.executeQuery(sql1);
+            List<String> Herds = new LinkedList<String>();
+           while (resultSet.next()) {
+               Herds.add(resultSet.getString("APP_HERD_NO"));
+               System.out.println(resultSet.getString("APP_HERD_NO"));
+           }
+//            System.out.println(Herds);
+            WritHerdToFile(Herds, NormalHerdFile, "Herd Number");
+//            GetHerdNumberFromFile(HerdRow);
+            System.out.println(Herds);
+        } catch (SQLException | IOException | InterruptedException throwables) {
+            throwables.printStackTrace();
+        }
+    }
+
+    // Get a Herd from the Excel File
+    public String GetHerdNumberFromFile(int HerdNumberRow) throws IOException {
+        File herdFile = new File("./src/main/resources/TestData/Test Herd for Dynamic Data.xls");
+        FileInputStream fis = new FileInputStream(herdFile);
+        Workbook wrkbk = new HSSFWorkbook(fis);
+        Sheet sheet = wrkbk.getSheetAt(0);
+        Iterator<Row> iterator = sheet.iterator();
+        List<String> HerdNumbers = new ArrayList<>();
+        while (iterator.hasNext()) {
+            Row nextRow = iterator.next();
+            Iterator<Cell> cellIterator = nextRow.cellIterator();
+            while (cellIterator.hasNext()) {
+                Cell cell = cellIterator.next();
+                String HerdNumber = cell.getStringCellValue();
+                HerdNumbers.add(HerdNumber);
+            }
+        }
+        int HerdNumber = HerdNumbers.size();
+        int n = HerdNumber-HerdNumberRow;
+        String Herd = HerdNumbers.get(HerdNumber-n);
+        System.out.println(Herd);
+        wrkbk.close();
+        fis.close();
+        return Herd;
+    }
+
+
+    // Get the login for the particular Herd
+    public String GetLoginForHerd(String FilePath, String HerdHeader, String HeaderValue) {
+        // Connection Paramenters for Database
+        String url = "jdbc:oracle:thin:@//dbconn.agriculture.gov.ie:1532/CENTEST.agriculture.gov.ie";
+        String username = "BPS_CONNECT";
+        String password = "BPS_CONNECT";
+        try {
+            String HerdForLogin = "";
+            // Sql to get login for herd
+            String sql = ""+HerdForLogin+"";
+
+            // Setting up connection to the Database
+            Connection connection = DriverManager.getConnection(url, username, password);
+            // Execute the SQL Statement
+            ResultSet resultSet =  connection.prepareStatement(sql).executeQuery();
+            // Add values to a List
+            List<String> Herds = new LinkedList<String>();
+            while (resultSet.next()) {
+                Herds.add(resultSet.getString(HerdHeader));
+                System.out.println(resultSet.getString(HerdHeader));
+            }
+            System.out.println(Herds);
+            // Write the Herds obtained in an Excel File
+            WritHerdToFile(Herds, FilePath, HeaderValue);
+            //System.out.println(Herds);
+        } catch (SQLException | IOException | InterruptedException throwables) {
+            throwables.printStackTrace();
+        }
+        return null;
+    }
+    // endregion
+
+
+
+}
+
+ //region Dummy Code
+
+//"select * from vwbs_application_herd\n" +
+//                   "\n" +
+//                   "where mde_abbrev = 'I'\n" +
+//                   "\n" +
+//                   "and app_year = 2023\n" +
+//                   "\n" +
+//                   "and not exists (select 1 from tdbs_application_land where apl_year = 2023 and apl_app_id = aph_app_id)\n" +
+//                   "\n" +
+//                   "fetch first 5 rows only"
+
+// region Herdfile Exists
+//            FileInputStream fis = new FileInputStream(herdfile);
+//            Workbook wrkbk = WorkbookFactory.create(fis);
+//            Sheet sheet = wrkbk.getSheetAt(0);
+//            for (String s : HerdNumber) {
+//                int rowCount = sheet.getLastRowNum();
+//                Row row = sheet.createRow(++rowCount);
+//                Cell cell = row.createCell(0);
+//                cell.setCellValue(s);
+//            }
+//            fis.close();
+//            FileOutputStream outputStream = new FileOutputStream(herdfile);
+//            wrkbk.write(outputStream);
+//            wrkbk.close();
+//            outputStream.close();
+//            System.out.println("Values Updated");
+
+//            Statement statement =  connection.createStatement();
+//            ResultSet resultSet = statement.executeQuery(sql);
+
+//            for (int i=0; i<HerdNumber.size(); i++) {
+//                row.createCell((short) i+1).setCellValue(HerdNumber.get(i));
+//            }
+
+//select ta.app_herd_no PHD_HERD_NO from tdbs_application ta left join tdbs_payment_header tph on tph.phd_app_id = ta.app_id where ta.app_year=2024 and tph.phd_ptp_code = 9 fetch first 15 rows only
+//            ResultSet resultSet = stmt.executeQuery("select ta.app_herd_no PHD_HERD_NO from tdbs_application ta left join tdbs_payment_header tph on tph.phd_app_id = ta.app_id where ta.app_year=2024 and tph.phd_ptp_code = 9 fetch first 15 rows only");
+
+// endregion
+
