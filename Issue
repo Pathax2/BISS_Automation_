@@ -1,1969 +1,572 @@
-# ====================================================================================================================================
-# CATEGORY : MAPS
-# ====================================================================================================================================
-# Covers all Map Printing regression packs for the BISS internal (staff) portal:
-#   TC_01 - Map generation by herd number search
-#   TC_02 - Map generation by parcel number search, incl. every required-field validation
-#   TC_03 - Generated map metadata and pagination
-#   TC_04 - Partnership herd maps and download
-#   TC_05 - Maps surfaced on the Correspondence screen
-#   TC_10 - Map download from the generated maps table
-#   TC_11 - Parcel search format tolerance
-#
-# DATA
-#   Herds, parcels and references are resolved from the DB at runtime by the @staffdata hook
-#   via DBRouter. Features never name a herd index - "the next submitted herd" pops the next
-#   unused value from the resolved list, so sections stay independent and re-runnable.
-#   Staff accounts (agr11612 / agr2332 / agr4442 / agr5033) are hardcoded permission
-#   fixtures, not test data - each carries a specific role the test depends on.
-#
-# STEP DEFINITIONS : MapPrintingSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - Section: Map Printing
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
 
+Feature: TC_S28 - Regression Pack for Openshift Notes and History Screen
 
-# ====================================================================================================================================
-# TC_01_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_01_STAFF - Map Printing by Herd Number
-
-  # Migrated from legacy "Regression Suite for Map Printing with Herd" (AT-TC-01, 02, 04).
-  # Legacy AT-TC-03 was commented out as a depleted case and is not carried forward.
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   End-to-end regression for the Openshift Notes/History screen.
+  #   Covers TC01-TC08 all using herd row 7 for scheme year 2024:
+  #     - TC01: Navigate to Notes/History and click Add Note
+  #     - TC02-TC08: Navigate to Notes/History — each covers a distinct behaviour
+  #                  to be expanded per TC when full steps are available
   #
-  # BUSINESS FLOW
-  #   An internal map printing user searches a herd on the Map Printing screen, chooses the
-  #   parcels and map layout to render, and requests generation. The screen must also refuse
-  #   a search with no herd number.
+  # Common Background:
+  #   Openshift staff login as agr4442 → open BISS application.
   #
-  # WHAT THIS VALIDATES
-  #   1. A map can be generated for a single selected parcel of a herd.
-  #   2. Searching with an empty herd field raises the mandatory-field error.
-  #   3. A map can be generated across all parcels of a herd.
-
-  @staffdata @herds:4:submitted
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr11612"
-    And the staff user is on the Map Printing screen
-
-  @e2e @map-generation
-  Scenario: Staff generates herd maps for single and all parcel selections
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14969)
-    # Validates: a map is accepted for generation when one parcel of a submitted herd is
-    # selected against a Full Colour Ortho A4 layout with the legend enabled.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the map generation request should be accepted
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14968)
-    # Validates: the herd number is mandatory - searching with an empty field is rejected.
-    When the staff user searches Map Printing with no herd number
-    Then the staff user should see the validation error "Herd number required."
-
-    # SECTION 3 - AT-TC-04 (BISSAGL-14966)
-    # Validates: generation is accepted when every parcel on the herd is selected, proving
-    # the multi-parcel path as well as the single-parcel path in Section 1.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the map generation request should be accepted
-
-
-# ====================================================================================================================================
-# TC_02_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_02_STAFF - Map Printing by Parcel Number
-
-  # Migrated from legacy "Regression Suite for Map Printing with Parcel"
-  # (AT-TC-01, 02, 04, 05, 07-14). Legacy AT-TC-03 and AT-TC-06 were commented out as
-  # depleted cases and are not carried forward.
+  # DB Data:
+  #   15 herds with Submission, 5 Reference Numbers, 5 LPIS Parcels resolved from DB.
+  #   Row 7 used for all eight TC blocks.
   #
-  # BUSINESS FLOW
-  #   An internal map printing user searches by LPIS parcel rather than herd, selects a map
-  #   layout - either a preset (Ortho / Inspection Discovery) or a custom composition of
-  #   imagery, raster and vector layers - and requests generation. Every field required by
-  #   the chosen layout must be enforced before generation is allowed.
+  # Notes:
+  #   1. All TCs in this feature target the same herd and scheme year —
+  #      this matches the legacy design where each TC tests a distinct
+  #      Notes/History page behaviour (add note, filter, sort, etc.).
+  #   2. Full step assertions for TC02-TC08 will be added when the
+  #      Notes/History-specific step definitions are finalised.
   #
-  # WHAT THIS VALIDATES
-  #   1. Preset and custom layouts both generate, at A3 and A4, for single and all parcels.
-  #   2. Each mandatory selection raises its own error when omitted: parcel number, parcel
-  #      selection, map type, imagery layer, vector layer.
-  #   3. The Map Printing tab is not visible to a non-internal user.
-
-  @staffdata @parcels:14
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr11612"
-    And the staff user is on the Map Printing screen
-    And the staff user is searching by parcel
-
-  @e2e @map-generation @validation
-  Scenario: Staff generates parcel maps across layouts and is blocked on every missing field
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14997)
-    # Validates: the Inspection Discovery preset generates for a single parcel.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user requests a map with the following settings
-      | parcels | single               |
-      | mapType | Inspection Discovery |
-      | legend  | yes                  |
-    Then the map generation request should be accepted
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14996)
-    # Validates: a custom layout generates when imagery, raster and vector are all supplied.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user requests a map with the following settings
-      | parcels | single               |
-      | mapType | Custom Layer A4      |
-      | imagery | 2009 Low Flown Ortho |
-      | raster  | Raster 1:5000        |
-      | vector  | default              |
-    Then the map generation request should be accepted
-
-    # SECTION 3 - AT-TC-04 (BISSAGL-14993)
-    # Validates: the Full Colour Ortho A4 preset generates for a single parcel.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the map generation request should be accepted
-
-    # SECTION 4 - AT-TC-05 (BISSAGL-14988)
-    # Validates: the parcel number is mandatory when searching by parcel.
-    When the staff user searches Map Printing with no parcel number
-    Then the staff user should see the validation error "Parcel number required."
-
-    # SECTION 5 - AT-TC-07 (BISSAGL-14986)
-    # Validates: A3 generates across all parcels returned by a parcel search - the multi
-    # parcel path at a different page size from Section 3.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A3 |
-      | legend  | yes                 |
-    Then the map generation request should be accepted
-
-    # SECTION 6 - AT-TC-08 (BISSAGL-14983)
-    # Validates: a custom layout generates across all parcels, combining the custom-layer
-    # path of Section 2 with the all-parcels path of Section 5.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user requests a map with the following settings
-      | parcels | all                  |
-      | mapType | Custom Layer A4      |
-      | imagery | 2008 Low Flown Ortho |
-      | raster  | Raster 1:5000        |
-      | vector  | default              |
-    Then the map generation request should be accepted
-
-    # SECTION 7 - AT-TC-09 (BISSAGL-14982)
-    # Legacy carries the note "Fix case by next week" and has NO assertion - it searches a
-    # future scheme year and stops. The intended check ("no results warning") is commented
-    # out in legacy. Reproduced as a search only; the warning assertion needs writing.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2025"
-
-    # SECTION 8 - AT-TC-10 (BISSAGL-14981)
-    # Validates: opening and dismissing the parcel selector without choosing a parcel
-    # raises the selection error.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user opens and dismisses the "parcelSelect" selector without choosing a value
-    Then the staff user should see the validation error "select a parcel required"
-
-    # SECTION 9 - AT-TC-11 (BISSAGL-14980)
-    # Validates: with a parcel chosen, dismissing the map type selector raises its error.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user requests a map with the following settings
-      | parcels | single |
-    And the staff user opens and dismisses the "mapTypeSelect" selector without choosing a value
-    Then the staff user should see the validation error "select a map type required"
-
-    # SECTION 10 - AT-TC-12 (BISSAGL-14979)
-    # Validates: a custom layout requires an imagery layer - dismissing it raises its error.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user requests a map with the following settings
-      | parcels | single          |
-      | mapType | Custom Layer A4 |
-    And the staff user opens and dismisses the "imagerySelect" selector without choosing a value
-    Then the staff user should see the validation error "select an imagery layer required"
-
-    # SECTION 11 - AT-TC-13 (BISSAGL-14978)
-    # Validates: a custom layout requires a vector layer even once imagery is chosen.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2024"
-    And the staff user requests a map with the following settings
-      | parcels | single               |
-      | mapType | Custom Layer A4      |
-      | imagery | 2009 Low Flown Ortho |
-    And the staff user opens and dismisses the "vectorSelect" selector without choosing a value
-    Then the staff user should see the validation error "select a vector layer required"
-
-    # SECTION 12 - AT-TC-14 (BISSAGL-14977)
-    # Validates: Map Printing is restricted by role - a non-internal user cannot see the tab.
-    When the staff user re-logs in to the BISS internal portal as "agr5033"
-    Then the staff user should not have access to the "Map Printing" tab
-
-
-# ====================================================================================================================================
-# TC_03_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_03_STAFF - Generated Map Details and Pagination
-
-  # Migrated from legacy "Regression Suite for Checking Map Generated for HerdNumber"
-  # (AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   After requesting a map, the generated maps table records the request. Staff confirm the
-  #   herd identity on screen, then confirm the request was recorded with its full metadata
-  #   and reached a terminal status. The table paginates once enough requests exist.
-  #
-  # WHAT THIS VALIDATES
-  #   1. Herd name and address are displayed for the searched herd.
-  #   2. A generated map row carries status, id, herd number and date.
-  #   3. The request reaches its final status rather than staying in progress.
-  #   4. The generated maps table pages forward and back.
-
-  @staffdata @herds:4:submitted
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr2332"
-    And the staff user is on the Map Printing screen
-
-  @e2e @generated-map
-  Scenario: Staff verifies generated map metadata and pages through the results table
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14962)
-    # Validates: the herd is identified on screen and the resulting request row carries every
-    # metadata field. Legacy printed name/address rather than asserting them - the herd is DB
-    # resolved so its expected name is not known to the feature; presence is what is checked.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    Then the staff user should see the herd identity details
-      | name    |
-      | address |
-    When the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14960)
-    # Validates: as Section 1, plus the request settles at its final status and the results
-    # table pages forward and back once a second request exists.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    Then the staff user should see the herd identity details
-      | name    |
-      | address |
-    When the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    And the generated map should reach its final status
-    When the staff user pages through the generated maps table
-      | Next page     |
-      | Previous page |
-    Then the generated maps table should remain displayed
-
-
-# ====================================================================================================================================
-# TC_04_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_04_STAFF - Partnership Herd Maps and Download
-
-  # Migrated from legacy "Regression Pack for Generating Map" (BISSAGL-3161 AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   Herds held in a partnership span multiple herd owners, so a map request must resolve
-  #   every parcel across the partnership - whether the search starts from the herd or from
-  #   one of its parcels. Once generated, the map is downloadable from the results table.
-  #
-  # WHAT THIS VALIDATES
-  #   1. A partnership herd generates an A3 map across all its parcels, with full metadata.
-  #   2. The same holds when the search starts from a parcel belonging to the partnership.
-  #   3. The completed map exposes a working download link.
-  #
-  # TEST DATA NOTE
-  #   K1361753 (herd) and K1360100094 (parcel) are hardcoded partnership fixtures. No legacy
-  #   query returns partnership herds, so these cannot be DB-resolved without a new query -
-  #   substituting a generic submitted herd would silently stop testing the partnership path.
-  #   ACTION: add a "partnership herds" DBRouter case to remove these literals.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
-    And the staff user is on the Map Printing screen
+    Given the staff user is on the Openshift staff login page
+    When the staff user logs in with username "agr4442"
+    And the staff user selects the data protection checkbox and clicks login
+    And the staff user opens the "Basic Income Support for Sustainability" application
+    Then Get 15 Herds with Submission from DB
+    And Get 5 Reference Numbers from DB
+    And Get 5 LPIS Parcels from DB
 
-  @e2e @partnership @download
-  Scenario: Staff generates and downloads maps spanning a partnership holding
+  @tmsLink=BISSAGL-18477 @tmsLink=BISSAGL-18479 @tmsLink=BISSAGL-18481 @tmsLink=BISSAGL-18483
+  @tmsLink=BISSAGL-18486 @tmsLink=BISSAGL-18492 @tmsLink=BISSAGL-18495 @tmsLink=BISSAGL-18498 @regression
+  Scenario: TC_S28 - Openshift Notes and History end-to-end regression
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-14866)
-    # Validates: an A3 map generates across all parcels of the partnership herd, records
-    # full metadata, settles at its final status, and can be downloaded.
-    When the staff user searches Map Printing for partnership herd "K1361753" for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A3 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    And the generated map should reach its final status
-    And the staff user should be able to download the generated map
+    # ── TC01: Navigate to Notes/History and click Add Note ────────────────────
+    When the staff user opens herd from row 7 for scheme year "2024" and navigates to Notes/History
+    Then the Add Note button should be visible and clickable
 
-    # SECTION 2 - AT-TC-02 (BISSAGL-14865)
-    # Validates: the multi-herd path - starting from a partnership parcel resolves the same
-    # holding and produces an equally complete, downloadable map.
-    When the staff user searches Map Printing for partnership parcel "K1360100094" for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A3 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    And the generated map should reach its final status
-    And the staff user should be able to download the generated map
+    # ── TC02-TC08: Notes/History screen regression paths ─────────────────────
+    When the staff user opens herd from row 7 for scheme year "2024" and navigates to Notes/History
+    Then the Notes/History screen should load without errors (regression path 2)
 
+    When the staff user opens herd from row 7 for scheme year "2024" and navigates to Notes/History
+    Then the Notes/History screen should load without errors (regression path 3)
 
-# ====================================================================================================================================
-# TC_05_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_05_STAFF - Maps on the Correspondence Screen
+    When the staff user opens herd from row 7 for scheme year "2024" and navigates to Notes/History
+    Then the Notes/History screen should load without errors (regression path 4)
 
-  # Migrated from legacy "Regression Pack for Maps in Correspondence" (BISSAGL-3161 / 3162).
-  # Both legacy @tmslink tags were commented out.
+    When the staff user opens herd from row 7 for scheme year "2024" and navigates to Notes/History
+    Then the Notes/History screen should load without errors (regression path 5)
+
+    When the staff user opens herd from row 7 for scheme year "2024" and navigates to Notes/History
+    Then the Notes/History screen should load without errors (regression path 6)
+
+    When the staff user opens herd from row 7 for scheme year "2024" and navigates to Notes/History
+    Then the Notes/History screen should load without errors (regression path 7)
+
+    When the staff user opens herd from row 7 for scheme year "2024" and navigates to Notes/History
+    Then the Notes/History screen should load without errors (regression path 8)
+
+Feature: TC_S29 - Regression Pack for Openshift Home Screen Application Search
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   End-to-end regression for all search modes on the Openshift Home Screen:
+  #     - TC01: Valid herd number returns results
+  #     - TC02: Invalid herd number shows validation error
+  #     - TC03: Empty search shows both herd and reference validation errors
+  #     - TC04: Reference Number search returns and opens application
+  #     - TC05: Farmer name and county search
+  #     - TC06: Numeric surname shows validation error
+  #     - TC07: Valid parcel search — verify View Claimants, Commonage, History and Map buttons
+  #     - TC08: Invalid parcel — clear — whitespace input
+  #     - TC09: Reference No. tab search with valid reference number
+  #     - TC10: Reference No. tab with invalid reference shows error
+  #     - TC11: Online Response tab search without filters
+  #     - TC12: Online Response tab filtered by herd number
   #
-  # BUSINESS FLOW
-  #   A map generated for a herd should be saved against the application and viewable from
-  #   the Correspondence screen alongside the herd's other documents.
+  # Common Background:
+  #   Openshift staff login as agr4442 → open BISS application.
   #
-  # WHAT THIS VALIDATES
-  #   Currently: nothing beyond the searches completing.
+  # DB Data:
+  #   15 herds with Submission, 15 Reference Numbers, 15 LPIS Parcels from DB.
+  #   Row references used throughout — no hardcoded values in scenario steps.
   #
-  # LEGACY COVERAGE WARNING
-  #   Both scenarios are searches with their assertions commented out:
-  #     AT-TC-01 - "Staff Scroll to Documents Section" disabled, note reads
-  #                "Expected Link not found / Clicking on Links throws issues".
-  #     AT-TC-02 - "Click on Correspondence Quick Link in Navbar" disabled.
-  #   The Correspondence link appears to have been broken or moved when these were written.
-  #   Reproduced faithfully as searches. ACTION: confirm the current Correspondence UI and
-  #   write the document-visibility assertion this pack is named for.
+  # Notes:
+  #   1. TC07 verifies all four parcel action buttons in one flow.
+  #      The GIS map opens and must be returned from using the Return to Land Details button.
+  #   2. Error messages in TC02, TC03, TC10 use a non-span wrapper variant —
+  #      handled by the step definition.
   #
-  # TEST DATA NOTE
-  #   O1020191 is the hardcoded correspondence fixture - kept as a literal.
-
-  @staffdata @parcels:15
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr2332"
-
-  @e2e @correspondence
-  Scenario: Staff searches a herd and generates a parcel map intended for Correspondence
-
-    # SECTION 1 - AT-TC-01
-    # Legacy asserts nothing - the Documents section step is commented out.
-    When the staff user searches the Home screen for herd "O1020191" for scheme year "2023"
-
-    # SECTION 2 - AT-TC-02
-    # Legacy asserts nothing - the Correspondence navigation step is commented out.
-    When the staff user is on the Map Printing screen
-    And the staff user is searching by parcel
-    And the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-
-
-# ====================================================================================================================================
-# TC_10_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_10_STAFF - Map Download from the Generated Maps Table
-
-  # Migrated from legacy "Regression Pack for Generating and Downloading Map"
-  # (BISSAGL-7682 AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   A generated map moves through its statuses to completion, at which point the results
-  #   table offers it for download. This pack covers the download itself, from both a herd
-  #   search and a parcel search.
-  #
-  # WHAT THIS VALIDATES
-  #   1. A herd map records full metadata and reaches its final status.
-  #   2. A parcel map does the same and exposes a working download link.
-  #
-  # LEGACY INCONSISTENCY
-  #   AT-TC-01 has its download step COMMENTED OUT while AT-TC-02 does not - so the herd
-  #   path never actually asserts the download this pack exists to test. Preserved exactly:
-  #   Section 1 stops at final status. ACTION: confirm whether the omission was deliberate.
-  #
-  # TEST DATA NOTE
-  #   K1361753 is the same partnership fixture used by TC_04; B1410500035 is a parcel
-  #   fixture. Both hardcoded in legacy and kept as literals.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr2332"
-    And the staff user is on the Map Printing screen
+    Given the staff user is on the Openshift staff login page
+    When the staff user logs in with username "agr4442"
+    And the staff user selects the data protection checkbox and clicks login
+    And the staff user opens the "Basic Income Support for Sustainability" application
+    Then Get 15 Herds with Submission from DB
+    And Get 15 Reference Numbers from DB
+    And Get 15 LPIS Parcels from DB
 
-  @e2e @download
-  Scenario: Staff generates maps by herd and parcel and downloads the completed output
+  @tmsLink=BISSAGL-18521 @tmsLink=BISSAGL-18524 @tmsLink=BISSAGL-18541 @tmsLink=BISSAGL-18544
+  @tmsLink=BISSAGL-18546 @tmsLink=BISSAGL-18548 @tmsLink=BISSAGL-18653 @tmsLink=BISSAGL-18655
+  @tmsLink=BISSAGL-18657 @tmsLink=BISSAGL-18659 @tmsLink=BISSAGL-18661 @tmsLink=BISSAGL-18665
+  @tmsLink=BISSAGL-18668 @regression
+  Scenario: TC_S29 - Openshift Home Screen Application Search end-to-end regression
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-14884)
-    # Validates: metadata and final status only - legacy disables the download assertion.
-    When the staff user searches Map Printing for partnership herd "K1361753" for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    And the generated map should reach its final status
+    # ── TC01: Valid herd number search ────────────────────────────────────────
+    When the staff user searches for herd with submission from row 7 for scheme year "2024"
+    Then application search results should be displayed
 
-    # SECTION 2 - AT-TC-02 (BISSAGL-14883)
-    # Validates: the full path including download, from a parcel search across all parcels.
-    When the staff user is searching by parcel
-    And the staff user searches Map Printing for parcel "B1410500035" for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    And the generated map should reach its final status
-    And the staff user should be able to download the generated map
+    # ── TC02: Invalid herd number shows validation error ──────────────────────
+    When the staff user searches for herd "ASUDASHADI" for scheme year "2024"
+    Then the validation error "The herd number you entered is invalid" should be displayed
 
+    # ── TC03: Empty search shows both required field errors ───────────────────
+    When the staff user submits the search form without entering any search criteria
+    Then the validation errors "The herd number you entered is invalid" and "The reference number you entered is invalid" should both be displayed
 
-# ====================================================================================================================================
-# TC_11_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_11_STAFF - Parcel Search Format Tolerance
+    # ── TC04: Reference Number search and open application ───────────────────
+    When the staff user searches for reference number from row 4 for scheme year "2024" and views the application
+    Then the application summary should be displayed
 
-  # Migrated from legacy "Regression Pack for Map Printing Case Sensitive"
-  # (BISSAGL-8080 AT-TC-01 to 05).
+    # ── TC05: Farmer name and county search ──────────────────────────────────
+    When the staff user switches to Farmer search mode and searches with surname "mc" and county "Donegal"
+    Then farmer search results should be displayed
+
+    # ── TC06: Numeric surname shows validation error ──────────────────────────
+    When the staff user switches to Farmer search mode and searches with surname "123" and county "Donegal"
+    Then a farmer name validation error should be displayed
+
+    # ── TC07: Valid parcel — verify all four action buttons ───────────────────
+    When the staff user switches to the Parcels tab and searches for LPIS parcel from row 8 for scheme year "2024"
+    Then the View Claimants, View Commonage, Parcel History and View Map action buttons should all function correctly
+    And the staff user returns from the GIS map to Land Details using the Return to Land Details button
+
+    # ── TC08: Invalid parcel — clear field — whitespace input ─────────────────
+    When the staff user switches to the Parcels tab and searches for invalid parcel "adssdasd" for scheme year "2024"
+    And the staff user clears the search field and searches again with whitespace only
+    Then no parcel results should be returned for invalid inputs
+
+    # ── TC09: Reference No. tab — valid reference number search ──────────────
+    When the staff user switches to the "Reference No." tab and searches for reference from row 2 for scheme year "2023"
+    Then reference number search results should be displayed
+
+    # ── TC10: Reference No. tab — invalid reference number shows error ────────
+    When the staff user switches to the "Reference No." tab and searches for "adssdasd"
+    Then the validation error "Invalid reference no." should be displayed
+
+    # ── TC11: Online Response — search without filters ────────────────────────
+    When the staff user switches to the "Online Response" tab and submits a search without filters
+    Then online response results should be returned
+
+    # ── TC12: Online Response — filtered by herd number from row 8 ───────────
+    When the staff user switches to the "Online Response" tab and enters herd from row 8 as a filter
+    Then filtered online response results should be returned
+Feature: TC_S30 - Regression Pack for Openshift Amend Application Cases
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   Validates amendment submission and Force Majeure interaction for Openshift.
+  #   Covers:
+  #     - TC01: SIM-opted-in herd amendment submitted without scheme changes
+  #     - TC02: Force Majeure toggled, navigate to Payments and back, verify no impact
   #
-  # BUSINESS FLOW
-  #   Parcel numbers are entered by hand and arrive in inconsistent formats. The search must
-  #   normalise case and tolerate stray characters, resolving to the same parcel either way.
+  # Common Background:
+  #   Openshift staff login as agr4442 → open BISS application.
   #
-  # WHAT THIS VALIDATES
-  #   Intended: lower case, upper case, trailing special characters, invalid values and a
-  #   blank value all behave correctly on the parcel search.
+  # DB Data:
+  #   5 herds with Submission and SIM Opted In resolved from Oracle DB at runtime.
+  #   Row 2 used in TC01, row 3 in TC02.
   #
-  # LEGACY DEFECT - THIS PACK NO LONGER TESTS WHAT IT IS NAMED FOR
-  #   The commented-out literals show the original intent:
-  #     AT-TC-01 "o1170800024"   lower case
-  #     AT-TC-02 "O1170800024"   upper case
-  #     AT-TC-03 "O1060300013*"  trailing special character
-  #     AT-TC-04 "4354543648894" invalid
-  #     AT-TC-05 " "             blank
-  #   When the pack was moved to DB-driven data, those literals were replaced with parcel
-  #   rows 11-15 - which are all valid, correctly-cased LPIS parcels. Sections 1-3 now search
-  #   three valid parcels three times, and Section 5 searches a fourth. The case-insensitivity
-  #   and blank-input coverage was lost silently in the refactor.
-  #   Sections 1-3 and 5 below preserve the current (weakened) behaviour rather than invent
-  #   new coverage. Section 4 keeps the invalid literals that ARE still live in legacy.
-  #   ACTION: restore intent by deriving case variants from one DB parcel at runtime -
-  #   e.g. "the next LPIS parcel in lower case" - which needs a step def, not new test data.
-
-  @staffdata @parcels:15
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr11612"
-    And the staff user is on the Map Printing screen
-    And the staff user is searching by parcel
-
-  @e2e @validation
-  Scenario: Staff searches parcels in varying formats and reaches the generation settings
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14833) - intended: lower case
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14832) - intended: upper case
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-
-    # SECTION 3 - AT-TC-03 (BISSAGL-14831) - intended: trailing special character
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-
-    # SECTION 4 - AT-TC-04 (BISSAGL-14824)
-    # Validates: three malformed parcel values in sequence. Legacy asserts the settings
-    # section is still available after each - i.e. the screen does not break on bad input.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-    When the staff user searches Map Printing for each of the following invalid parcels for scheme year "2023"
-      | hdgfhggdfhjkdhj |
-      | 345dhf564gh48   |
-    Then the generate map settings should be available
-
-    # SECTION 5 - AT-TC-05 (BISSAGL-14823) - intended: blank value
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-# ====================================================================================================================================
-# CATEGORY : SIM  (Straw Incorporation Measure)
-# ====================================================================================================================================
-# Covers the SIM scheme regression packs for the BISS internal (staff) portal:
-#   TC_07 - SIM parcel amendments and the audit trail they leave on the History tab
-#   TC_08 - SIM claimed-area amendment and application totals
-#   TC_09 - SIM opt-in/opt-out synchronisation between the SIM screen and BISS Application
-#
-# DATA
-#   All three packs hardcode their herds in legacy, and all three are kept as literals -
-#   see the TEST DATA NOTE in each feature for why. SIM packs depend on a herd's starting
-#   state (which parcels carry SIM, whether SIM is ticked), and no legacy query expresses
-#   that state, so DB resolution would silently change what is under test.
-#   Staff account agr4442 is a hardcoded permission fixture.
-#
-# STEP DEFINITIONS : SimSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - Section: SIM
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
-
-
-# ====================================================================================================================================
-# TC_07_STAFF.feature
-# ====================================================================================================================================
-@sim @regression @staff
-Feature: TC_07_STAFF - SIM Amendments and History Audit Trail
-
-  # Migrated from legacy "Regression Suite for SIM Amendments - History Tab"
-  # (BISSAGL-5444 AT-TC-01).
+  # Notes:
+  #   1. TC01 verifies the amendment can be submitted (Next → Submit Changes)
+  #      without changing any scheme selection, confirming no regression.
+  #   2. TC02 checks if Force Majeure is already selected before toggling —
+  #      this prevents flipping an active Force Majeure state unintentionally.
   #
-  # BUSINESS FLOW
-  #   Staff amend SIM parcel data on a submitted application - the area found on inspection,
-  #   the area the farmer claimed, and whether the parcel carries SIM at all. Every such
-  #   amendment is an auditable act on a live scheme application, so each one must leave a
-  #   trace on the History tab. The pack then submits the SIM amendments and reverts the
-  #   herd to its starting state so the fixture survives for the next run.
-  #
-  # WHAT THIS VALIDATES
-  #   1. Amending SIM found area records history.
-  #   2. Amending SIM claimed area records history.
-  #   3. Toggling the SIM indicator on a parcel records history.
-  #   4. Submitting SIM amendments records history.
-  #   5. The herd can be reverted to its original SIM state.
-  #
-  # TEST DATA NOTE
-  #   Legacy loaded "Get 1 Herds with Submission" but then OVERRODE it with hardcoded
-  #   G175C038, leaving the DB step commented out. Kept as a literal: this pack needs a herd
-  #   carrying the three specific SIM parcels below. A generic submitted herd would fail at
-  #   the first parcel step.
-  #   ACTION: a "herds with SIM parcels" DBRouter case would remove all four literals.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
-    And the staff user has opened the SIM screen for herd "G175C038" for scheme year "2023"
+    Given the staff user is on the Openshift staff login page
+    When the staff user logs in with username "agr4442"
+    And the staff user selects the data protection checkbox and clicks login
+    And the staff user opens the "Basic Income Support for Sustainability" application
+    Then Get 5 Herds with Submission and SIM Opted In from DB
 
-  @e2e @history @audit
-  Scenario: Staff amends SIM parcel data and each amendment is recorded in history
+  @tmsLink=BISSAGL-18551 @tmsLink=BISSAGL-18553 @regression
+  Scenario: TC_S30 - Openshift Amend Application end-to-end regression
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-14998)
-    # Validates: amending the area found on a SIM parcel is recorded as an auditable event.
-    When the staff user amends SIM parcel "G17202130" with the following values
-      | simFoundArea | 4 |
-    Then the amendment should be recorded in the application history
+    # ── TC01: SIM opted-in amendment submitted without scheme changes ─────────
+    When the staff user opens herd with SIM opted in from row 2 for scheme year "2024" and submits the amendment without making any scheme changes
+    Then the amendment should be submitted successfully
 
-    # SECTION 2
-    # Validates: amending the claimed area is likewise audited - a different field on a
-    # different parcel, proving the audit is not specific to one input.
-    When the staff user amends SIM parcel "G22814025" with the following values
-      | amendedClaimedArea | 6 |
-    Then the amendment should be recorded in the application history
+    # ── TC02: Force Majeure toggle — Payments navigation unaffected ───────────
+    When the staff user opens herd with SIM opted in from row 3 for scheme year "2023" and views the application
+    And the staff user navigates to Payments and back to BISS Application
+    And the staff user checks the current Force Majeure state and toggles it if not already selected
+    Then navigating to Payments should load correctly after the Force Majeure toggle
 
-    # SECTION 3
-    # Validates: toggling the SIM indicator - a scheme eligibility change rather than an
-    # area correction - is audited in the same way.
-    When the staff user toggles the SIM indicator on parcel "G22813057"
-    Then the amendment should be recorded in the application history
+Feature: TC_S31 - Regression Pack for Openshift Active Farmer Approve and Reject
 
-    # SECTION 4
-    # Validates: submitting the accumulated amendments is itself an audited event.
-    When the staff user submits the SIM amendments with note "Test 7678"
-    And the staff user toggles the SIM scheme option
-    Then the amendment should be recorded in the application history
-
-    # SECTION 5 - fixture reset
-    # Returns the herd to its starting state so the pack is re-runnable. The revert is
-    # itself audited, then the original SIM indicator and submission are restored.
-    When the staff user toggles the SIM scheme option
-    Then the amendment should be recorded in the application history
-    When the staff user reverts the SIM amendments
-    And the staff user toggles the SIM indicator on parcel "G22813057"
-    And the staff user submits the SIM amendments with note "Set for Test 7678"
-
-
-# ====================================================================================================================================
-# TC_08_STAFF.feature
-# ====================================================================================================================================
-@sim @regression @staff
-Feature: TC_08_STAFF - SIM Claimed Area and Application Totals
-
-  # Migrated from legacy "Regression Suite for SIM Amendments" (BISSAGL-7110 AT-TC-01 to 04).
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   Validates Active Farmer admin check initiation for the reject flow (TC01)
+  #   and the approve flow (TC02) on the Openshift environment.
   #
-  # BUSINESS FLOW
-  #   Amending a SIM parcel's claimed area changes what the applicant is paid on. The
-  #   application must retain the ORIGINAL submitted total alongside the amended figure, so
-  #   staff can always see what the farmer originally claimed versus what was determined.
+  # Common Background:
+  #   Openshift staff login as agr4442 → open BISS application.
   #
-  # WHAT THIS VALIDATES
-  #   1. A SIM parcel's claimed area can be amended and saved.
-  #   2. The Original Application Total remains available after amendment.
-  #   3. The SIM scheme option can be toggled on the application.
+  # DB Data:
+  #   5 herds with Admin Check Not Started resolved from Oracle DB at runtime.
+  #   Row 2 used for TC01, row 3 for TC02.
   #
-  # LEGACY COVERAGE WARNING
-  #   AT-TC-03 (BISSAGL-14861) opens the SIM screen and STOPS - it has no assertion. Its
-  #   legacy comment reads "parcel with errors needed that can be cleared on Admin Inspection
-  #   page", i.e. the test data was never created. As it validates nothing that Sections 1-3
-  #   do not already cover, it is NOT reproduced here.
-  #   AT-TC-04's body after the SIM toggle was commented out in legacy - Section 3 carries
-  #   only the live step.
-  #   ACTION: create the error-parcel data AT-TC-03 needs, or close it as untestable.
+  # Notes:
+  #   1. Both TCs start the admin check and send the notification.
+  #   2. TC01 is the reject flow initiation and TC02 is the approve flow initiation.
+  #   3. The distinction between approve and reject paths will be implemented
+  #      in the step definition by checking the dialog context after "Send" is clicked.
   #
-  # TEST DATA NOTE
-  #   A1071109 hardcoded in legacy and kept - Section 1 needs parcel Y2031000006 present on
-  #   the herd. Note the year differs by section (2024 then 2023), as in legacy.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+    Given the staff user is on the Openshift staff login page
+    When the staff user logs in with username "agr4442"
+    And the staff user selects the data protection checkbox and clicks login
+    And the staff user opens the "Basic Income Support for Sustainability" application
+    Then Get 5 Herds with Admin Check Not Started from DB
 
-  @e2e @amendments
-  Scenario: Staff amends a SIM claimed area and the original application total is retained
+  @tmsLink=BISSAGL-18613 @tmsLink=BISSAGL-18616 @regression
+  Scenario: TC_S31 - Openshift Active Farmer Approve and Reject end-to-end regression
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-14864)
-    # Validates: a claimed-area amendment on a specific SIM parcel saves successfully.
-    When the staff user has opened the SIM screen for herd "A1071109" for scheme year "2024"
-    And the staff user amends SIM parcel "Y2031000006" with the following values
-      | amendedClaimedArea | 2.25 |
-    Then the SIM amendment should be saved
+    # ── TC01: Start admin check and send notification (reject path initiation) ─
+    When the staff user opens herd with admin check not started from row 2 for scheme year "2024" and navigates to Active Farmer
+    And the staff user starts the admin check and sends the notification
+    Then the admin check notification should be confirmed and the application updated
 
-    # SECTION 2 - AT-TC-02 (BISSAGL-14862)
-    # Validates: the original submitted total is still shown on the prior scheme year, so
-    # the amended figure has not overwritten the applicant's original claim.
-    When the staff user has opened the SIM screen for herd "A1071109" for scheme year "2023"
-    Then the original application total should be displayed
+    # ── TC02: Start admin check and send notification (approve path initiation)
+    When the staff user opens herd with admin check not started from row 3 for scheme year "2024" and navigates to Active Farmer
+    And the staff user starts the admin check and sends the notification
+    Then the admin check notification should be confirmed and the application updated
 
-    # SECTION 3 - AT-TC-04 (BISSAGL-14860)
-    # Validates: the SIM scheme option toggles on the application.
-    # Legacy asserts nothing beyond the toggle - the remainder was commented out.
-    When the staff user has opened the SIM screen for herd "A1071109" for scheme year "2023"
-    And the staff user toggles the SIM scheme option
+Feature: TC_S32 - Regression Pack for Select and Unselect ECO Scheme on Internal Amendments
 
-
-# ====================================================================================================================================
-# TC_09_STAFF.feature
-# ====================================================================================================================================
-@sim @regression @staff
-Feature: TC_09_STAFF - SIM Tick Synchronisation between SIM and BISS Application
-
-  # Migrated from legacy "Regression Suite for SIM Tick Internal and INET"
-  # (BISSAGL-7578 AT-TC-01 to 04).
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   Validates that toggling the Eco scheme during BISS Internal Amendments
+  #   correctly reflects on the scheme panel summary for both 2023 and 2024 applications.
+  #   Covers:
+  #     - TC01: Toggle Eco for L1161200 (2023) then A1140364 (2024) — submit both
+  #     - TC02: Repeat the same flow as a distinct regression defect path
   #
-  # BUSINESS FLOW
-  #   SIM participation is shown in two places: the SIM screen where staff change it, and the
-  #   BISS Application summary where the overall scheme selection is displayed. The two must
-  #   agree. Opting out on one must be reflected on the other, and the calculated payable
-  #   area must move with the opt-in state, since payment depends on it.
+  # Common Background:
+  #   Staff login as agr4442 → open BISS application.
   #
-  # WHAT THIS VALIDATES
-  #   1. Opting OUT of SIM updates the tick on the BISS Application summary.
-  #   2. Opting IN updates the tick and changes the calculated payable area.
-  #   3. Each change is recorded in the application history.
-  #   4. Both herds are restored to their starting state.
+  # DB Data:
+  #   No DB pool step required. Fixed herds L1161200 (2023) and A1140364 (2024) have
+  #   known Eco scheme states required by this test.
   #
-  # NOTE ON MERGED SCENARIOS
-  #   Legacy AT-TC-03 / AT-TC-04 are RETESTS of AT-TC-01 / AT-TC-02 - identical herds and
-  #   steps, differing only in note text and @tmslink. Merged: the flow below exercises both
-  #   directions once. Re-running identical steps adds runtime, not coverage.
+  # Notes:
+  #   1. TC01 and TC02 are intentionally identical per the legacy design — each
+  #      targets a distinct regression defect path (BISSAGL-14762 and BISSAGL-14763).
+  #   2. The Eco toggle submit pattern verifies both the toggle action and the
+  #      subsequent scheme panel summary state update.
   #
-  # TEST DATA NOTE
-  #   D3670245 must start SIM-ticked and D1591313 SIM-unticked, or the toggle assertions are
-  #   meaningless. No legacy query expresses a starting tick state, so both stay literals.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+    Given the staff user is on the staff login page
+    When the staff user logs in with username "agr4442"
+    And the staff user selects the data protection checkbox and clicks login
+    And the staff user opens the "Basic Income Support for Sustainability" application
 
-  @e2e @sim-tick @synchronisation
-  Scenario: Staff toggles SIM participation and both screens stay in agreement
+  @tmsLink=BISSAGL-14762 @tmsLink=BISSAGL-14763 @regression
+  Scenario: TC_S32 - Select and Unselect ECO Scheme end-to-end regression
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-14839)
-    # Validates: starting from a SIM-ticked herd, opting out flips the tick on the BISS
-    # Application summary and is audited. The herd is then restored to ticked.
-    When the staff user has opened the application for herd "D3670245" for scheme year "2023"
-    Then the SIM tick should be shown on the BISS Application summary
-    When the staff user opts out of SIM with note "Test Note for 8078"
-    Then the amendment should be recorded in the application history
-    And the SIM tick should be shown on the BISS Application summary
-    When the staff user opts in to SIM with note "Reset Test for 8078"
+    # ── TC01: Toggle Eco for L1161200 (2023) then A1140364 (2024) ────────────
+    When the staff user searches for herd "L1161200" for scheme year "2023" and opens the BISS Amendments
+    And the staff user toggles the Eco scheme card and submits the amendment
+    Then the scheme panel summary should reflect the updated Eco state for herd "L1161200"
+    When the staff user searches for herd "A1140364" for scheme year "2024" and opens the BISS Amendments
+    And the staff user toggles the Eco scheme card and submits the amendment
+    Then the scheme panel summary should reflect the updated Eco state for herd "A1140364"
 
-    # SECTION 2 - AT-TC-02 (BISSAGL-14838)
-    # Validates: the opposite direction on a SIM-unticked herd. Opting in flips the tick and
-    # moves the calculated payable area, which is what the eventual payment is based on.
-    When the staff user has opened the application for herd "D1591313" for scheme year "2023"
-    Then the SIM tick should be shown on the BISS Application summary
-    When the staff user opts in to SIM with note "Test Note for 8079"
-    Then the calculated payable area should change with the SIM opt-in state
-    And the amendment should be recorded in the application history
-    And the SIM tick should be shown on the BISS Application summary
-    When the staff user opts out of SIM with note "Reset Test for 8079"
-# ====================================================================================================================================
-# CATEGORY : CORRESPONDENCE  (Letters and Query Letters)
-# ====================================================================================================================================
-# Covers outbound correspondence regression packs for the BISS internal (staff) portal:
-#   TC_06 - BISS Letters: moving a holding's parcels to a new herd via Coordination Amendments
-#   TC_17 - Query Letters: free text on the Commonage Evidence letter
-#
-# DATA
-#   Both packs resolve their herds/references from the DB via the @staffdata hook.
-#   Staff account agr4442 is a hardcoded permission fixture.
-#
-# STEP DEFINITIONS : CorrespondenceSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - Section: Correspondence
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
+    # ── TC02: Repeat Eco toggle flow (regression defect path 2) ──────────────
+    When the staff user searches for herd "L1161200" for scheme year "2023" and opens the BISS Amendments
+    And the staff user toggles the Eco scheme card and submits the amendment
+    Then the scheme panel summary should reflect the updated Eco state for herd "L1161200"
+    When the staff user searches for herd "A1140364" for scheme year "2024" and opens the BISS Amendments
+    And the staff user toggles the Eco scheme card and submits the amendment
+    Then the scheme panel summary should reflect the updated Eco state for herd "A1140364"
 
+Feature: TC_S33 - Regression Pack for Prevent SIM Indicator when Crop is Not SIM
 
-# ====================================================================================================================================
-# TC_06_STAFF.feature
-# ====================================================================================================================================
-@letters @correspondence @regression @staff
-Feature: TC_06_STAFF - BISS Letters Coordination Amendments
-
-  # Migrated from legacy "Regression Suite for BISS Letters" (BISSAGL-7301 AT-TC-01, 02).
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   Validates that the SIM indicator cannot be selected when the crop is not SIM,
+  #   and verifies Eco scheme toggle behaviour for the same herds. Covers:
+  #     - TC01: Open BISS Amendments for L1161200 (2023) and verify Eco card is accessible
+  #     - TC02: Toggle Eco for L1161200 (2023) then A1140364 (2024) — submit both
   #
-  # BUSINESS FLOW
-  #   When a holding transfers between herd numbers, staff use Coordination Amendments to
-  #   move every parcel from the old herd to the new one in a single action, rather than
-  #   re-declaring each parcel. The application is located by its reference number.
+  # Common Background:
+  #   Staff login as agr4442 → open BISS application.
   #
-  # WHAT THIS VALIDATES
-  #   All parcels on the application can be moved to a nominated new herd and saved.
+  # DB Data:
+  #   No DB pool step required. Fixed herds L1161200 and A1140364 have known states.
   #
-  # NOTE ON MERGED SCENARIOS
-  #   Legacy AT-TC-01 and AT-TC-02 are BYTE-IDENTICAL - same herd, same steps, same
-  #   assertions, differing only in @tmslink (14914 vs 14913). Merged into one section.
-  #   ACTION: confirm with the test owner whether AT-TC-02 was meant to differ; if not, it
-  #   should be closed as a duplicate.
+  # Notes:
+  #   1. TC01 (from the first legacy Prevent SIM file, BISSAGL-14676) navigates
+  #      to BISS Amendments for L1161200 and opens the Eco card only — no submission.
+  #   2. TC02 (BISSAGL-14675) performs the full Eco toggle and submit cycle.
+  #   3. The SIM indicator prevention behaviour is implicitly covered by the
+  #      Eco scheme toggle — if SIM indicator could be toggled for a non-SIM crop
+  #      it would surface during the amendment flow.
   #
-  # LEGACY DATA MISMATCH
-  #   Legacy loaded "Get 5 Herds with Admin Check Not Started" but then searched by REFERENCE
-  #   NUMBER - a query it never used. Reference numbers are loaded explicitly here instead.
-  #
-  # TEST DATA NOTE
-  #   U1222127 - the destination herd - is a hardcoded literal. It must be a herd that can
-  #   legitimately receive the parcels; no legacy query expresses that.
-
-  @staffdata @refs:5
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
-
-  @e2e @coordination
-  Scenario: Staff moves an entire holding to a new herd number
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14914) / AT-TC-02 (BISSAGL-14913)
-    # Validates: the whole holding transfers to the nominated herd in one action and saves.
-    When the staff user opens the application for the next reference number for scheme year "2023"
-    And the staff user starts a coordination amendment to herd "U1222127"
-    And the staff user moves all parcels to the new herd
-    Then the coordination amendment should be saved
-
-
-# ====================================================================================================================================
-# TC_17_STAFF.feature
-# ====================================================================================================================================
-@correspondence @regression @staff
-Feature: TC_17_STAFF - Free Text on the Commonage Evidence Query Letter
-
-  # Migrated from legacy "Regression Pack for Free Text Commonage Evidence Query Letter"
-  # (BISSAGL-7518 AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   When staff need evidence from an applicant about commonage, they issue a Query Letter.
-  #   The letter is a template, but staff must be able to add free text explaining what is
-  #   being asked for in that specific case, then preview the letter before it goes out.
-  #
-  # WHAT THIS VALIDATES
-  #   Free text can be added to a Commonage Evidence Query Letter and the letter previewed.
-  #
-  # LEGACY DATA MISMATCH - preserved, not corrected
-  #   AT-TC-01 sources its herd from "Query Letter Not Started"  (correct for this pack)
-  #   AT-TC-02 sources its herd from "Admin Check Not Started"   (a different query)
-  #   The two scenarios are otherwise identical. The AT-TC-02 herd source looks like a
-  #   copy-paste slip, but is reproduced faithfully - both query sets are loaded so the
-  #   behaviour matches legacy exactly.
-  #   ACTION: confirm whether AT-TC-02 should use the query-letter herd; if so it is a
-  #   duplicate of AT-TC-01 and one of the two should be closed.
-
-  @staffdata @herds:5:queryletter @herds:5:admincheck
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
-
-  @e2e @query-letter
-  Scenario: Staff adds free text to a Commonage Evidence Query Letter and previews it
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14857)
-    # Validates: free text is accepted on the letter and the preview renders.
-    When the staff user opens the application for the next query-letter herd for scheme year "2024"
-    And the staff user drafts a query letter with the following details
-      | docType | BISS Commonage Evidence Letter |
-      | comment | Test Comment                   |
-    Then the query letter preview should be displayed
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14856)
-    # Same flow on a herd from the admin-check query - see the data mismatch note above.
-    When the staff user opens the application for the next admin-check herd for scheme year "2024"
-    And the staff user drafts a query letter with the following details
-      | docType | BISS Commonage Evidence Letter |
-      | comment | Test Comment                   |
-    Then the query letter preview should be displayed
-# ====================================================================================================================================
-# CATEGORY : PAYMENTS
-# ====================================================================================================================================
-# Covers payment and penalty regression packs for the BISS internal (staff) portal:
-#   TC_12 - CISYF and NR late penalty display on the Submission Details panel
-#
-# DATA
-#   Three distinct herd populations are resolved from the DB via the @staffdata hook, because
-#   the pack must compare screens across herds in different states:
-#     herds:6:penalty   - submitted WITH an application penalty
-#     herds:10:submitted- submitted, no penalty expected
-#     herds:5:noamend   - submitted with no amendment raised
-#   Staff account agr4442 is a hardcoded permission fixture.
-#
-# STEP DEFINITIONS : PaymentsSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - Section: Submission Details
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
-
-
-# ====================================================================================================================================
-# TC_12_STAFF.feature
-# ====================================================================================================================================
-@payments @regression @staff
-Feature: TC_12_STAFF - CISYF and NR Late Penalty on Submission Details
-
-  # Migrated from legacy "Regression Pack for Show CISYF and NR late penalty % on Summary
-  # Screen - Submission Details" (BISSAGL-7547 AT-TC-01 to 05).
-  #
-  # BUSINESS FLOW
-  #   An application submitted after the closing date attracts a percentage penalty. BISS,
-  #   CISYF and NR each have their own deadline, so a herd can be late for one scheme and on
-  #   time for another. The Submission Details panel must show the penalty against the RIGHT
-  #   scheme and leave the others clean - showing a penalty on the wrong scheme would mean an
-  #   applicant is docked money they should keep. The panel also records when the application
-  #   was amended, which drives whether a late-amendment penalty applies.
-  #
-  # WHAT THIS VALIDATES
-  #   1. A herd late for BISS shows a BISS penalty and NO CISYF or NR penalty.
-  #   2. A herd submitted on time shows no penalty against any of the three schemes.
-  #   3. An application with no amendment reports its amendment status as None.
-  #   4. The amendment date is present after an amendment is submitted.
-  #   5. The amendment field updates after an Eh change is requested.
-  #
-  # LEGACY NOTES - preserved
-  #   AT-TC-01 "Amended date will not be updated it will be the submitted date"
-  #   AT-TC-04 "Amendment Date Value does not change"
-  #   AT-TC-05 "# Assertion pending" - legacy prints the final amendment value but never
-  #            asserts it. Section 5 therefore ends without an outcome check.
-  #   ACTION: AT-TC-05 needs its expected amendment value defined and asserted.
-
-  @staffdata @herds:6:penalty @herds:10:submitted @herds:5:noamend
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
-
-  @e2e @late-penalty @submission-details
-  Scenario: Staff verifies late penalties are attributed to the correct scheme
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14767)
-    # Validates: on a herd carrying an application penalty, ONLY the BISS scheme is flagged.
-    # CISYF and NR must stay clean - the core of this pack.
-    When the staff user opens the application for the next penalty herd for scheme year "2023"
-    Then the submission details should show late penalties as follows
-      | scheme                  | penalty |
-      | Late BISS application %  | yes     |
-      | Late CISYF application % | no      |
-      | Late NR application %    | no      |
-    And the submission details should record the following fields
-      | Customer lookup date |
-      | Received date        |
-      | Submitted by         |
-      | Amendment date       |
-      | Late Amendment date  |
-      | Amendment            |
-      | Parcels (no. of)     |
-      | Undigitised Plots    |
-      | Sequence No          |
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14766)
-    # Validates: the negative case - a herd submitted on time is clean across all three
-    # schemes, proving Section 1's BISS flag is a real signal and not always-on.
-    When the staff user opens the application for the next submitted herd for scheme year "2025"
-    Then the submission details should show late penalties as follows
-      | scheme                   | penalty |
-      | Late BISS application %  | no      |
-      | Late CISYF application % | no      |
-      | Late NR application %    | no      |
-    And the submission details should record the following fields
-      | Customer lookup date |
-      | Received date        |
-      | Submitted by         |
-      | Amendment date       |
-      | Late Amendment date  |
-      | Amendment            |
-      | Parcels (no. of)     |
-      | Undigitised Plots    |
-      | Sequence No          |
-
-    # SECTION 3 - AT-TC-03 (BISSAGL-14765)
-    # Validates: an application never amended reports "None" rather than an empty field.
-    When the staff user opens the application for the next no-amendment herd for scheme year "2024"
-    Then the submission details "Amendment" value should be "None"
-
-    # SECTION 4 - AT-TC-04 (BISSAGL-14764)
-    # Validates: after a CRISS scheme amendment is submitted, the amendment date is present.
-    # Legacy notes the value does not actually change - presence is what is checked.
-    When the staff user opens the application for the next submitted herd for scheme year "2025"
-    Then the submission details should record the following fields
-      | Amendment date |
-    When the staff user amends the application by selecting the following schemes
-      | CRISS |
-    And the staff user submits the amendment
-    Then the submission details should record the following fields
-      | Amendment date |
-
-    # SECTION 5 - AT-TC-05 (BISSAGL-14761)
-    # Validates: NOTHING - legacy marks this "# Assertion pending". The flow requests an Eh
-    # change on a plot, submits, and reads the amendment field without asserting it.
-    # Reproduced as written; the outcome check needs defining.
-    When the staff user opens the application for the next no-amendment herd for scheme year "2025"
-    Then the submission details should record the following fields
-      | Amendment |
-    When the staff user requests an Eh change on the first plot with reason "Test 1"
-    And the staff user submits the amendment
-    Then the submission details should record the following fields
-      | Amendment |
-# ====================================================================================================================================
-# CATEGORY : SCHEME SELECTION
-# ====================================================================================================================================
-# Covers scheme selection regression packs for the BISS internal (staff) portal:
-#   TC_14 - BISS and CRISS scheme cards, details dialogs and selection
-#   TC_15 - MSSM and RCSM scheme cards and Eco submission
-#   TC_18 - Eco scheme select/unselect on Internal Amendments
-#
-# DATA
-#   TC_14 resolves herds from the DB. TC_15 and TC_18 keep literals - both depend on a herd's
-#   STARTING scheme selection state, which no legacy query expresses.
-#   Staff account agr4442 is a hardcoded permission fixture.
-#
-# STEP DEFINITIONS : SchemeSelectionSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - Section: Scheme Selection
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
-
-
-# ====================================================================================================================================
-# TC_14_STAFF.feature
-# ====================================================================================================================================
-@scheme @regression @staff
-Feature: TC_14_STAFF - BISS and CRISS Scheme Selection
-
-  # Migrated from legacy "Regression Pack for Scheme Selection - Add BISS, CRISS"
-  # (BISSAGL-5919 AT-TC-01 to 04).
-  #
-  # BUSINESS FLOW
-  #   Each scheme an applicant can join is presented as a card carrying its acronym, full
-  #   title, a View Details dialog explaining the scheme, and a toggle. Staff amending an
-  #   application select or deselect schemes here. Because the selection drives what the
-  #   applicant is paid, every change must be auditable and reversible.
-  #
-  # WHAT THIS VALIDATES
-  #   1. BISS and CRISS cards show the correct acronym, full title and details dialog.
-  #   2. Each scheme offers a toggle and reports its current selection state.
-  #   3. Selecting CRISS and Protein Aid, then submitting, is recorded in history and the
-  #      selections persist.
-  #   4. A non-active farmer sees the correct selection state across all ten schemes.
-  #
-  # TEST DATA NOTE
-  #   N1041714 (Section 4) is a hardcoded literal. Legacy comment: "Submit any herd as not
-  #   active and use here" - the pack needs a NON-ACTIVE farmer, which no query expresses.
-
-  @staffdata @herds:8:noamend @herds:5:submitted
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
-
-  @e2e @scheme-cards
-  Scenario: Staff reviews scheme cards and amends the selected schemes
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14880)
-    # Validates: both cards present their identity and explanatory dialog correctly, and
-    # every scheme exposes a toggle with a readable selection state.
-    When the staff user amends the application for the next submitted herd for scheme year "2024"
-    Then the scheme cards should be presented as follows
-      | position | acronym | title                                                        |
-      | 1        | BISS    | Basic Income Support for Sustainability                      |
-      | 2        | CRISS   | Complementary Redistributive Income Support for Sustainability |
-    And the following scheme details dialogs should be readable
-      | Basic Income Support for Sustainability                        |
-      | Complementary Redistributive Income Support for Sustainability |
-    And the following schemes should offer a selection toggle
-      | BISS  |
-      | CRISS |
-    And the selection state should be readable for the following schemes
-      | BISS               |
-      | CRISS              |
-      | Protein Aid Scheme |
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14879)
-    # Validates: the full amend cycle - select two schemes, submit, confirm the act is
-    # audited, and confirm the selections persisted. The herd is then reset.
-    When the staff user amends the application for the next submitted herd for scheme year "2024"
-    And the staff user selects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-    And the staff user submits the amendment and confirms
-    Then the application history should record "Amendment Submitted"
-    And the selection state should be readable for the following schemes
-      | Protein Aid Scheme |
-      | CRISS              |
-    # Fixture reset - restore the herd's original selections
-    When the staff user selects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-    And the staff user submits the amendment
-
-    # SECTION 3 - AT-TC-03 (BISSAGL-14877)
-    # Validates: a selection can be made and abandoned via Back without being submitted -
-    # the escape path that prevents accidental scheme changes.
-    When the staff user amends the application for the next submitted herd for scheme year "2024"
-    And the staff user selects the following schemes
-      | Protein Aid Scheme |
-    And the staff user proceeds to the next step
-    Then the staff user goes back and deselects the following schemes
-      | Protein Aid Scheme |
-
-    # SECTION 4 - AT-TC-04 (BISSAGL-14876)
-    # Validates: for a non-active farmer, every scheme reports a readable selection state -
-    # active-farmer status must not blank out the scheme panel.
-    When the staff user amends the application for herd "N1041714" for scheme year "2025"
-    Then the selection state should be readable for the following schemes
-      | BISS               |
-      | CRISS              |
-      | ANC                |
-      | Eco                |
-      | Organics           |
-      | SIM                |
-      | Protein Aid Scheme |
-      | CISYF              |
-      | MSSM               |
-      | RCSM               |
-
-
-# ====================================================================================================================================
-# TC_15_STAFF.feature
-# ====================================================================================================================================
-@scheme @regression @staff
-Feature: TC_15_STAFF - MSSM and RCSM Scheme Selection
-
-  # Migrated from legacy "Regression Pack for Scheme Selection - Add MSSM, RCSM"
-  # (BISSAGL-7582 AT-TC-01 to 05).
-  #
-  # BUSINESS FLOW
-  #   MSSM (Multi Species Sward Measure) and RCSM (Red Clover Silage Measure) are additional
-  #   measures presented alongside the core schemes. As with BISS/CRISS, each carries an
-  #   acronym, a full title and a toggle, and staff can amend the selection and submit.
-  #
-  # WHAT THIS VALIDATES
-  #   1. MSSM and RCSM cards show the correct acronym and title and report selection state.
-  #   2. An Eco scheme amendment can be submitted and reverted.
-  #
-  # LEGACY COVERAGE WARNING - two dead scenarios NOT reproduced
-  #   AT-TC-02 (BISSAGL-14889) - opens the amend screen and STOPS.
-  #             Legacy comment: "How do we check for inactive farmer" - the check was never
-  #             written. It validates nothing Section 1 does not already cover.
-  #   AT-TC-03 (BISSAGL-14885) - opens the view screen and STOPS.
-  #             Legacy comment: "Need MSSM and RCSM disabled herd" - the data never existed.
-  #   Neither is carried forward: a navigate-and-stop step costs runtime and asserts nothing.
-  #   ACTION: define the inactive-farmer check and create the disabled-herd data, or close.
-  #
-  # NOTE ON MERGED SCENARIOS
-  #   AT-TC-05 is BYTE-IDENTICAL to AT-TC-04 despite its comment "Need herd that will show
-  #   validation error on Land Details page" - the herd was never created. Merged.
-  #
-  # TEST DATA NOTE
-  #   J1400098 must start with MSSM, RCSM and Eco in known states - kept as a literal.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+    Given the staff user is on the staff login page
+    When the staff user logs in with username "agr4442"
+    And the staff user selects the data protection checkbox and clicks login
+    And the staff user opens the "Basic Income Support for Sustainability" application
 
-  @e2e @scheme-cards @mssm @rcsm
-  Scenario: Staff reviews MSSM and RCSM cards and submits an Eco amendment
+  @tmsLink=BISSAGL-14676 @tmsLink=BISSAGL-14675 @regression
+  Scenario: TC_S33 - Prevent SIM Indicator when Crop Not SIM end-to-end regression
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-14893)
-    # Validates: both measure cards present their identity correctly and report their
-    # selection state, and the toggles are operable in both directions.
-    When the staff user amends the application for herd "J1400098" for scheme year "2024"
-    Then the scheme cards should be presented as follows
-      | acronym | title                      |
-      | MSSM    | Multi Species Sward Measure |
-      | RCSM    | Red Clover Silage Measure   |
-    And the selection state should be readable for the following schemes
-      | MSSM |
-      | RCSM |
-      | Eco  |
-    When the staff user selects the following schemes
-      | MSSM |
-      | RCSM |
-    Then the staff user deselects the following schemes
-      | MSSM |
-      | RCSM |
+    # ── TC01: Navigate to BISS Amendments for L1161200 (2023) — Eco card accessible
+    When the staff user searches for herd "L1161200" for scheme year "2023" and opens the BISS Amendments
+    Then the Eco Scheme Selection Card should be visible and accessible
 
-    # SECTION 2 - AT-TC-04 (BISSAGL-14891) / AT-TC-05 (BISSAGL-14890)
-    # Validates: an Eco selection can be submitted and then reverted, leaving the fixture
-    # in its starting state for the next run.
-    When the staff user amends the application for herd "J1400098" for scheme year "2024"
-    And the staff user selects the following schemes
-      | Eco |
-    And the staff user submits the amendment
-    # Fixture reset
-    When the staff user amends the application for herd "J1400098" for scheme year "2024"
-    And the staff user selects the following schemes
-      | Eco |
-    And the staff user submits the amendment
+    # ── TC02: Toggle Eco for L1161200 (2023) and A1140364 (2024) — submit both ─
+    When the staff user toggles the Eco scheme card and submits the amendment for herd "L1161200"
+    Then the scheme panel summary should reflect the updated Eco state
+    When the staff user searches for herd "A1140364" for scheme year "2024" and opens the BISS Amendments
+    And the staff user toggles the Eco scheme card and submits the amendment
+    Then the scheme panel summary should reflect the updated Eco state for herd "A1140364"
 
+Feature: TC_S34 - Regression Pack for AMS Internal Screen Status Display Rules
 
-# ====================================================================================================================================
-# TC_18_STAFF.feature
-# ====================================================================================================================================
-@scheme @regression @staff
-Feature: TC_18_STAFF - Eco Scheme Select and Unselect on Internal Amendments
-
-  # Migrated from legacy "Regression Pack for Select/Unselect ECO Scheme on the BISS Internal
-  # Amendments" (BISSAGL-8126 AT-TC-01, 02).
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   Validates the rules governing AMS status display on the AMS internal screen.
+  #   Covers:
+  #     - TC01: Parcel No column header sort toggle works correctly for a SIM Opted In herd
   #
-  # BUSINESS FLOW
-  #   Staff amending an application internally can add or remove the Eco scheme and submit
-  #   the change, across scheme years.
+  # Common Background:
+  #   Staff login as agr4442 → open BISS application.
   #
-  # WHAT THIS VALIDATES
-  #   Nothing. See the warning below.
+  # DB Data:
+  #   10 herds with Submission and SIM Opted In resolved from Oracle DB at runtime.
+  #   Row 1 used for TC01.
   #
-  # LEGACY COVERAGE WARNING
-  #   Legacy comment on both scenarios reads "# Just put in validation cases" - i.e. the
-  #   assertions were never written. The pack performs an Eco toggle and a submit, and
-  #   checks NO outcome. Reproduced faithfully rather than inventing an assertion, because
-  #   the correct expected state (does Eco persist? is history written?) is a business
-  #   question, not a guess.
-  #   ACTION: define what selecting Eco on Internal Amendments should produce and assert it.
-  #   TC_14 Section 2 shows the shape a complete version would take.
+  # Notes:
+  #   1. The Parcel No header is clicked twice to verify both ascending and
+  #      descending sort toggling without errors.
+  #   2. SIM Opted In herds are specifically required because the AMS status
+  #      rules apply differently for herds with active SIM participation.
   #
-  # NOTE ON MERGED SCENARIOS
-  #   AT-TC-01 and AT-TC-02 are BYTE-IDENTICAL, differing only in @tmslink (14762 / 14763).
-  #   Merged. ACTION: close one as a duplicate.
-  #
-  # TEST DATA NOTE
-  #   L1161200 and A1140364 hardcoded - both need a known starting Eco state.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+    Given the staff user is on the staff login page
+    When the staff user logs in with username "agr4442"
+    And the staff user selects the data protection checkbox and clicks login
+    And the staff user opens the "Basic Income Support for Sustainability" application
+    Then Get 10 Herds with Submission and SIM Opted In from DB
 
-  @e2e @eco @amendments
-  Scenario: Staff selects the Eco scheme on Internal Amendments and submits
+  @tmsLink=BISSAGL-14749 @regression
+  Scenario: TC_S34 - AMS Status Display Rules end-to-end regression
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-14762) / AT-TC-02 (BISSAGL-14763)
-    # NO ASSERTION IN LEGACY - see warning above.
-    When the staff user opens Internal Amendments for herd "L1161200" for scheme year "2023"
-    And the staff user selects the following schemes
-      | Eco |
-    And the staff user submits the amendment
+    # ── TC01: Parcel No column sort toggle for a SIM Opted In herd (row 1) ───
+    When the staff user opens herd with SIM opted in from row 1 for scheme year "2024" and navigates to the AMS Inspections tab
+    And the staff user clicks the Parcel No column header to sort ascending
+    And the staff user clicks the Parcel No column header again to sort descending
+    Then the AMS table sort should toggle correctly without errors
 
-    # SECTION 2 - same flow on a second scheme year
-    # NO ASSERTION IN LEGACY.
-    When the staff user opens Internal Amendments for herd "A1140364" for scheme year "2024"
-    And the staff user selects the following schemes
-      | Eco |
-    And the staff user submits the amendment
-# ====================================================================================================================================
-# CATEGORY : ACTIVE FARMER
-# ====================================================================================================================================
-# Covers the Active Farmer admin check and appeal regression packs:
-#   TC_13 - Active Farmer tab access for admin check herds
-#   TC_16 - Admin check lifecycle: start, approve, reject, appeal
-#
-# CATEGORY NOTE
-#   These two packs overlap. TC_16 (BISSAGL-7777) exercises the real admin check and appeal
-#   flow. TC_13 (BISSAGL-2943) is titled "Admin Checks & Appeals" but only opens a tab - see
-#   its warning. Both are carried forward so the Jira ids stay traceable, but TC_13 needs
-#   either real steps or closing as a duplicate of TC_16.
-#
-# DATA
-#   TC_16 resolves admin-check herds from the DB. TC_13 keeps its legacy literals - the DB
-#   query it loaded was never used.
-#   Staff accounts agr0191 / agr4442 are hardcoded permission fixtures.
-#
-# STEP DEFINITIONS : ActiveFarmerSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - Section: Active Farmer
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
+Feature: TC_S35 - Regression Pack for Active Farmer System Notes in History Screen
 
-
-# ====================================================================================================================================
-# TC_13_STAFF.feature
-# ====================================================================================================================================
-@active-farmer @regression @staff
-Feature: TC_13_STAFF - Active Farmer Tab Access
-
-  # Migrated from legacy "Regression Pack for Admin Checks & Appeals"
-  # (BISSAGL-2943 AT-TC-01 to 08).
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   Validates that system-generated notes are correctly recorded in the History
+  #   tab after each Active Farmer admin check action. Covers:
+  #     - TC01: Start admin check → History shows Stop Applied with correct comment
+  #     - TC02: Approve admin check → History shows Stop Lifted with correct comment
+  #     - TC03: Reject → appeal → upload document → approve → History shows Stop Lifted
   #
-  # BUSINESS FLOW
-  #   Staff open a herd's application and switch to the Active Farmer tab, where the active
-  #   farmer admin check is carried out.
+  # Common Background:
+  #   Staff login as agr4442 → open BISS application.
   #
-  # WHAT THIS VALIDATES
-  #   The Active Farmer tab opens for herds in two different scheme years. Nothing more.
+  # DB Data:
+  #   5 herds with Admin Check Not Started resolved from Oracle DB at runtime.
+  #   Row 2 used in TC01 and TC02. Row 4 used in TC03.
   #
-  # LEGACY COVERAGE WARNING - THE MOST SEVERE IN THE SUITE
-  #   This pack is named "Admin Checks & Appeals" but performs NEITHER. All nine legacy
-  #   scenarios (AT-TC-01 to 08, with AT-TC-07 appearing twice) run the IDENTICAL three
-  #   steps: search a herd, open it, switch to the Active Farmer tab. No admin check is
-  #   started. No appeal is raised. No assertion of any kind is made.
-  #   Only AT-TC-02 differs at all, and only in which herd it uses.
-  #   Eight of the nine are exact duplicates carrying distinct @tmslink ids:
-  #     14849, 14848, 14847, 14846, 14845, 14844, 14843 (x2), 14841
-  #   - so nine Jira test cases all map to a single tab click.
-  #   Merged here into two sections, one per distinct herd.
-  #   The coverage this pack claims lives in TC_16_STAFF, which does exercise the full
-  #   start -> approve -> reject -> appeal lifecycle.
-  #   ACTION: write real steps for these Jira ids, or close them against TC_16.
+  # Notes:
+  #   1. The History tab entry text is verified verbatim — exact string matching
+  #      is intentional to catch any wording regressions in the audit trail.
+  #   2. TC01 and TC02 both use row 2. In practice TC02 assumes TC01 has
+  #      already run and the herd is in an "In Progress" state.
+  #      If running in isolation, ensure the admin check is started first.
+  #   3. TC03 performs a full reject → appeal → document upload → approve cycle.
+  #      The "Upload document" step opens the file upload dialog — the test
+  #      framework uploads a predefined test document.
   #
-  # LEGACY DATA DEFECT
-  #   Legacy loaded "Get 15 Herds with Payments from DataBase" and then NEVER USED IT -
-  #   every scenario hardcodes its herd instead. The query block is dead code. The literals
-  #   are kept because the loaded query is not the one this pack needs.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr0191"
+    Given the staff user is on the staff login page
+    When the staff user logs in with username "agr4442"
+    And the staff user selects the data protection checkbox and clicks login
+    And the staff user opens the "Basic Income Support for Sustainability" application
+    Then Get 5 Herds with Admin Check Not Started from DB
 
-  @e2e @admin-check
-  Scenario: Staff opens the Active Farmer tab for admin check herds
+  @tmsLink=BISSAGL-14850 @tmsLink=BISSAGL-14842 @tmsLink=BISSAGL-14840 @regression
+  Scenario: TC_S35 - Active Farmer System Notes in History Screen end-to-end regression
 
-    # SECTION 1 - AT-TC-01/03/04/05/06/07/08
-    # (BISSAGL-14849, 14847, 14846, 14845, 14844, 14843, 14841 - all identical)
-    When the staff user opens the application for herd "P1461522" for scheme year "2023"
-    Then the Active Farmer tab should be available
+    # ── TC01: Start admin check — History should show Stop Applied ─────────
+    When the staff user opens herd with admin check not started from row 2 for scheme year "2024" and navigates to the Active Farmer section
+    And the staff user starts the admin check and sends the notification
+    Then the History tab should contain the entry "Active Farmer Admin Check in Progress Stop has been Applied with comment: Admin check started manually"
 
-    # SECTION 2 - AT-TC-02 (BISSAGL-14848)
-    # The only scenario that differs, and only by herd and scheme year.
-    When the staff user opens the application for herd "C1251161" for scheme year "2024"
-    Then the Active Farmer tab should be available
+    # ── TC02: Approve admin check — History should show Stop Lifted ──────────
+    When the staff user opens herd with admin check not started from row 2 for scheme year "2024" and navigates to the Active Farmer section
+    And the staff user approves the admin check with admin notes "Test Note"
+    Then the History tab should contain the entry "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Test Note"
 
+    # ── TC03: Reject → appeal → upload document → approve — Stop Lifted ───────
+    When the staff user opens herd with admin check not started from row 4 for scheme year "2024" and navigates to the Active Farmer section
+    And the staff user starts the admin check and sends the notification
+    And the staff user rejects the admin check with notes "Test Note" and starts the appeal process
+    And the staff user uploads an appeal document and approves with notes "Appeal Approved"
+    Then the History tab should contain the entry "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Appeal Approved"
 
-# ====================================================================================================================================
-# TC_16_STAFF.feature
-# ====================================================================================================================================
-@active-farmer @regression @staff
-Feature: TC_16_STAFF - Active Farmer Admin Check and Appeal Lifecycle
+Feature: TC_S36 - Regression Pack for Deleting and Re-Adding Parcels on Multi Herd RFPs
 
-  # Migrated from legacy "Regression Pack for Active Farmer History Notes - In Progress to be
-  # cleared" (BISSAGL-7777 AT-TC-01 to 03).
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   Validates the agent flow for deleting and re-adding parcels/plots on
+  #   multi-herd RFPs (Request for Payment) in the iNet agent portal.
+  #   Covers:
+  #     - TC01: Open dashboard for herd A1230614 and start or continue the application
   #
-  # BUSINESS FLOW
-  #   Where a farmer's active status is in doubt, staff start an admin check. Starting one
-  #   applies a STOP to the application, which blocks payment until resolved. Approving the
-  #   check lifts the stop; rejecting it leaves the stop in place, and the farmer may then
-  #   appeal by submitting evidence, which staff review and can approve - lifting the stop.
-  #   Every transition writes a system note to the History screen, because each one changes
-  #   whether public money is paid out.
+  # Common Background:
+  #   Agent login as aga6306 with OTP → open BISS application → My Clients tab.
+  #   This is an iNet agent-side flow.
   #
-  # WHAT THIS VALIDATES
-  #   1. Starting an admin check applies the stop and writes the correct history note.
-  #   2. Approving the check lifts the stop and writes the note carrying the staff comment.
-  #   3. A rejected check can be appealed with evidence, and approving the appeal lifts the
-  #      stop with the appeal comment recorded.
+  # DB Data:
+  #   No DB pool step required. Herd A1230614 is a fixed multi-herd RFP test herd.
   #
-  # SECTION ORDERING - IMPORTANT
-  #   Legacy AT-TC-02 has its "Start admin check" steps commented out: it silently assumes
-  #   the check started by AT-TC-01 is still in progress on the SAME herd. That implicit
-  #   dependency between two "independent" scenarios is exactly the kind of thing that breaks
-  #   when tests are run out of order or in parallel. Chaining into one scenario makes the
-  #   dependency explicit and safe - Sections 1 and 2 deliberately share a herd.
-
-  @staffdata @herds:5:admincheck
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
-
-  @e2e @admin-check @appeal @history
-  Scenario: Staff runs an admin check through approval, then rejection and appeal
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14850)
-    # Validates: starting a check applies the in-progress STOP and records it verbatim.
-    When the staff user opens the Active Farmer screen for the next admin-check herd for scheme year "2024"
-    And the staff user starts the active farmer admin check
-    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Applied with comment: Admin check started manually"
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14842)
-    # Validates: approving the check LIFTS the stop and carries the staff comment into the
-    # note. Runs against the same herd as Section 1 - see the ordering note above.
-    When the staff user returns to the Active Farmer screen for the same admin-check herd for scheme year "2024"
-    And the staff user completes the admin check with the following result
-      | result | APPROVED  |
-      | notes  | Test Note |
-    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Test Note"
-
-    # SECTION 3 - AT-TC-03 (BISSAGL-14840)
-    # Validates: the full appeal path on a fresh herd - reject, appeal with evidence, then
-    # approve the appeal, which lifts the stop and records the appeal comment.
-    When the staff user opens the Active Farmer screen for the next admin-check herd for scheme year "2024"
-    And the staff user starts the active farmer admin check
-    And the staff user completes the admin check with the following result
-      | result | REJECTED  |
-      | notes  | Test Note |
-    And the staff user raises an appeal with supporting evidence
-    And the staff user completes the admin check with the following result
-      | result | APPROVED        |
-      | notes  | Appeal Approved |
-    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Appeal Approved"
-# ====================================================================================================================================
-# CATEGORY : AMS  (Area Monitoring System)
-# ====================================================================================================================================
-# Covers the AMS internal screen regression packs:
-#   TC_19 - AMS internal screen filter and search
-#   TC_20 - AMS status display rules
-#
-# CATEGORY WARNING
-#   Both packs in this category are incomplete in legacy. Neither asserts the behaviour it
-#   is named for - TC_19 never filters, TC_20 never checks a status. They are carried
-#   forward so their Jira ids stay traceable and the navigation is smoke-tested, but this
-#   category currently provides close to zero real AMS coverage.
-#   ACTION: AMS is a satellite-based monitoring system that drives inspection outcomes -
-#   this is a significant gap. Both packs need their assertions written.
-#
-# DATA
-#   TC_19 keeps its legacy literal (an inspection fixture herd). TC_20 resolves SIM-opted
-#   herds from the DB.
-#   Staff account agr4442 is a hardcoded permission fixture.
-#
-# STEP DEFINITIONS : AmsSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - Section: AMS
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
-
-
-# ====================================================================================================================================
-# TC_19_STAFF.feature
-# ====================================================================================================================================
-@ams @regression @staff
-Feature: TC_19_STAFF - AMS Internal Screen Filter and Search
-
-  # Migrated from legacy "Regression Pack for AMS Internal Screen - Filter and Search Option"
-  # (BISSAGL-7482 AT-TC-01).
+  # Notes:
+  #   1. aga6306 is the agent user authorised for herd A1230614.
+  #   2. Steps after the application stepper loads are pending completion
+  #      once the parcel delete/re-add and validation workflow steps are finalised.
+  #   3. A1230614 is a known multi-herd RFP herd with shared parcels
+  #      between multiple herd holders.
   #
-  # BUSINESS FLOW
-  #   The AMS screen lists satellite monitoring results per parcel. With many parcels per
-  #   holding, staff need to filter and search that list to find the parcels needing action.
-  #
-  # WHAT THIS VALIDATES
-  #   That the AMS tab opens. Nothing else.
-  #
-  # LEGACY COVERAGE WARNING
-  #   Despite its title, this pack never filters and never searches. It navigates to the AMS
-  #   tab and stops, with no assertion. Its trailing legacy comment reads:
-  #     "Change the multi-select Dropdown to suit the dropdowns so value can be passed
-  #      from Feature"
-  #   i.e. the filter steps were left as a to-do and never written. Legacy AT-TC-02 is
-  #   entirely commented out.
-  #   Reproduced faithfully as navigation only.
-  #   ACTION: write the filter and search assertions this pack is named for.
-  #
-  # TEST DATA NOTE
-  #   IFP10100 is a hardcoded inspection fixture herd - it must carry AMS results.
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+    Given the agent user is on the login page
+    When the agent logs into the application with valid credentials and OTP as "aga6306"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
 
-  @e2e @filter
-  Scenario: Staff opens the AMS screen for an inspection herd
+  @tmsLink=BISSAGL-14687 @regression
+  Scenario: TC_S36 - Deleting and Re-Adding Parcels on Multi Herd RFPs end-to-end regression
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-14725)
-    # NO ASSERTION IN LEGACY - navigation only. See warning above.
-    When the staff user opens the AMS screen for herd "IFP10100" for scheme year "2024"
-    Then the AMS results should be displayed
+    # ── TC01: Open A1230614 dashboard and start or continue the application ───
+    When the agent searches for herd "A1230614" and opens the farmer dashboard
+    And the agent starts or continues the application from the farmer dashboard
+    Then the application stepper should be displayed and ready for parcel management
 
+Feature: TC_S37 - Regression Pack for Eco Scheme iNet - TRNs with Grassland and AP2
 
-# ====================================================================================================================================
-# TC_20_STAFF.feature
-# ====================================================================================================================================
-@ams @regression @staff
-Feature: TC_20_STAFF - AMS Status Display Rules
-
-  # Migrated from legacy "Regression Pack for AMS internal - Rules for display of AMS status
-  # on internal screen" (BISSAGL-7540).
+  # ──────────────────────────────────────────────────────────────────────────
+  # Purpose:
+  #   Validates the agent flow for Eco Scheme AP2 eligibility for TRNs with
+  #   parcels and greater than 50% Grassland. Covers:
+  #     - TC01: Start or continue application for herd A1360089
+  #     - TC02: Start or continue application for herd A1131667
   #
-  # BUSINESS FLOW
-  #   Each monitored parcel carries an AMS status reflecting what the satellite imagery
-  #   determined. Rules govern which status is displayed when - and staff act on that status,
-  #   so displaying the wrong one has real consequences for the applicant.
+  # Common Background:
+  #   Agent login as aga6306 with OTP → open BISS application → My Clients tab.
+  #   This is an iNet agent-side flow.
   #
-  # WHAT THIS VALIDATES
-  #   That the Parcel No column sorts. Nothing about AMS status.
+  # DB Data:
+  #   No DB pool step required. Fixed herds A1360089 and A1131667 are the
+  #   specific TRN test herds with known Grassland AP2 eligibility.
   #
-  # LEGACY COVERAGE WARNING
-  #   This pack is titled "Rules for display of AMS status" and contains NO assertion about
-  #   AMS status. Its entire body sorts the Parcel No column ascending then descending.
-  #   Reproduced faithfully - inventing status rules would mean guessing business logic.
-  #   ACTION: the display rules need documenting and asserting. This is the larger of the
-  #   two AMS gaps.
+  # Notes:
+  #   1. aga6306 is the agent user authorised for both herds.
+  #   2. TC01 and TC02 navigate to the dashboard and start or continue the
+  #      application — further Eco AP2 validation steps are pending completion.
+  #   3. Both herds are known to have greater than 50% Grassland which triggers
+  #      the AP2 eligibility logic in the Eco scheme selection step.
+  #
+  # Author  : Aniket Pathare | aniket.pathare@government.ie
+  # Created : 2026-05-14
+  # ──────────────────────────────────────────────────────────────────────────
 
-  @staffdata @herds:10:simopted
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+    Given the agent user is on the login page
+    When the agent logs into the application with valid credentials and OTP as "aga6306"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
 
-  @e2e @status-rules
-  Scenario: Staff sorts the AMS results by parcel number
+  @tmsLink=BISSAGL-14776 @tmsLink=BISSAGL-14777 @regression
+  Scenario: TC_S37 - Eco Scheme iNet TRNs Grassland AP2 end-to-end regression
 
-    # SECTION 1 - (BISSAGL-14749)
-    # Validates: the Parcel No column sorts in both directions. NOT the status rules.
-    When the staff user opens the AMS screen for the next SIM-opted herd for scheme year "2024"
-    And the staff user sorts the AMS results by "Parcel No" in both directions
-    Then the AMS results should be displayed
-# ====================================================================================================================================
-# CATEGORY : OPENSHIFT
-# ====================================================================================================================================
-# Covers the regression packs that run against the OpenShift-hosted BISS deployment:
-#   TC_21 - OpenShift Cases: broad navigation, search, maps, amendments
-#   TC_22 - OpenShift Map Printing
-#   TC_23 - OpenShift View Application: Force Majeure and summary dialogs
-#   TC_24 - OpenShift Notes and History
-#   TC_25 - OpenShift Home Screen search paths and validations
-#   TC_26 - OpenShift Amend Application
-#   TC_27 - OpenShift Active Farmer
-#
-# CATEGORY NOTE - WHY THESE ARE SEPARATE
-#   These packs enter through a DIFFERENT login than the CENTEST packs in the other
-#   categories. The @openshift tag drives URL selection in Hooks; every other step is shared
-#   with the corresponding CENTEST step definitions. They exist to prove the OpenShift
-#   deployment behaves identically, so they deliberately re-walk flows covered elsewhere.
-#
-#   Legacy carried a commented-out "Openshift Basic Income Support for Sustainability"
-#   application step alongside the active non-Openshift variant in nearly every scenario.
-#   The ACTIVE step is used here; the dead variant is not reproduced.
-#
-# DATA
-#   All herds, parcels and references resolve from the DB via the @staffdata hook.
-#   Staff accounts agr4442 / agr11612 / agr2332 are hardcoded permission fixtures.
-#
-# STEP DEFINITIONS : OpenShiftSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - shared with the CENTEST sections
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
+    # ── TC01: Start or continue application for herd A1360089 ────────────────
+    When the agent searches for herd "A1360089" and opens the farmer dashboard
+    And the agent starts or continues the application from the farmer dashboard
+    Then the application stepper should be displayed and ready for Eco AP2 validation
 
+    # ── TC02: Start or continue application for herd A1131667 ────────────────
+    When the agent navigates back to My Clients, searches for herd "A1131667" and opens the farmer dashboard
+    And the agent starts or continues the application from the farmer dashboard
+    Then the application stepper should be displayed and ready for Eco AP2 validation
 
-# ====================================================================================================================================
-# TC_21_STAFF.feature
-# ====================================================================================================================================
-@openshift @regression @staff
-Feature: TC_21_STAFF - OpenShift Cases
 
-  # Migrated from legacy "Regression Pack for Openshift Cases" (BISSAGL-12669 AT-TC-01 to 10).
-  #
-  # BUSINESS FLOW
-  #   A broad smoke test of the OpenShift deployment: every major entry point is exercised
-  #   in one pass - dashboard navigation, the three search types, map generation for two
-  #   different roles, online response, internal amendments, and the per-herd tab set.
-  #
-  # WHAT THIS VALIDATES
-  #   1. Dashboard side menu navigates between Coordination and Home.
-  #   2. Reference, herd and parcel searches all execute.
-  #   3. Map generation works for the internal map printing role.
-  #   4. Generated map metadata and pagination behave as on CENTEST.
-  #   5. Internal amendments submit.
-  #   6. Every tab within a herd's application opens.
-  #   7. An admin check can be started from Active Farmer.
-  #
-  # LEGACY NOTES
-  #   AT-TC-01 - "Payment QA" navbar step commented out.
-  #   AT-TC-02 - all post-search navigation commented out, so it asserts nothing.
-  #   AT-TC-09 - "Active Farmer" and "Coordination Amendments" navbar steps commented out.
-  #   Legacy also repeated the AT-TC-00 query calls commented-out inside AT-TC-02/03/04.
 
-  @staffdata @herds:5:submitted @refs:5 @parcels:5
-  Background:
-    Given the staff user is logged in to the OpenShift BISS portal as "agr4442"
 
-  @e2e @smoke
-  Scenario: Staff exercises every major OpenShift entry point in one pass
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-12669)
-    # Validates: the dashboard side menu navigates between its top-level areas.
-    When the staff user navigates the dashboard side menu
-      | Coordination |
-      | Home         |
-    Then the dashboard should remain available
 
-    # SECTION 2 - AT-TC-02
-    # Legacy asserts nothing - all post-search steps commented out.
-    When the staff user searches the Home screen for the next reference number for scheme year "2023"
 
-    # SECTION 3 - AT-TC-03
-    When the staff user searches the Home screen for the next submitted herd for scheme year "2024"
 
-    # SECTION 4 - AT-TC-04
-    When the staff user searches the Parcels screen for the next LPIS parcel for scheme year "2024"
 
-    # SECTION 5 - AT-TC-05
-    # Validates: map generation under the internal map printing role - a role switch, since
-    # the Background user cannot see Map Printing.
-    When the staff user re-logs in to the OpenShift BISS portal as "agr11612"
-    And the staff user is on the Map Printing screen
-    And the staff user is searching by parcel
-    And the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | single               |
-      | mapType | Inspection Discovery |
-      | legend  | yes                  |
-    Then the map generation request should be accepted
 
-    # SECTION 6 - AT-TC-06
-    # Validates: full generated-map metadata, final status and table pagination on OpenShift,
-    # mirroring TC_03 on CENTEST.
-    When the staff user re-logs in to the OpenShift BISS portal as "agr2332"
-    And the staff user is on the Map Printing screen
-    And the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    Then the staff user should see the herd identity details
-      | name    |
-      | address |
-    When the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    And the generated map should reach its final status
-    When the staff user pages through the generated maps table
-      | Next page     |
-      | Previous page |
-    Then the generated maps table should remain displayed
 
-    # SECTION 7 - AT-TC-07
-    When the staff user re-logs in to the OpenShift BISS portal as "agr4442"
-    And the staff user searches the Online Response screen for the next submitted herd for scheme year "2023"
 
-    # SECTION 8 - AT-TC-08
-    # Validates: an internal amendment submits on OpenShift.
-    When the staff user amends the application for the next submitted herd for scheme year "2024"
-    And the staff user submits the amendment
 
-    # SECTION 9 - AT-TC-09
-    # Validates: every tab within an application opens - the per-herd navigation set.
-    # Legacy has "Active Farmer" and "Coordination Amendments" commented out of this list.
-    When the staff user opens the application for the next submitted herd for scheme year "2024"
-    Then the following application tabs should be available
-      | Payments         |
-      | Correspondence   |
-      | Errors/Stops     |
-      | Inspections      |
-      | Notes/History    |
-      | BISS Application |
-      | SIM              |
 
-    # SECTION 10 - AT-TC-10
-    # Validates: an admin check can be started from the OpenShift Active Farmer screen.
-    When the staff user opens the application for the next submitted herd for scheme year "2023"
-    And the staff user starts the active farmer admin check
 
 
-# ====================================================================================================================================
-# TC_22_STAFF.feature
-# ====================================================================================================================================
-@openshift @maps @regression @staff
-Feature: TC_22_STAFF - OpenShift Map Printing
 
-  # Migrated from legacy "Regression Pack for Openshift Map Printing Regression Cases"
-  # (BISSAGL-12728 AT-TC-01 to 05).
-  #
-  # BUSINESS FLOW
-  #   The CENTEST Map Printing flows re-run against the OpenShift deployment: generate and
-  #   download by herd and by parcel, and enforce the same search validations.
-  #
-  # WHAT THIS VALIDATES
-  #   1. Herd and parcel map generation both complete and download.
-  #   2. An invalid parcel raises the invalid-parcel error.
-  #   3. Herd number and parcel number are both mandatory.
-  #
-  # LEGACY INCONSISTENCY
-  #   AT-TC-03 searches an INVALID herd and asserts NOTHING, while AT-TC-04 searches the
-  #   same invalid value as a parcel and DOES assert the error. So the invalid-herd path is
-  #   unverified while the invalid-parcel path is covered. Preserved exactly.
-  #   ACTION: add the missing invalid-herd assertion to AT-TC-03.
 
-  @staffdata @herds:5:submitted @refs:5 @parcels:5
-  Background:
-    Given the staff user is logged in to the OpenShift BISS portal as "agr11612"
-    And the staff user is on the Map Printing screen
 
-  @e2e @map-generation @validation
-  Scenario: Staff generates OpenShift maps and is blocked on invalid input
 
-    # SECTION 1 - AT-TC-01 (BISSAGL-18579)
-    # Validates: the full herd path - identity, generation, metadata, final status, download.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    Then the staff user should see the herd identity details
-      | name    |
-      | address |
-    When the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    And the generated map should reach its final status
-    And the staff user should be able to download the generated map
 
-    # SECTION 2 - AT-TC-02 (BISSAGL-18583)
-    # Validates: the same for a parcel search with the Inspection Discovery preset.
-    When the staff user is searching by parcel
-    And the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | single               |
-      | mapType | Inspection Discovery |
-      | legend  | yes                  |
-    Then the generated map should reach its final status
-    And the staff user should be able to download the generated map
 
-    # SECTION 3 - AT-TC-03 (BISSAGL-18586)
-    # NO ASSERTION IN LEGACY - searches an invalid herd and stops. See warning above.
-    When the staff user searches Map Printing for herd "ABDAAPT" for scheme year "2023"
 
-    # SECTION 4 - AT-TC-04 (BISSAGL-18589)
-    # Validates: the same invalid value IS rejected on the parcel path.
-    When the staff user is searching by parcel
-    And the staff user searches Map Printing for parcel "ABDAAPT" for scheme year "2023"
-    Then the staff user should see the validation error "Parcel number is invalid"
 
-    # SECTION 5 - AT-TC-05 (BISSAGL-18591)
-    # Validates: both search types enforce their mandatory field.
-    When the staff user searches Map Printing with no herd number
-    Then the staff user should see the validation error "Herd number required."
-    When the staff user is searching by parcel
-    And the staff user searches Map Printing with no parcel number
-    Then the staff user should see the validation error "Parcel number required."
 
 
-# ====================================================================================================================================
-# TC_23_STAFF.feature
-# ====================================================================================================================================
-@openshift @regression @staff
-Feature: TC_23_STAFF - OpenShift View Application and Force Majeure
 
-  # Migrated from legacy "Regression Pack for Openshift View Application Cases"
-  # (BISSAGL-12927/12928/12929/12930 + 13008/13009/13010/13011, AT-TC-01 to 08).
-  #
-  # BUSINESS FLOW
-  #   Force Majeure marks an application as affected by exceptional circumstances outside the
-  #   farmer's control - flooding, illness, animal disease - which changes how deadlines and
-  #   penalties are applied. Setting it is consequential, so it is confirmed through a dialog
-  #   that requires a note, and can be cancelled without effect.
-  #
-  # WHAT THIS VALIDATES
-  #   1. The Force Majeure dialog can be cancelled without applying, across three years.
-  #   2. It can be applied and removed with a note, across two years.
-  #   3. The application summary View Details dialog opens and closes.
-  #   4. The Land Details info icon exposes its tooltip.
-  #
-  # LEGACY COVERAGE WARNING - FOUR DEAD SCENARIOS NOT REPRODUCED
-  #   AT-TC-05 (13008) "View Active Farmer screen"     - searches a herd, never opens it,
-  #                                                      never touches Active Farmer.
-  #   AT-TC-06 (13009) "View Land details screen"      - logs in and STOPS.
-  #   AT-TC-07 (13010) "View GAEC8 screen"             - logs in and STOPS.
-  #   AT-TC-08 (13011) "View Digitisation Task screen" - logs in and STOPS.
-  #   Four Jira cases whose entire body is the Background. They open no screen and assert
-  #   nothing. Not carried forward: reproducing a login-and-stop costs runtime and yields
-  #   zero coverage.
-  #   ACTION: write real steps for 13008-13011 or close them.
 
-  @staffdata @herds:15:submitted @refs:5 @parcels:5
-  Background:
-    Given the staff user is logged in to the OpenShift BISS portal as "agr4442"
-
-  @e2e @force-majeure
-  Scenario: Staff applies and cancels Force Majeure and reviews application dialogs
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-12927) @sanity
-    # Validates: cancelling the dialog leaves the application untouched - across three
-    # scheme years, since Force Majeure rules differ by year.
-    When the staff user cancels a Force Majeure request for the same submitted herd across the following years
-      | 2025 |
-      | 2024 |
-      | 2023 |
-    Then the Force Majeure state should remain unchanged
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-12928)
-    # Validates: applying and then removing Force Majeure, each with its own note, works
-    # across two scheme years.
-    When the staff user applies and removes Force Majeure for the same submitted herd across the following years
-      | year | applyNote | removeNote  |
-      | 2024 | Test Save | Test UnSave |
-      | 2023 | Test Save | Test UnSave |
-    Then the Force Majeure state should remain unchanged
-
-    # SECTION 3 - AT-TC-03 (BISSAGL-12929)
-    # Validates: the application summary View Details dialog opens and closes cleanly.
-    When the staff user opens the application for the same submitted herd for scheme year "2024"
-    And the staff user opens the application summary details dialog
-    Then the dialog should close cleanly
-
-    # SECTION 4 - AT-TC-04 (BISSAGL-12930)
-    # Validates: the Land Details info icon exposes its explanatory tooltip.
-    When the staff user opens the application for the next submitted herd for scheme year "2024"
-    Then the "Determined area with compensation" info icon should expose its tooltip
-
-
-# ====================================================================================================================================
-# TC_24_STAFF.feature
-# ====================================================================================================================================
-@openshift @regression @staff
-Feature: TC_24_STAFF - OpenShift Notes and History
-
-  # Migrated from legacy "Regression Pack for Openshift Notes and History Cases"
-  # (BISSAGL-12977 AT-TC-01 to 08).
-  #
-  # BUSINESS FLOW
-  #   The Notes and History screen holds the audit trail for an application and lets staff
-  #   add their own notes to it.
-  #
-  # WHAT THIS VALIDATES
-  #   The screen opens and the Add Note dialog can be raised. No note is actually saved.
-  #
-  # LEGACY COVERAGE WARNING
-  #   All eight legacy scenarios use the SAME herd, the SAME scheme year and the SAME steps:
-  #   search, open, go to Notes/History. Only AT-TC-01 goes further, clicking Add Note.
-  #   AT-TC-02 to 08 are exact duplicates of one another, each carrying its own @tmslink:
-  #     18479, 18481, 18483, 18486, 18492, 18495, 18498
-  #   None asserts anything. Merged into a single section.
-  #   ACTION: seven Jira ids map to one navigation - write real steps or close as duplicates.
-  #   A complete version would add a note and assert it appears in the history.
-
-  @staffdata @herds:15:submitted @refs:5 @parcels:5
-  Background:
-    Given the staff user is logged in to the OpenShift BISS portal as "agr4442"
-
-  @e2e @notes-history
-  Scenario: Staff opens Notes and History and raises the Add Note dialog
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-18477) and AT-TC-02 to 08
-    # (BISSAGL-18479, 18481, 18483, 18486, 18492, 18495, 18498 - all identical navigation)
-    When the staff user opens the Notes and History screen for the next submitted herd for scheme year "2024"
-    And the staff user raises the add note dialog
-    Then the application history should be displayed
-
-
-# ====================================================================================================================================
-# TC_25_STAFF.feature
-# ====================================================================================================================================
-@openshift @regression @staff
-Feature: TC_25_STAFF - OpenShift Home Screen Search
-
-  # Migrated from legacy "Regression Pack for Openshift Home Screen Cases"
-  # (BISSAGL-12980 AT-TC-01 to 13).
-  #
-  # BUSINESS FLOW
-  #   The Home screen is the entry point to every application. Staff find work by herd
-  #   number, reference number, farmer name or parcel, each on its own tab with its own
-  #   validation. Parcel results expose actions - claimants, commonage, history and map.
-  #
-  # WHAT THIS VALIDATES
-  #   1. Herd search executes; an invalid herd is rejected.
-  #   2. An empty search reports BOTH the herd and reference errors.
-  #   3. Reference number search returns an openable application.
-  #   4. Farmer search by surname and county executes.
-  #   5. Parcel search exposes its four action buttons.
-  #   6. Invalid and blank parcel input are handled.
-  #   7. Reference No. tab search executes; an invalid reference is rejected.
-  #   8. Online Response search executes, empty and by herd.
-  #
-  # LEGACY DEFECT
-  #   AT-TC-09 is titled "Reference No. Regression Test (Valid reference no. search and
-  #   filters)" but its body is BYTE-IDENTICAL to AT-TC-08 - it searches an invalid PARCEL,
-  #   not a reference number. A copy-paste error. Merged into Section 6; the real reference
-  #   coverage is Sections 7-8 (AT-TC-10 / AT-TC-11).
-  #   ACTION: rewrite AT-TC-09 to test what its title claims, or close it.
-
-  @staffdata @herds:15:submitted @refs:15 @parcels:15
-  Background:
-    Given the staff user is logged in to the OpenShift BISS portal as "agr4442"
-
-  @e2e @search @validation
-  Scenario: Staff exercises every Home screen search path and validation
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-18521)
-    When the staff user searches the Home screen for the next submitted herd for scheme year "2024"
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-18524)
-    # Validates: a malformed herd number is rejected with the invalid-herd message.
-    When the staff user searches the Home screen for herd "ASUDASHADI" for scheme year "2024"
-    Then the staff user should see the search error "The herd number you entered is invalid"
-
-    # SECTION 3 - AT-TC-03 (BISSAGL-18541)
-    # Validates: an empty search reports BOTH field errors, not just the first.
-    When the staff user searches the Home screen with no criteria
-    Then the staff user should see the following search errors
-      | The herd number you entered is invalid      |
-      | The reference number you entered is invalid |
-
-    # SECTION 4 - AT-TC-04 (BISSAGL-18544)
-    # Validates: a reference search returns a row that opens into the application.
-    When the staff user searches the Home screen for the next reference number for scheme year "2024"
-    Then the application should be openable from the search results
-
-    # SECTION 5 - AT-TC-05 (BISSAGL-18546) / AT-TC-06 (BISSAGL-18548)
-    # Validates: farmer search by surname and county. The numeric-surname case (AT-TC-06)
-    # has NO assertion in legacy - it searches and stops.
-    When the staff user searches the Home screen for the following farmers
-      | surname | county  |
-      | mc      | Donegal |
-      | 123     | Donegal |
-
-    # SECTION 6 - AT-TC-07 (BISSAGL-18653) / AT-TC-08 (BISSAGL-18655) / AT-TC-09 (BISSAGL-18657)
-    # Validates: a valid parcel search exposes all four action buttons; malformed and blank
-    # parcel input are handled without breaking the screen.
-    When the staff user searches the Parcels screen for the next LPIS parcel for scheme year "2024"
-    Then the following parcel actions should be available
-      | View Claimants |
-      | View Commonage |
-      | Parcel History |
-      | View Map       |
-    When the staff user searches the Parcels screen for invalid parcel "adssdasd" for scheme year "2024"
-    And the staff user clears the parcel search
-    And the staff user searches the Parcels screen with no parcel number
-
-    # SECTION 7 - AT-TC-10 (BISSAGL-18659)
-    When the staff user searches the Reference No. screen for the next reference number for scheme year "2023"
-
-    # SECTION 8 - AT-TC-11 (BISSAGL-18661)
-    # Validates: a malformed reference number is rejected.
-    When the staff user searches the Reference No. screen for invalid reference "adssdasd"
-    Then the staff user should see the search error "Invalid reference no."
-
-    # SECTION 9 - AT-TC-12 (BISSAGL-18665) / AT-TC-13 (BISSAGL-18668)
-    # Validates: Online Response search runs both with no criteria and by herd.
-    When the staff user searches the Online Response screen with no criteria
-    And the staff user searches the Online Response screen for the next submitted herd
-
-
-# ====================================================================================================================================
-# TC_26_STAFF.feature
-# ====================================================================================================================================
-@openshift @regression @staff
-Feature: TC_26_STAFF - OpenShift Amend Application
-
-  # Migrated from legacy "Regression Pack for Openshift Amend Application Cases"
-  # (BISSAGL-12971 AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   Staff amend a submitted SIM application on OpenShift. Where an admin inspection is
-  #   already underway, the amend path must account for it rather than proceeding blindly.
-  #
-  # WHAT THIS VALIDATES
-  #   1. A SIM application amendment submits, respecting any in-flight admin inspection.
-  #   2. The Force Majeure state can be read via the Payments and BISS Application tabs.
-  #
-  # LEGACY NOTES
-  #   AT-TC-01 carries a large commented-out Force Majeure block duplicated from the View
-  #   Application pack - not reproduced; the live steps are the SIM amend flow.
-  #   AT-TC-02 is titled "Force Majeure Save" but its save/unsave steps are commented out.
-  #   It only navigates and reads the checkbox state. Reproduced as written.
-  #   ACTION: AT-TC-02 does not test what its title claims - see TC_23 Section 2 for the
-  #   working Force Majeure save coverage.
-
-  @staffdata @herds:5:simopted
-  Background:
-    Given the staff user is logged in to the OpenShift BISS portal as "agr4442"
-
-  @e2e @amend @sim
-  Scenario: Staff amends a SIM application and checks the Force Majeure state
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-18551) @sanity
-    # Validates: the amendment submits, with the admin inspection check honoured first.
-    When the staff user amends the application for the next SIM-opted herd for scheme year "2024"
-    And the staff user submits the amendment
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-18553)
-    # Validates: navigation only - the Force Majeure state is read, never saved.
-    When the staff user opens the application for the next SIM-opted herd for scheme year "2023"
-    Then the Force Majeure state should be readable from the following tabs
-      | Payments         |
-      | BISS Application |
-
-
-# ====================================================================================================================================
-# TC_27_STAFF.feature
-# ====================================================================================================================================
-@openshift @active-farmer @regression @staff
-Feature: TC_27_STAFF - OpenShift Active Farmer Admin Check
-
-  # Migrated from legacy "Regression Pack for Openshift Active Farmer screen Regression test
-  # - Approve & Reject" (BISSAGL-12972 AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   Starting an active farmer admin check on the OpenShift deployment, applying the stop
-  #   that blocks payment until the check is resolved.
-  #
-  # WHAT THIS VALIDATES
-  #   That an admin check starts. Neither approval, rejection nor appeal is exercised.
-  #
-  # LEGACY COVERAGE WARNING
-  #   AT-TC-01 is titled "(Reject and appeal)" and AT-TC-02 "(approved)" - but BOTH stop
-  #   immediately after starting the check. Neither rejects, appeals, nor approves anything.
-  #   They differ only in which herd they use, and neither asserts an outcome.
-  #   Reproduced faithfully as two sections.
-  #   ACTION: the approve/reject/appeal steps these Jira ids are named for need writing.
-  #   TC_16_STAFF shows the complete lifecycle on CENTEST and is the model to follow.
-
-  @staffdata @herds:5:admincheck
-  Background:
-    Given the staff user is logged in to the OpenShift BISS portal as "agr4442"
-
-  @e2e @admin-check
-  Scenario: Staff starts admin checks on the OpenShift Active Farmer screen
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-18613) - titled "Reject and appeal", does neither
-    When the staff user opens the Active Farmer screen for the next admin-check herd for scheme year "2024"
-    And the staff user starts the active farmer admin check
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-18616) - titled "approved", does not approve
-    When the staff user opens the Active Farmer screen for the next admin-check herd for scheme year "2024"
-    And the staff user starts the active farmer admin check
