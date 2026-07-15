@@ -1,805 +1,1887 @@
-package database;
+# ====================================================================================================================================
+# BATCH 1 - MAPS + SIM + LETTERS
+# Modernised BISS Staff E2E regression packs. One legacy Feature -> one file, one chained E2E
+# Scenario, with # SECTION markers mapping back to the original AT-TC ids.
+#
+# Data handling:
+#   - Herd / parcel / reference values are resolved from the DB at runtime by the @staffdata
+#     hook via DBRouter, and exposed as Hooks.STAFF_HERD / STAFF_PARCEL / STAFF_REF lists.
+#     No Excel round-trip, no "from row N" references in step text.
+#   - Staff agent accounts stay hardcoded in the feature (agr11612 / agr4442 / agr2332),
+#     as they are permission fixtures, not test data.
+#   - Password resolved from TestData.xlsx "Password" column via the TD: mechanism.
+#   - URL launched by Hooks from the Config sheet.
+#
+# Step definitions : StaffSteps.java (stepdefinitions.STAFF)
+# Locators         : ObjectRepository.properties - Staff sections
+# Author           : Aniket Pathare | aniket.pathare@government.ie
+# Created          : 15-07-2026
+# ====================================================================================================================================
 
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.sql.*;
-import java.text.SimpleDateFormat;
-import java.util.*;
-import java.util.Date;
-import java.util.logging.*;
 
-// =====================================================================================================================================
-// File          : DBRouter.java
-// Package       : database
-// Description   : Multi-database query router for the BISS Automation Framework.
-//                 Provides a single entry point for all SQL execution across BISS_DATA
-//                 and BISS_INET Oracle databases. All queries are identified by a logical
-//                 label string and resolved to parameterised SQL internally, keeping
-//                 step definitions and hooks free of SQL syntax.
-//
-//                 Supports two execution modes:
-//                   1. runDB()     — label-based execution (predefined queries only)
-//                   2. runRawSQL() — raw SQL execution (utility tools and ad-hoc queries)
-//
-//                 Connection properties are loaded once at class initialisation from:
-//                   src/test/resources/db.properties
-//
-//                 Usage:
-//                   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "25");
-//                   String herd = DBRouter.getValue("APP_HERD_NO");
-//
-//                   DBRouter.runDB("INET", "Get Login Id for herd", herd);
-//                   String username = DBRouter.getValue("USERNAME");
-//
-//                   DBRouter.runDB("DATA", "List of individual herds with CISYF scheme", "2026", "25");
-//                   DBRouter.runDB("DATA", "List of not started individual herds eligible for CISYF", "2026", "25");
-//                   String herd = DBRouter.getValue("APP_HERD_NO");
-//
-//                   DBRouter.runRawSQL("DATA", "SELECT app_herd_no FROM vwbs_application WHERE ...");
-//                   List<Map<String, Object>> rows = DBRouter.getRows();
-//
-//                 db.properties keys:
-//                   db.url              — BISS_DATA JDBC connection URL
-//                   db.username         — BISS_DATA username
-//                   db.password         — BISS_DATA password
-//                   db.inet.url         — BISS_INET JDBC connection URL
-//                   db.inet.username    — BISS_INET username
-//                   db.inet.password    — BISS_INET password
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 27-04-2026
-// =====================================================================================================================================
+# ============================ TC_01_STAFF.feature ============================
+@maps
+Feature: TC_01_STAFF - Map Printing by Herd Number E2E Regression Pack
 
-public class DBRouter
-{
-    // =====================================================================
-    // STATIC RESULT STORE
-    // =====================================================================
-    public static List<Map<String, Object>> lastRows   = new ArrayList<>();
-    public static Object                    lastScalar = null;
-    public static String                    lastLabel  = "";
+  # Legacy: "Regression Suite for Map Printing with Herd" (AT-TC-01, 02, 04)
+  # Legacy Background: Get 4 Herds from DB  ->  @staffdata + herds:4:submitted
+  # AT-TC-03 was commented out in legacy (depleted case) - excluded.
 
-    // =====================================================================
-    // DB CONFIGURATION
-    // =====================================================================
-    private static final Logger log             = Logger.getLogger(DBRouter.class.getName());
-    private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
+  @staffdata @herds:4:submitted
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr11612"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
 
-    // BISS_DATA connection
-    private static String DB_URL;
-    private static String DB_USER;
-    private static String DB_PASSWORD;
+  @regression @staff @map-printing @herd @e2e
+  Scenario: AT-STAFF-MAP-HERD-E2E-01 - Staff generates maps by herd number and validates required fields
 
-    // BISS_INET connection
-    private static String DB_INET_URL;
-    private static String DB_INET_USER;
-    private static String DB_INET_PASSWORD;
+    # SECTION 1 : Generate map by herd, single parcel - AT-TC-01 (BISSAGL-14969)
+    When Staff searches on the Map Printing screen using database herd 1 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
 
-    static
-    {
-        setupLogger();
-        loadDBProperties();
-    }
+    # SECTION 2 : Herd number required validation - AT-TC-02 (BISSAGL-14968)
+    When Staff switches to the "Map Printing" tab
+    And Staff clicks the "Search" button
+    Then Staff should see the error message "Herd number required."
 
-    // =====================================================================
-    // PUBLIC API — LABEL-BASED EXECUTION
-    // =====================================================================
+    # SECTION 3 : Generate map by herd, all parcels - AT-TC-04 (BISSAGL-14966)
+    When Staff switches to the "Map Printing" tab
+    And Staff searches on the Map Printing screen using database herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff selects all values in the "parcelSelect" multi-option dropdown
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : runDB
-    // Description   : Executes a predefined SQL query identified by a logical label string.
-    //                 The label is normalised (trimmed, uppercased, special characters replaced)
-    //                 and matched in a switch block to the corresponding parameterised SQL.
-    //                 Results are stored in lastRows and lastScalar for caller access via
-    //                 getValue(), getRows(), and hasRows().
-    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
-    //                 label  — logical query label e.g. "List of herds with no errors at all"
-    //                 params — bind parameter values for the selected query (varies per label)
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void runDB(String dbKey, String label, String... params)
-    {
-        Objects.requireNonNull(dbKey,  "dbKey cannot be null");
-        Objects.requireNonNull(label,  "label cannot be null");
 
-        final String which = normalizeDb(dbKey);
-        final String key   = normalize(label);
+# ============================ TC_02_STAFF.feature ============================
+@maps
+Feature: TC_02_STAFF - Map Printing by Parcel Number E2E Regression Pack
 
-        lastLabel = label;
+  # Legacy: "Regression Suite for Map Printing with Parcel" (AT-TC-01,02,04,05,07-14)
+  # Legacy Background: Get 14 LPIS Parcels from Database  ->  @staffdata + parcels:14
+  # AT-TC-03 and AT-TC-06 were commented out in legacy (depleted cases) - excluded.
+  # Parcel row indices below mirror the legacy row numbers exactly.
 
-        String   sql        = null;
-        Object[] jdbcParams = new Object[0];
+  @staffdata @parcels:14
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr11612"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
 
-        switch (key)
-        {
-            // ----------------------------------------------------------------
-            // DATA DB: Not Started individual herds (A prefix) with no errors
-            //
-            // Confirmed final query (27-04-2026) after full DB investigation.
-            //
-            // Selection criteria:
-            //   app_mde_code = 1        → RI status (Renewal iNet preprint / Not Started)
-            //   app_herd_no LIKE 'A%'   → Individual herds only. Excludes D/Z/C prefix
-            //                             herds which belong to other agent portfolios
-            //                             and cause BISS_INET mismatch.
-            //   EXISTS land parcel      → Herd must have at least one non-deleted land parcel.
-            //   NOT EXISTS mde_code IN  → Excludes herds with any of the following statuses:
-            //     (3, 4, 6, 8)              3 = D  (Draft)
-            //                               4 = I  (iNet / Submitted)
-            //                               6 = H  (Helpdesk)
-            //                               8 = DD (Draft Dept)
-            //
-            // Expired herd handling:
-            //   Herd expiry is not stored in vwbs_application — confirmed by column-by-column
-            //   comparison of A1010096 (valid) vs A1010070 (expired). Expiry is in Keycloak
-            //   SSO only. Expired agents are handled at runtime by Hooks.markAgentExpired()
-            //   which detects the "Account Expired" screen and re-resolves a fresh herd+agent.
-            //
-            // Column returned: APP_HERD_NO
-            //   executeQuery() uppercases all column labels so Hooks.java r.get("APP_HERD_NO")
-            //   works without any additional mapping.
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH NO ERRORS AT ALL":
-            {
-                requireParamCountBetween(key, params, 1, 3);
+  @regression @staff @map-printing @parcel @e2e
+  Scenario: AT-STAFF-MAP-PARCEL-E2E-01 - Staff generates parcel maps and validates every required-field path
 
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 150;
-                // params[2] accepted for backward compatibility — not used in current query
+    # SECTION 1 : Inspection Discovery - AT-TC-01 (BISSAGL-14997)
+    When Staff searches on the Map Printing screen using database parcel 1 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Inspection Discovery |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
 
-                sql =
-                        "SELECT ap_ri.app_herd_no " +
-                                "FROM vwbs_application ap_ri " +
-                                "WHERE ap_ri.app_mde_code = 1 " +
-                                "AND ap_ri.app_year = ? " +
-                                "AND ap_ri.app_herd_no LIKE 'B%' " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_application_land x " +
-                                "    WHERE x.apl_year        = ap_ri.app_year " +
-                                "    AND   x.apl_app_id      = ap_ri.app_id " +
-                                "    AND   x.apl_deleted_ind = 'N' " +
-                                ") " +
-                                "AND NOT EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM vwbs_application app " +
-                                "    WHERE app.app_year     = ap_ri.app_year " +
-                                "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
-                                "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
-                                ") " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY ap_ri.app_herd_no";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+    # SECTION 2 : Custom map layout - AT-TC-02 (BISSAGL-14996)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 3 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Custom Layer A4      |
+      | imagerySelect | 2009 Low Flown Ortho |
+      | rasterSelect  | Raster 1:5000        |
+    And Staff changes the "vectorSelect" multi-option dropdown value
+    Then Staff clicks the "Generate map" button
 
-            // ----------------------------------------------------------------
-            // DATA DB: Herds by scheme year
-            // ----------------------------------------------------------------
-            case "HERDS BY SCHEME YEAR":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                        "SELECT h.hld_herd_no " +
-                                "FROM tddp_application a " +
-                                "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
-                                "WHERE a.app_syr_code = ? " +
-                                "ORDER BY h.hld_herd_no";
-                jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
-                break;
-            }
+    # SECTION 3 : Single parcel generation - AT-TC-04 (BISSAGL-14993)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 4 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
 
-            // ----------------------------------------------------------------
-            // DATA DB: Resolve holding ID for a given herd number
-            // ----------------------------------------------------------------
-            case "GET HOLD ID FOR HERD":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql        = "SELECT get_hold(?) AS holding_id FROM dual";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
+    # SECTION 4 : Parcel number required - AT-TC-05 (BISSAGL-14988)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff clicks the "Search" button
+    Then Staff should see the error message "Parcel number required."
 
-            // ----------------------------------------------------------------
-            // INET DB: Get agent username for a given herd number
-            //
-            // Source: Query 19 from BISS test data reference document.
-            //
-            // Uses a correlated subquery with ROWNUM = 1 to return the first
-            // available agent login for the given herd. Works for any herd
-            // regardless of how many agents are associated.
-            //
-            // ORDER BY ca.ca_start_date DESC returns the most recently associated
-            // agent first — most likely to be the current active/primary agent.
-            //
-            // Expired agent handling:
-            //   SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date filters
-            //   expired herd registrations at the DB level. If the returned agent
-            //   has an expired SSO account, the TC_03 login step detects
-            //   "Account Expired" on screen and calls Hooks.markAgentExpired()
-            //   which re-resolves a fresh herd+agent pair automatically.
-            //
-            // Column returned: USERNAME
-            //   Aliased as LoginId in the original query but uppercased to USERNAME
-            //   by executeQuery() so getValue("USERNAME") works consistently.
-            // ----------------------------------------------------------------
-            case "GET LOGIN ID FOR HERD":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                        "SELECT hbcus.bcus_bus_id AS HERDNO, " +
-                                "       (SELECT ui.uri_username " +
-                                "          FROM tdcr_user_info ui " +
-                                "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
-                                "           AND ROWNUM = 1) AS USERNAME " +
-                                "  FROM tdco_customer_asscs ca, " +
-                                "       tdco_business_customers abcus, " +
-                                "       tdco_business_customers hbcus " +
-                                " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
-                                "   AND ca.ca_cac_code     = 194 " +
-                                "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
-                                "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
-                                "   AND hbcus.bcus_bus_id  = ? " +
-                                " ORDER BY ca.ca_start_date DESC";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
+    # SECTION 5 : Multiple parcel generation A3 - AT-TC-07 (BISSAGL-14986)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 5 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff selects all values in the "parcelSelect" multi-option dropdown
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A3 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
 
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with active Preliminary Checks (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIMINARY CHECKS":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+    # SECTION 6 : Custom map generation, all parcels - AT-TC-08 (BISSAGL-14983)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 6 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff selects all values in the "parcelSelect" multi-option dropdown
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Custom Layer A4      |
+      | imagerySelect | 2008 Low Flown Ortho |
+      | rasterSelect  | Raster 1:5000        |
+    And Staff changes the "vectorSelect" multi-option dropdown value
+    Then Staff clicks the "Generate map" button
 
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Dual Claims or Overlap findings (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH DUAL CLAIMS CHECK":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                        "SELECT * " +
-                                "FROM vwbs_preliminary_check_dc_ol " +
-                                "WHERE scheme_year = ? " +
-                                "AND ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+    # SECTION 7 : Only LPIS parcels, future year - AT-TC-09 (BISSAGL-14982)
+    # Legacy note: "Fix case by next week" - no assertion present in legacy, search only.
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 6 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2025         |
 
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Overclaim findings (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH OVERCLAIMS CHECK":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                        "SELECT * " +
-                                "FROM vwbs_preliminary_check_oc " +
-                                "WHERE scheme_year = ? " +
-                                "AND ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+    # SECTION 8 : Parcel not selected -> error - AT-TC-10 (BISSAGL-14981)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 7 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff opens and closes the "parcelSelect" multi-option dropdown value
+    Then Staff should see the error message "select a parcel required"
 
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Preliminary Checks on commonage parcels
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND lvl_commonage_id IS NOT NULL " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+    # SECTION 9 : Map type not selected -> error - AT-TC-11 (BISSAGL-14980)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 8 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff opens and closes the "mapTypeSelect" multi-option dropdown value
+    Then Staff should see the error message "select a map type required"
 
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Preliminary Checks filtered by response status
-            //
-            // params[0] = year
-            // params[1] = status e.g. "Pending", "Accepted", "Rejected"
-            // params[2] = limit (optional)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS":
-            {
-                requireParamCountBetween(key, params, 2, 3);
-                int    year     = parseInt(params[0], "year");
-                String status   = params[1].trim();
-                int    maxRows  = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
-                sql =
-                        "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND lvs_desc = ? " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, status, maxRows };
-                break;
-            }
+    # SECTION 10 : Imagery layer not selected -> error - AT-TC-12 (BISSAGL-14979)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 9 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Custom Layer A4 |
+    And Staff opens and closes the "imagerySelect" multi-option dropdown value
+    Then Staff should see the error message "select an imagery layer required"
 
-            // ----------------------------------------------------------------
-            // DATA DB: One herd per Preliminary Check type (offset-based retry)
-            //
-            // Returns one herd per check type (Overclaim, Dual claim, Agricultural
-            // Activity) using ROW_NUMBER() OVER (PARTITION BY LVC_DESC).
-            // The offset parameter increments on each retry so a different herd
-            // is returned if the previous candidate fails INET validation.
-            //
-            // params[0] = year
-            // params[1] = offset (0 on first call, increment on each retry)
-            // ----------------------------------------------------------------
-            case "PRELIMINARY CHECKS HERDS":
-            {
-                requireParamCountBetween(key, params, 2, 2);
-                int year     = parseInt(params[0], "year");
-                int offset   = parseInt(params[1], "offset");
-                int targetRn = offset + 1;
+    # SECTION 11 : Vector layer not selected -> error - AT-TC-13 (BISSAGL-14978)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 10 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Custom Layer A4      |
+      | imagerySelect | 2009 Low Flown Ortho |
+    And Staff opens and closes the "vectorSelect" multi-option dropdown value
+    Then Staff should see the error message "select a vector layer required"
 
-                sql =
-                        "SELECT * FROM ( " +
-                                "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
-                                "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
-                                "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
-                                "         ROW_NUMBER() OVER ( " +
-                                "             PARTITION BY LVC_DESC " +
-                                "             ORDER BY LVL_HERD_NO " +
-                                "         ) AS RN " +
-                                "  FROM vwbs_land_validation " +
-                                "  WHERE LVL_YEAR = ? " +
-                                "  AND LVT_DESC = 'Preliminary Check' " +
-                                "  AND LVS_DESC = 'Pending' " +
-                                "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
-                                ") WHERE RN = ?";
-                jdbcParams = new Object[]{ year, targetRn };
-                break;
-            }
+    # SECTION 12 : Non-internal user cannot see Map Printing tab - AT-TC-14 (BISSAGL-14977)
+    When Staff re-logs in as a different user with the Username "agr5033"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    Then Staff should not see the "Map Printing" tab
 
-            // ----------------------------------------------------------------
-            // DATA DB: Individual herds with CISYF scheme applied (TC_13 ENTS)
-            //
-            // Returns individual herds (applicant_type = 'I') where:
-            //   - Application status is Submitted (mde_abbrev = 'I')
-            //   - Herd prefix is 'J%' (intentional for TC_13 ENTS scenarios)
-            //   - At least one non-deleted land parcel exists
-            //   - No payment has been processed yet (pap_payment_ind = 'Y' absent)
-            //   - CISYF scheme is applied — fn_GetSchemeApplied(aph_app_id, 3) = 'Y'
-            //     (scheme code 3 = CISYF in pkbs_payment_utils)
-            //   - substr(app_herd_no, 1, 1) > 'A' excludes TRNs as an additional guard
-            //
-            // J% prefix is intentional — TC_13 ENTS transfer scenarios require
-            // J-prefix herds specifically. Do not generalise to other prefixes
-            // without confirming TC_13 test data requirements.
-            //
-            // params[0] = year  (required)
-            // params[1] = limit (optional — defaults to 50)
-            // ----------------------------------------------------------------
-            case "LIST OF INDIVIDUAL HERDS WITH CISYF SCHEME":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
-                sql =
-                        "SELECT app_herd_no, app_year, aph_herd_type " +
-                                "FROM vwbs_application_herd " +
-                                "WHERE mde_abbrev     = 'I' " +
-                                "AND   applicant_type = 'I' " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_application_land x " +
-                                "    WHERE x.apl_year        = app_year " +
-                                "    AND   x.apl_aph_id      = aph_id " +
-                                "    AND   x.apl_app_id      = aph_app_id " +
-                                "    AND   x.apl_deleted_ind = 'N' " +
-                                ") " +
-                                "AND NOT EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_payment_application x " +
-                                "    WHERE x.pap_app_id      = aph_app_id " +
-                                "    AND   x.pap_payment_ind = 'Y' " +
-                                ") " +
-                                "AND app_year = ? " +
-                                "AND NVL(( " +
-                                "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
-                                "    FROM dual " +
-                                "), 'N') = 'Y' " +
-                                "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY app_herd_no ASC";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-            // ----------------------------------------------------------------
-            // DATA DB: Submitted individual herds with CISYF scheme (TC_13 post-submission)
-            //
-            // Returns herds where application is fully submitted (mde_abbrev = 'I')
-            // and CISYF scheme was applied. Used for post-submission verification
-            // flow — viewing, correspondence, document download.
-            //
-            // params[0] = year  (required)
-            // params[1] = limit (optional — defaults to 100)
-            // ----------------------------------------------------------------
-            case "LIST OF SUBMITTED INDIVIDUAL HERDS WITH CISYF SCHEME":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT app_herd_no, app_year " +
-                                "FROM vwbs_application_herd " +
-                                "WHERE mde_abbrev     = 'I' " +
-                                "AND   applicant_type = 'I' " +
-                                "AND   app_year       = ? " +
-                                "AND   NVL(( " +
-                                "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
-                                "    FROM dual " +
-                                "), 'N') = 'Y' " +
-                                "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY DBMS_RANDOM.VALUE";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
 
-            // ----------------------------------------------------------------
-            // DATA DB: Not Started individual herds eligible for CISYF (TC_13 ENTS)
-            //
-            // Returns J-prefix individual herds where the CURRENT year application
-            // is Not Started (mde_abbrev = 'RI') but the PREVIOUS year's submitted
-            // application had CISYF applied — meaning the herd is eligible for
-            // NR/CISYF in the current year but hasn't started yet.
-            //
-            // Use case: TC_13 full submission flow from scratch — herd appears on
-            // the NR/CISYF tab with no existing application, allowing a fresh Apply.
-            //
-            // Selection criteria:
-            //   curr.mde_abbrev = 'RI'                → Not Started (current year)
-            //   curr.app_herd_no LIKE 'J%'             → J-prefix individual herds
-            //   curr.applicant_type = 'I'              → Individual only
-            //   EXISTS land parcel (current year)      → Herd has active land
-            //   EXISTS prev year submitted with CISYF  → CISYF-eligible based on
-            //                                            previous year application
-            //   SUBSTR > 'A'                           → Excludes TRNs
-            //
-            // params[0] = year  (required — current scheme year)
-            // params[1] = limit (optional — defaults to 50)
-            // ----------------------------------------------------------------
-            case "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
-                sql =
-                        "SELECT curr.app_herd_no, curr.app_year, curr.aph_herd_type " +
-                                "FROM vwbs_application_herd curr " +
-                                "WHERE curr.mde_abbrev     = 'RI' " +
-                                "AND   curr.applicant_type = 'I' " +
-                                "AND   curr.app_year       = ? " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_application_land x " +
-                                "    WHERE x.apl_year        = curr.app_year " +
-                                "    AND   x.apl_aph_id      = curr.aph_id " +
-                                "    AND   x.apl_app_id      = curr.aph_app_id " +
-                                "    AND   x.apl_deleted_ind = 'N' " +
-                                ") " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM vwbs_application_herd prev " +
-                                "    WHERE prev.app_herd_no = curr.app_herd_no " +
-                                "    AND   prev.app_year    = curr.app_year - 1 " +
-                                "    AND   prev.mde_abbrev  = 'I' " +
-                                "    AND   NVL(( " +
-                                "        SELECT pkbs_payment_utils.fn_GetSchemeApplied(prev.aph_app_id, 3) " +
-                                "        FROM dual " +
-                                "    ), 'N') = 'Y' " +
-                                ") " +
-                                "AND SUBSTR(curr.app_herd_no, 1, 1) > 'A' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY curr.app_herd_no ASC";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
+# ============================ TC_03_STAFF.feature ============================
+@maps
+Feature: TC_03_STAFF - Generated Map Verification for Herd Number E2E Regression Pack
 
-            default:
-                throw new RuntimeException("Unknown DB label: " + label);
-        }
+  # Legacy: "Regression Suite for Checking Map Generated for HerdNumber" (AT-TC-01, 02)
+  # Legacy Background: Get 4 Herds from DB  ->  @staffdata + herds:4:submitted
 
-        executeQuery(which, sql, jdbcParams);
-    }
+  @staffdata @herds:4:submitted
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr2332"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
 
-    // =====================================================================
-    // PUBLIC API — RAW SQL EXECUTION
-    // =====================================================================
+  @regression @staff @map-printing @herd @generated-map @e2e
+  Scenario: AT-STAFF-MAP-GEN-E2E-01 - Staff generates herd maps and verifies generated map metadata
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : runRawSQL
-    // Description   : Executes a user-supplied raw SQL string directly on the chosen database,
-    //                 bypassing the label switch in runDB(). Used by utility tools such as
-    //                 HerdAgentExtractor where the SQL is composed at runtime and does not
-    //                 correspond to a predefined label.
-    //                 Results are stored identically to runDB() — accessible via getValue(),
-    //                 getRows(), and hasRows().
-    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
-    //                 sql    — raw SQL string to execute
-    //                 params — optional bind parameters matching '?' placeholders in sql
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 05-05-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void runRawSQL(String dbKey, String sql, Object... params)
-    {
-        Objects.requireNonNull(dbKey, "dbKey cannot be null");
-        Objects.requireNonNull(sql,   "sql cannot be null");
-        lastLabel = "RAW_SQL";
-        executeQuery(normalizeDb(dbKey), sql, params);
-    }
+    # SECTION 1 : Generate + verify map details - AT-TC-01 (BISSAGL-14962)
+    When Staff searches on the Map Printing screen using database herd 1 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff prints the "name" of the herd
+    And Staff prints the "address" of the herd
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the "status" of the generated map
+    And Staff verifies the "id" of the generated map
+    And Staff verifies the "herdNumber" of the generated map
+    And Staff verifies the "date" of the generated map
 
-    // =====================================================================
-    // EXECUTE SQL (internal — shared by runDB and runRawSQL)
-    // =====================================================================
-    private static void executeQuery(String whichDb, String sql, Object... params)
-    {
-        lastRows   = new ArrayList<>();
-        lastScalar = null;
+    # SECTION 2 : Generate + verify + pagination - AT-TC-02 (BISSAGL-14960)
+    When Staff switches to the "Map Printing" tab
+    And Staff searches on the Map Printing screen using database herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff prints the "name" of the herd
+    And Staff prints the "address" of the herd
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the "status" of the generated map
+    And Staff verifies the "id" of the generated map
+    And Staff verifies the "herdNumber" of the generated map
+    And Staff verifies the "date" of the generated map
+    And Staff verifies the final status of the generated map
+    Then Staff clicks the "Next page" pagination button
+    And Staff clicks the "Previous page" pagination button
 
-        try (Connection conn = "INET".equals(whichDb)
-                ? getInetConnection() : getDataConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql))
-        {
-            for (int i = 0; i < params.length; i++)
-            {
-                stmt.setObject(i + 1, params[i]);
-            }
 
-            try (ResultSet rs = stmt.executeQuery())
-            {
-                ResultSetMetaData md       = rs.getMetaData();
-                int               colCount = md.getColumnCount();
+# ============================ TC_04_STAFF.feature ============================
+@maps
+Feature: TC_04_STAFF - Map Generation for Partnership Herds and Download E2E Regression Pack
 
-                while (rs.next())
-                {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    for (int c = 1; c <= colCount; c++)
-                    {
-                        String col = md.getColumnLabel(c);
-                        if (col == null || col.isEmpty()) col = md.getColumnName(c);
-                        // Always uppercase — callers use getValue("APP_HERD_NO") etc.
-                        row.put(col.toUpperCase(Locale.ROOT), rs.getObject(c));
-                    }
-                    lastRows.add(row);
-                }
+  # Legacy: "Regression Pack for Generating Map" (BISSAGL-3161 AT-TC-01, 02)
+  # Legacy had NO Background query block - herds K1361753 / K1360100094 were hardcoded.
+  # Retained as literals: these are specific PARTNERSHIP fixtures. No legacy query returns
+  # partnership herds, so substituting a generic submitted herd would silently change what
+  # this test covers. Flagged for a partnership-herd query to be added later.
 
-                if (!lastRows.isEmpty())
-                {
-                    lastScalar = lastRows.get(0).values().iterator().next();
-                }
-            }
-        }
-        catch (SQLException e)
-        {
-            throw new RuntimeException("DB (" + whichDb + ") execution failed: "
-                    + e.getMessage(), e);
-        }
-    }
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
 
-    private static Connection getDataConnection() throws SQLException
-    {
-        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-    }
+  @regression @staff @map-printing @partnership @download @e2e
+  Scenario: AT-STAFF-MAP-PARTNER-E2E-01 - Staff generates and downloads maps for partnership herds
 
-    private static Connection getInetConnection() throws SQLException
-    {
-        return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
-    }
+    # SECTION 1 : Partnership herd map A3 + download - AT-TC-01 (BISSAGL-14866)
+    When Staff searches on the Map Printing screen with the following details
+      | field      | herdNumber |
+      | herdValue  | K1361753   |
+      | schemeYear | 2023       |
+    And Staff selects all values in the "parcelSelect" multi-option dropdown
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A3 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the "status" of the generated map
+    And Staff verifies the "id" of the generated map
+    And Staff verifies the "herdNumber" of the generated map
+    And Staff verifies the "date" of the generated map
+    And Staff verifies the final status of the generated map
+    Then Staff clicks the first Ready to Download link
 
-    // =====================================================================
-    // HELPER ACCESSORS
-    // =====================================================================
+    # SECTION 2 : Multi-herd parcel generation A3 + download - AT-TC-02 (BISSAGL-14865)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen with the following details
+      | field       | parcelNumber |
+      | parcelValue | K1360100094  |
+      | schemeYear  | 2023         |
+    And Staff selects all values in the "parcelSelect" multi-option dropdown
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A3 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the "status" of the generated map
+    And Staff verifies the "id" of the generated map
+    And Staff verifies the "herdNumber" of the generated map
+    And Staff verifies the "date" of the generated map
+    And Staff verifies the final status of the generated map
+    Then Staff clicks the first Ready to Download link
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getValue
-    // Description   : Returns the value of the specified column from the first row of the last
-    //                 query result. Column name matching is case-insensitive. Returns null if
-    //                 the result set is empty or the column is not found.
-    // Parameters    : column — column name e.g. "APP_HERD_NO" or "USERNAME"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static String getValue(String column)
-    {
-        if (lastRows.isEmpty()) return null;
-        Map<String, Object> first = lastRows.get(0);
-        for (String k : first.keySet())
-            if (k.equalsIgnoreCase(column))
-                return Objects.toString(first.get(k), null);
-        return null;
-    }
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getRows
-    // Description   : Returns all rows from the last query result as a list of column-value maps.
-    //                 Column names are always stored in uppercase.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static List<Map<String, Object>> getRows()  { return lastRows; }
+# ============================ TC_05_STAFF.feature ============================
+@maps
+Feature: TC_05_STAFF - Maps in Correspondence E2E Regression Pack
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : hasRows
-    // Description   : Returns true if the last query returned at least one row.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static boolean hasRows() { return !lastRows.isEmpty(); }
+  # Legacy: "Regression Pack for Maps in Correspondence" (BISSAGL-3161 / 3162)
+  # Legacy Background: Get 15 LPIS Parcels from Database  ->  @staffdata + parcels:15
+  # Both legacy @tmslink tags were commented out.
+  # Legacy notes preserved: AT-TC-01 "Expected Link not found / Clicking on Links throws
+  # issues" - Documents section steps were commented out, so this is search-only.
+  # Herd O1020191 kept as a literal - it is the specific correspondence fixture.
 
-    // =====================================================================
-    // PROPERTY LOADER
-    // =====================================================================
+  @staffdata @parcels:15
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr2332"
+    And Staff opens the "Basic Income Support for Sustainability" application
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : loadDBProperties
-    // Description   : Loads BISS_DATA and BISS_INET JDBC connection properties from
-    //                 src/test/resources/db.properties at class initialisation time.
-    //                 Throws RuntimeException if any required property is missing or blank.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void loadDBProperties()
-    {
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE))
-        {
-            props.load(fis);
+  @regression @staff @map-printing @correspondence @e2e
+  Scenario: AT-STAFF-MAP-CORR-E2E-01 - Staff searches herd and generates parcel map for correspondence
 
-            DB_URL      = props.getProperty("db.url");
-            DB_USER     = props.getProperty("db.username");
-            DB_PASSWORD = props.getProperty("db.password");
-            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD))
-            {
-                throw new RuntimeException(
-                        "Missing BISS_DATA properties (db.url / db.username / db.password)");
-            }
+    # SECTION 1 : Herd search for correspondence documents - AT-TC-01
+    # Legacy: "Staff Scroll to Documents Section" commented out - link not found in UI.
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | O1020191   |
+      | schemeYear | 2023       |
 
-            DB_INET_URL      = props.getProperty("db.inet.url");
-            DB_INET_USER     = props.getProperty("db.inet.username");
-            DB_INET_PASSWORD = props.getProperty("db.inet.password");
-            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD))
-            {
-                throw new RuntimeException(
-                        "Missing BISS_INET properties " +
-                                "(db.inet.url / db.inet.username / db.inet.password)");
-            }
+    # SECTION 2 : Generate parcel map viewable from Correspondence - AT-TC-02
+    # Legacy: "Staff Click on Correspondence Quick Link in Navbar" commented out.
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 11 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2023         |
 
-            log.info("[DBRouter] DATA and INET connection properties loaded successfully.");
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException("Cannot load db.properties at "
-                    + PROPERTIES_FILE + " : " + e.getMessage(), e);
-        }
-    }
 
-    // =====================================================================
-    // LOGGER SETUP
-    // =====================================================================
+# ============================ TC_06_STAFF.feature ============================
+@letters
+Feature: TC_06_STAFF - BISS Letters Coordination Amendments E2E Regression Pack
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : setupLogger
-    // Description   : Configures a custom ConsoleHandler with a timestamped log format.
-    //                 Removes any default parent handlers to prevent duplicate log output.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void setupLogger()
-    {
-        try
-        {
-            Logger iRoot = Logger.getLogger(DBRouter.class.getName());
-            iRoot.setUseParentHandlers(false);
-            iRoot.setLevel(Level.ALL);
+  # Legacy: "Regression Suite for BISS Letters" (BISSAGL-7301 AT-TC-01, 02)
+  # Legacy Background: Get 5 Herds with Admin Check Not Started from Database
+  #                     -> @staffdata + herds:5:admincheck
+  # Legacy searched by "Reference Number from row 2" but loaded Admin-Check-Not-Started herds -
+  # a mismatch in the legacy itself. Reference numbers are loaded explicitly here instead.
+  #
+  # NOTE: legacy AT-TC-01 and AT-TC-02 are BYTE-IDENTICAL - same herd, same steps, same
+  # assertions, differing only in @tmslink (14914 vs 14913). Merged into one section rather
+  # than duplicated. Confirm with the test owner whether AT-TC-02 was meant to differ.
 
-            java.util.logging.Formatter iFmt = new java.util.logging.Formatter()
-            {
-                @Override
-                public String format(LogRecord r)
-                {
-                    return String.format("[%s] [%s] %s%n",
-                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                                    .format(new Date(r.getMillis())),
-                            r.getLevel(),
-                            r.getMessage());
-                }
-            };
+  @staffdata @refs:5
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
 
-            ConsoleHandler iConsole = new ConsoleHandler();
-            iConsole.setLevel(Level.ALL);
-            iConsole.setFormatter(iFmt);
+  @regression @staff @letters @coordination @e2e
+  Scenario: AT-STAFF-LETTERS-E2E-01 - Staff moves all parcels to a new herd via Coordination Amendments
 
-            for (Handler h : iRoot.getHandlers()) iRoot.removeHandler(h);
-            iRoot.addHandler(iConsole);
-        }
-        catch (Exception e)
-        {
-            System.err.println("Logger setup failed: " + e.getMessage());
-        }
-    }
+    # SECTION 1 : Move all to new herd - AT-TC-01 (BISSAGL-14914) / AT-TC-02 (BISSAGL-14913)
+    When Staff searches on the Home screen using database reference 2 with the following details
+      | field      | referenceNumber |
+      | schemeYear | 2023            |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Coordination Amendments" Link in Navbar
+    And Staff enters value "U1222127" in the "newHerdNo" field
+    And Staff clicks the "Start" button
+    And Staff clicks the "Move all to new herd" button
+    Then Staff clicks the "Save" button
 
-    // =====================================================================
-    // NORMALIZERS AND VALIDATORS
-    // =====================================================================
 
-    private static String normalizeDb(String s)
-    {
-        String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
-        if ("DATA".equals(v) || "INET".equals(v)) return v;
-        throw new IllegalArgumentException(
-                "dbKey must be 'DATA' or 'INET' (was: " + s + ")");
-    }
+# ============================ TC_07_STAFF.feature ============================
+@sim
+Feature: TC_07_STAFF - SIM Amendments and History Tab E2E Regression Pack
 
-    private static String normalize(String s)
-    {
-        if (s == null) return "";
-        return s.replace(':', ' ')
-                .replace("\u2013", "-")
-                .replace("\u2014", "-")
-                .replaceAll("\\s+", " ")
-                .trim()
-                .toUpperCase(Locale.ROOT);
-    }
+  # Legacy: "Regression Suite for SIM Amendments - History Tab" (BISSAGL-5444 AT-TC-01)
+  # Legacy Background: Get 1 Herds with Submission from DataBase - but the DB step was
+  # OVERRIDDEN in the scenario by a hardcoded herd G175C038, with the DB line commented out.
+  # Herd G175C038 and its parcels G17202130 / G22814025 / G22813057 are kept as literals:
+  # this test needs a herd with those SPECIFIC SIM parcels present, which no legacy query
+  # expresses. Substituting a generic submitted herd would break the parcel steps.
 
-    private static void requireParamCountBetween(String labelKey,
-                                                 String[] params,
-                                                 int min, int max)
-    {
-        int n = (params == null) ? 0 : params.length;
-        if (n < min || n > max)
-        {
-            throw new IllegalArgumentException(
-                    "Label '" + labelKey + "' expects between "
-                            + min + " and " + max + " parameter(s); got " + n);
-        }
-    }
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
 
-    private static int parseInt(String s, String name)
-    {
-        try { return Integer.parseInt(s.trim()); }
-        catch (Exception e)
-        {
-            throw new IllegalArgumentException(
-                    "Expected integer for " + name + " but got: " + s);
-        }
-    }
+  @regression @staff @sim @history @e2e
+  Scenario: AT-STAFF-SIM-HIST-E2E-01 - Staff performs SIM parcel amendments and verifies history
 
-    private static boolean isBlank(String s)
-    {
-        return s == null || s.trim().isEmpty();
-    }
-}
+    # SECTION 1 : Open submitted herd application - AT-TC-01 (BISSAGL-14998)
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | G175C038   |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "SIM" Link in Navbar
+
+    # SECTION 2 : Amend SIM found area + verify history
+    When Staff opens the SIM parcel "G17202130" side drawer
+    And Staff enters value "4" in the "simFoundArea" SIM side drawer field
+    And Staff clicks the "Save changes" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the History tab shows activity
+
+    # SECTION 3 : Amend SIM claimed area + verify history
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff opens the SIM parcel "G22814025" side drawer
+    And Staff enters value "6" in the "amendedClaimedArea" SIM side drawer field
+    And Staff clicks the "Save changes" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the History tab shows activity
+
+    # SECTION 4 : Toggle SIM indicator + verify history
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff opens the SIM parcel "G22813057" side drawer
+    And Staff clicks the "simIndicator" checkbox in the SIM parcel edit drawer
+    And Staff clicks the "Save changes" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the History tab shows activity
+
+    # SECTION 5 : Submit SIM + verify history
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff clicks the "Submit" button
+    And Staff enters SIM notes as "Test 7678"
+    And Staff clicks the "Finish" button
+    And Staff toggles the SIM option
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the History tab shows activity
+
+    # SECTION 6 : Revert SIM to original state - post-test reset
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff toggles the SIM option
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the History tab shows activity
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff clicks the "Revert" button
+    And Staff opens the SIM parcel "G22813057" side drawer
+    And Staff clicks the "simIndicator" checkbox in the SIM parcel edit drawer
+    And Staff clicks the "Save changes" button
+    And Staff clicks the "Submit" button
+    And Staff enters SIM notes as "Set for Test 7678"
+    Then Staff clicks the "Finish" button
+
+
+# ============================ TC_08_STAFF.feature ============================
+@sim
+Feature: TC_08_STAFF - SIM Amendments Core E2E Regression Pack
+
+  # Legacy: "Regression Suite for SIM Amendments" (BISSAGL-7110 AT-TC-01 to 04)
+  # Legacy had NO Background query block - herd A1071109 hardcoded in all 4 scenarios.
+  # Kept as a literal: parcel Y2031000006 must exist on this herd for Section 1.
+  #
+  # LEGACY COVERAGE WARNING - carried forward honestly:
+  #   AT-TC-03 (BISSAGL-14861) navigates to the SIM tab and STOPS. It has no assertion.
+  #   Legacy comment on it reads "parcel with errors needed that can be cleared on Admin
+  #   Inspection page" - i.e. the test data never existed. Section 3 reproduces it as-is
+  #   and therefore asserts nothing. It should either get real data or be deleted.
+  #   AT-TC-04's entire body after the SIM toggle was commented out in legacy.
+
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @sim @e2e
+  Scenario: AT-STAFF-SIM-CORE-E2E-01 - Staff amends SIM claimed area and verifies application totals
+
+    # SECTION 1 : Amend SIM claimed area on parcel - AT-TC-01 (BISSAGL-14864)
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | A1071109   |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "SIM" Link in Navbar
+    And Staff opens the SIM parcel "Y2031000006" side drawer
+    And Staff enters value "2.25" in the "amendedClaimedArea" SIM side drawer field
+    Then Staff clicks the "Save changes" button
+
+    # SECTION 2 : Verify Original Application Total - AT-TC-02 (BISSAGL-14862)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | A1071109   |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "SIM" Link in Navbar
+    And Staff verifies the value of the Original Application Total
+
+    # SECTION 3 : Open SIM tab - AT-TC-03 (BISSAGL-14861)
+    # NO ASSERTION IN LEGACY - test data was never created. See warning in header.
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | A1071109   |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "SIM" Link in Navbar
+
+    # SECTION 4 : Toggle SIM option - AT-TC-04 (BISSAGL-14860)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | A1071109   |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "SIM" Link in Navbar
+    And Staff toggles the SIM option
+
+
+# ============================ TC_09_STAFF.feature ============================
+@sim
+Feature: TC_09_STAFF - SIM Tick Internal and iNet E2E Regression Pack
+
+  # Legacy: "Regression Suite for SIM Tick Internal and INET" (BISSAGL-7578 AT-TC-01 to 04)
+  # Legacy had NO Background query block - herds D3670245 / D1591313 hardcoded.
+  # Kept as literals: D3670245 must start SIM-ticked and D1591313 SIM-unticked for the
+  # toggle assertions to mean anything. No legacy query expresses that starting state.
+  #
+  # NOTE: legacy AT-TC-03 / AT-TC-04 are RETESTS of AT-TC-01 / AT-TC-02 - same herds, same
+  # steps, differing only in note text and @tmslink. Merged: the E2E flow already exercises
+  # both paths once. Re-running identical steps adds runtime, not coverage.
+
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @sim @tick @e2e
+  Scenario: AT-STAFF-SIM-TICK-E2E-01 - Staff verifies SIM tick sync between SIM and BISS Application
+
+    # SECTION 1 : Deselecting SIM updates BISS Application tick - AT-TC-01 (BISSAGL-14839)
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | D3670245   |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff verifies the SIM tick on the BISS Application summary screen
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff toggles the SIM option
+    And Staff clicks the "Submit" button
+    And Staff enters SIM notes as "Test Note for 8078"
+    And Staff clicks the "Finish" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the History tab shows activity
+    When Staff clicks on "BISS Application" Link in Navbar
+    Then Staff verifies the SIM tick on the BISS Application summary screen
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff toggles the SIM option
+    And Staff clicks the "Submit" button
+    And Staff enters SIM notes as "Reset Test for 8078"
+    Then Staff clicks the "Finish" button
+
+    # SECTION 2 : Selecting SIM updates tick + payable area - AT-TC-02 (BISSAGL-14838)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | D1591313   |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff verifies the SIM tick on the BISS Application summary screen
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff verifies the SIM calculated payable area
+    And Staff toggles the SIM option
+    And Staff verifies the SIM calculated payable area
+    And Staff clicks the "Submit" button
+    And Staff enters SIM notes as "Test Note for 8079"
+    And Staff clicks the "Finish" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the History tab shows activity
+    When Staff clicks on "BISS Application" Link in Navbar
+    Then Staff verifies the SIM tick on the BISS Application summary screen
+    When Staff clicks on "SIM" Link in Navbar
+    And Staff toggles the SIM option
+    And Staff clicks the "Submit" button
+    And Staff enters SIM notes as "Reset Test for 8079"
+    Then Staff clicks the "Finish" button
+# ====================================================================================================================================
+# BATCH 2 - MAPS (cont.) + PAYMENTS + SCHEME + ACTIVE FARMER + CORRESPONDENCE + AMS
+# Same conventions as BATCH 1. One legacy Feature -> one file, one chained E2E Scenario,
+# # SECTION markers mapping back to original AT-TC ids.
+# Author  : Aniket Pathare | aniket.pathare@government.ie
+# Created : 15-07-2026
+# ====================================================================================================================================
+
+
+# ============================ TC_10_STAFF.feature ============================
+@maps
+Feature: TC_10_STAFF - Downloading Map Printing Maps E2E Regression Pack
+
+  # Legacy: "Regression Pack for Generating and Downloading Map" (BISSAGL-7682 AT-TC-01, 02)
+  # Legacy had NO Background query block - K1361753 / B1410500035 hardcoded.
+  # K1361753 kept as literal (partnership fixture, same as TC_04).
+  # Legacy AT-TC-01 has "Click On First Ready to Download Link" COMMENTED OUT; AT-TC-02 does
+  # not. Preserved exactly - Section 1 does not download, Section 2 does.
+
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr2332"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
+
+  @regression @staff @map-printing @download @e2e
+  Scenario: AT-STAFF-MAP-DL-E2E-01 - Staff generates maps by herd and parcel and downloads output
+
+    # SECTION 1 : Herd map generation, verify metadata - AT-TC-01 (BISSAGL-14884)
+    # Legacy: download link step commented out - not reproduced.
+    When Staff searches on the Map Printing screen with the following details
+      | field      | herdNumber |
+      | herdValue  | K1361753   |
+      | schemeYear | 2023       |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the "status" of the generated map
+    And Staff verifies the "id" of the generated map
+    And Staff verifies the "herdNumber" of the generated map
+    And Staff verifies the "date" of the generated map
+    And Staff verifies the final status of the generated map
+
+    # SECTION 2 : Parcel map generation + download - AT-TC-02 (BISSAGL-14883)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen with the following details
+      | field       | parcelNumber |
+      | parcelValue | B1410500035  |
+      | schemeYear  | 2023         |
+    And Staff selects all values in the "parcelSelect" multi-option dropdown
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the "status" of the generated map
+    And Staff verifies the "id" of the generated map
+    And Staff verifies the "herdNumber" of the generated map
+    And Staff verifies the "date" of the generated map
+    And Staff verifies the final status of the generated map
+    Then Staff clicks the first Ready to Download link
+
+
+# ============================ TC_11_STAFF.feature ============================
+@maps
+Feature: TC_11_STAFF - Map Printing Parcel Search Case Sensitivity E2E Regression Pack
+
+  # Legacy: "Regression Pack for Map Printing Case Sensitive" (BISSAGL-8080 AT-TC-01 to 05)
+  # Legacy Background: Get 15 LPIS Parcels from Database  ->  @staffdata + parcels:15
+  #
+  # LEGACY DATA WARNING - carried forward:
+  #   The legacy INTENT (per commented literals) was to search case/format variants:
+  #     AT-TC-01 "o1170800024" lower  | AT-TC-02 "O1170800024" upper
+  #     AT-TC-03 "O1060300013*" special char | AT-TC-04 "4354543648894" invalid
+  #     AT-TC-05 " " null
+  #   But the ACTIVE steps pull DB parcel rows 11-15, which are all valid, correctly-cased
+  #   LPIS parcels. So AT-TC-01/02 no longer test case-insensitivity and AT-TC-04/05 no
+  #   longer test invalid/null input - they all just search a valid parcel.
+  #   Sections 1-3 below preserve the DB-driven steps as-is. Section 4 keeps the legacy's
+  #   own inline invalid literals, which ARE still present in legacy AT-TC-04.
+  #   To restore real coverage, the case variants must be derived from a DB parcel at
+  #   runtime (e.g. toLowerCase()/toUpperCase() of parcel 11). Flagged, not silently fixed.
+
+  @staffdata @parcels:15
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr11612"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+
+  @regression @staff @map-printing @parcel @case-sensitivity @e2e
+  Scenario: AT-STAFF-MAP-CASE-E2E-01 - Staff searches parcels in varying formats and verifies settings section
+
+    # SECTION 1 : Lower case parcel search - AT-TC-01 (BISSAGL-14833)
+    When Staff searches on the Map Printing screen using database parcel 11 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2023         |
+    Then Staff should see the Generate Map Setting section
+
+    # SECTION 2 : Upper case parcel search - AT-TC-02 (BISSAGL-14832)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 12 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2023         |
+    Then Staff should see the Generate Map Setting section
+
+    # SECTION 3 : Special character parcel search - AT-TC-03 (BISSAGL-14831)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 13 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2023         |
+    Then Staff should see the Generate Map Setting section
+
+    # SECTION 4 : Invalid parcel searches - AT-TC-04 (BISSAGL-14824)
+    # Legacy retains three inline invalid literals here - preserved verbatim.
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 14 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2023         |
+    Then Staff should see the Generate Map Setting section
+    When Staff searches on the Map Printing screen with the following details
+      | field       | parcelNumber    |
+      | parcelValue | hdgfhggdfhjkdhj |
+      | schemeYear  | 2023            |
+    Then Staff should see the Generate Map Setting section
+    When Staff searches on the Map Printing screen with the following details
+      | field       | parcelNumber  |
+      | parcelValue | 345dhf564gh48 |
+      | schemeYear  | 2023          |
+    Then Staff should see the Generate Map Setting section
+
+    # SECTION 5 : Null value parcel search - AT-TC-05 (BISSAGL-14823)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 15 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2023         |
+    Then Staff should see the Generate Map Setting section
+
+
+# ============================ TC_12_STAFF.feature ============================
+@payments
+Feature: TC_12_STAFF - CISYF and NR Late Penalty Submission Details E2E Regression Pack
+
+  # Legacy: "Regression Pack for Show CISYF and NR late penalty % on Summary Screen -
+  #          Submission Details" (BISSAGL-7547 AT-TC-01 to 05)
+  # Legacy AT-TC-00 loaded THREE query sets:
+  #   Get 5 Herds with Submission and no Amendments   -> @herds:5:noamend
+  #   Get 10 Herds with Submission                    -> @herds:10:submitted
+  #   Get 6 Herds with Submission And Penalty         -> @herds:6:penalty
+  #
+  # Legacy notes preserved:
+  #   AT-TC-01 "Amended date will not be updated it will be the submitted date"
+  #   AT-TC-04 "Amendment Date Value does not change"
+  #   AT-TC-05 "# Assertion pending" - no assertion on the final captured value.
+
+  @staffdata @herds:5:noamend @herds:10:submitted @herds:6:penalty
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @payments @late-penalty @submission-details @e2e
+  Scenario: AT-STAFF-PENALTY-E2E-01 - Staff verifies CISYF and NR late penalty display on Submission Details
+
+    # SECTION 1 : Late BISS penalty present, CISYF/NR absent - AT-TC-01 (BISSAGL-14767)
+    When Staff searches on the Home screen using database penalty herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff captures and prints the "Customer lookup date" value
+    And Staff captures and prints the "Received date" value
+    And Staff captures and verifies an error on the "Late BISS application %" value
+    And Staff captures and verifies no error on the "Late CISYF application %" value
+    And Staff captures and verifies no error on the "Late NR application %" value
+    And Staff captures and prints the "Submitted by" value
+    And Staff captures and prints the "Amendment date" value
+    And Staff captures and prints the "Late Amendment date" value
+    And Staff captures and prints the "Amendment" value
+    And Staff captures and prints the "Parcels (no. of)" value
+    And Staff captures and prints the "Undigitised Plots" value
+    And Staff captures and prints the "Sequence No" value
+
+    # SECTION 2 : No late penalties displayed - AT-TC-02 (BISSAGL-14766)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2025       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff captures and prints the "Customer lookup date" value
+    And Staff captures and prints the "Received date" value
+    And Staff captures and verifies no error on the "Late BISS application %" value
+    And Staff captures and verifies no error on the "Late CISYF application %" value
+    And Staff captures and verifies no error on the "Late NR application %" value
+    And Staff captures and prints the "Submitted by" value
+    And Staff captures and prints the "Amendment date" value
+    And Staff captures and prints the "Late Amendment date" value
+    And Staff captures and prints the "Amendment" value
+    And Staff captures and prints the "Parcels (no. of)" value
+    And Staff captures and prints the "Undigitised Plots" value
+    And Staff captures and prints the "Sequence No" value
+
+    # SECTION 3 : Amendment field shows None when not amended - AT-TC-03 (BISSAGL-14765)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database no-amendment herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff captures and verifies the "Amendment" value is "None"
+
+    # SECTION 4 : Last Amended date displayed after amendment - AT-TC-04 (BISSAGL-14764)
+    # Legacy note: "Amendment Date Value does not change"
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2025       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff captures and prints the "Amendment date" value
+    And Staff clicks on "BISS Amendments" Link in Navbar
+    When Staff checks if Admin Inspection is completed after clicking the "Amend" link number 1 in the "application-search-table" table
+    Then Staff clicks on "BISS Amendments" Link in Navbar
+    And Staff clicks the "CRISS" Scheme Selection Card
+    And Staff clicks the "Next" button
+    And Staff clicks the "Submit Changes" button
+    Then Staff captures and prints the "Amendment date" value
+
+    # SECTION 5 : Amendment field details updated - AT-TC-05 (BISSAGL-14761)
+    # Legacy note: "# Assertion pending" - final value is printed, not asserted.
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database no-amendment herd 3 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2025       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff captures and prints the "Amendment" value
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database no-amendment herd 3 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2025       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    When Staff checks if Admin Inspection is completed after clicking the "Amend" link number 1 in the "application-search-table" table
+    Then Staff clicks the "Next" button
+    And Staff opens the first Plot Reference side drawer
+    And Staff clicks the checkbox to request Eh Change
+    And Staff requests an Eh Change in the side drawer with reason "Test 1"
+    And Staff clicks the Application Stepper "Save changes" button
+    And Staff clicks the Application Stepper "Cancel" button
+    Then Staff clicks the "Submit Changes" button
+    And Staff captures and prints the "Amendment" value
+
+
+# ============================ TC_13_STAFF.feature ============================
+@active-farmer
+Feature: TC_13_STAFF - Active Farmer Admin Checks and Appeals E2E Regression Pack
+
+  # Legacy: "Regression Pack for Admin Checks & Appeals" (BISSAGL-2943 AT-TC-01 to 08)
+  # Legacy AT-TC-00: Get 15 Herds with Payments from DataBase -> loaded but NEVER USED;
+  # every scenario hardcodes P1461522 / C1251161 instead. The query block is dead code.
+  # Literals kept - the DB query loaded is not the one the scenarios need.
+  #
+  # LEGACY COVERAGE WARNING - the most severe in the whole suite:
+  #   All 9 legacy scenarios (AT-TC-01 to 08, with AT-TC-07 duplicated) perform the
+  #   IDENTICAL four steps: search herd -> View -> switch to Active Farmer tab. Nothing else.
+  #   No admin check is started. No appeal is raised. No assertion of any kind is made.
+  #   Only AT-TC-02 differs, and only in herd (C1251161/2024 vs P1461522/2023).
+  #   8 of the 9 are exact duplicates carrying distinct @tmslink ids (14849, 14848, 14847,
+  #   14846, 14845, 14844, 14843 x2, 14841) - so 9 Jira tests all map to one navigation.
+  #   Merged into 2 sections covering the 2 distinct herds. The real Admin Check & Appeals
+  #   coverage lives in TC_16_STAFF (BISSAGL-7777), which does exercise the full flow.
+  #   RECOMMENDATION: these Jira cases need real steps written, or closing as duplicates.
+
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr0191"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @active-farmer @admin-check @e2e
+  Scenario: AT-STAFF-AF-ADMIN-E2E-01 - Staff opens Active Farmer tab for admin check herds
+
+    # SECTION 1 : Active Farmer tab, 2023 herd - AT-TC-01/03/04/05/06/07/08
+    # (BISSAGL-14849, 14847, 14846, 14845, 14844, 14843, 14841 - all identical)
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | P1461522   |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff switches to the "Active Farmer" tab
+
+    # SECTION 2 : Active Farmer tab, 2024 herd - AT-TC-02 (BISSAGL-14848)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | C1251161   |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff switches to the "Active Farmer" tab
+
+
+# ============================ TC_14_STAFF.feature ============================
+@scheme
+Feature: TC_14_STAFF - Scheme Selection BISS and CRISS E2E Regression Pack
+
+  # Legacy: "Regression Pack for Scheme Selection - Add BISS, CRISS" (BISSAGL-5919)
+  # Legacy AT-TC-00:
+  #   Get 8 Herds with Submission and no Amendments -> @herds:8:noamend
+  #   Get 5 Herds with Submission                   -> @herds:5:submitted
+  #
+  # AT-TC-04 uses hardcoded N1041714 with legacy comment "Submit any herd as not active
+  # and use here" - kept as literal, it needs a NOT-ACTIVE farmer, which no query expresses.
+
+  @staffdata @herds:8:noamend @herds:5:submitted
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @scheme @biss @criss @e2e
+  Scenario: AT-STAFF-SCHEME-BISS-E2E-01 - Staff verifies BISS and CRISS scheme cards and selection
+
+    # SECTION 1 : Card titles, acronyms, View Details dialogs, toggles - AT-TC-01 (BISSAGL-14880)
+    When Staff searches on the Home screen using database submitted herd 1 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    Then Staff verifies Scheme Selection Card "1" has title "BISS"
+    And Staff verifies Scheme Selection Card "1" acronym is "Basic Income Support for Sustainability"
+    When Staff clicks the "BISS" Scheme Card View Details link
+    Then Staff reads the "Basic Income Support for Sustainability" View Details dialog content
+    And Staff clicks the "Close" button
+    Then Staff verifies Scheme Selection Card "2" has title "CRISS"
+    And Staff verifies Scheme Selection Card "2" acronym is "Complementary Redistributive Income Support for Sustainability"
+    When Staff clicks the "CRISS" Scheme Card View Details link
+    Then Staff reads the "Complementary Redistributive Income Support for Sustainability" View Details dialog content
+    And Staff clicks the "Close" button
+    Then Staff verifies a toggle is present for the "BISS" scheme
+    And Staff verifies a toggle is present for the "CRISS" scheme
+    And Staff verifies the selection state of the "BISS" scheme
+    And Staff verifies the selection state of the "CRISS" scheme
+    And Staff verifies the selection state of the "Protein Aid Scheme" scheme
+    When Staff clicks the "CRISS" Scheme Selection Card
+    And Staff clicks the "CRISS" Scheme Selection Card
+
+    # SECTION 2 : Submit CRISS + Protein, verify history, then reset - AT-TC-02 (BISSAGL-14879)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 3 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    And Staff clicks the "CRISS" Scheme Selection Card
+    And Staff clicks the "Protein Aid Scheme" Scheme Selection Card
+    And Staff clicks the "Next" button
+    And Staff clicks the "Submit Changes" button
+    And Staff clicks the "OK" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the Admin Check entry is "Amendment Submitted" in the History screen
+    When Staff clicks on "BISS Amendments" Link in Navbar
+    Then Staff verifies the selection state of the "Protein Aid Scheme" scheme
+    And Staff verifies the selection state of the "CRISS" scheme
+    # Reset post test case
+    When Staff clicks the "CRISS" Scheme Selection Card
+    And Staff clicks the "Protein Aid Scheme" Scheme Selection Card
+    And Staff clicks the "Next" button
+    Then Staff clicks the "Submit Changes" button
+
+    # SECTION 3 : Protein Aid selection then revert - AT-TC-03 (BISSAGL-14877)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 3 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    And Staff clicks the "Protein Aid Scheme" Scheme Selection Card
+    And Staff clicks the "Next" button
+    # Reset post test case
+    Then Staff clicks the "Back" button
+    And Staff clicks the "Protein Aid Scheme" Scheme Selection Card
+
+    # SECTION 4 : Full scheme selection state for non-active farmer - AT-TC-04 (BISSAGL-14876)
+    # Legacy note: "Submit any herd as not active and use here" - N1041714 kept as literal.
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | N1041714   |
+      | schemeYear | 2025       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    Then Staff verifies the selection state of the following schemes
+      | scheme             |
+      | BISS               |
+      | CRISS              |
+      | ANC                |
+      | Eco                |
+      | Organics           |
+      | SIM                |
+      | Protein Aid Scheme |
+      | CISYF              |
+      | MSSM               |
+      | RCSM               |
+
+
+# ============================ TC_15_STAFF.feature ============================
+@scheme
+Feature: TC_15_STAFF - Scheme Selection MSSM and RCSM E2E Regression Pack
+
+  # Legacy: "Regression Pack for Scheme Selection - Add MSSM, RCSM" (BISSAGL-7582 AT-TC-01 to 05)
+  # Legacy had NO Background query block - J1400098 / A1211644 / P1461522 hardcoded.
+  # Kept as literals: MSSM/RCSM/Eco selection states must be known up-front.
+  #
+  # LEGACY WARNINGS - preserved:
+  #   AT-TC-02 comment "How do we check for inactive farmer" - scenario navigates and STOPS,
+  #            no assertion. Reproduced as-is (Section 2).
+  #   AT-TC-03 comment "Need MSSM and RCSM disabled herd" - navigates and STOPS (Section 3).
+  #   AT-TC-05 comment "Need herd that will show validation error on Land Details page" -
+  #            but its body is BYTE-IDENTICAL to AT-TC-04. Merged into Section 4.
+
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @scheme @mssm @rcsm @e2e
+  Scenario: AT-STAFF-SCHEME-MSSM-E2E-01 - Staff verifies MSSM and RCSM scheme cards and Eco submission
+
+    # SECTION 1 : MSSM / RCSM card titles and selection state - AT-TC-01 (BISSAGL-14893)
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | J1400098   |
+      | schemeYear | 2024       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    Then Staff verifies the card has title "MSSM" with abbreviation "Multi Species Sward Measure"
+    And Staff verifies the "MSSM" scheme is selected
+    And Staff verifies the card has title "RCSM" with abbreviation "Red Clover Silage Measure"
+    And Staff verifies the "RCSM" scheme is selected
+    And Staff verifies the "Eco" scheme is selected
+    When Staff clicks the "MSSM" Scheme Selection Card
+    And Staff clicks the "RCSM" Scheme Selection Card
+    And Staff clicks the "MSSM" Scheme Selection Card
+    And Staff clicks the "RCSM" Scheme Selection Card
+
+    # SECTION 2 : Inactive farmer amend screen - AT-TC-02 (BISSAGL-14889)
+    # NO ASSERTION IN LEGACY - comment reads "How do we check for inactive farmer".
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | A1211644   |
+      | schemeYear | 2024       |
+    Then Staff clicks the "Amend" link number 1 in the "application-search-table" table
+
+    # SECTION 3 : MSSM/RCSM disabled herd view - AT-TC-03 (BISSAGL-14885)
+    # NO ASSERTION IN LEGACY - comment reads "Need MSSM and RCSM disabled herd".
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | P1461522   |
+      | schemeYear | 2023       |
+    Then Staff clicks the "View" link number 1 in the "application-search-table" table
+
+    # SECTION 4 : Eco scheme submit and reset - AT-TC-04 (BISSAGL-14891) / AT-TC-05 (BISSAGL-14890)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | J1400098   |
+      | schemeYear | 2024       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    And Staff clicks the "Eco" Scheme Selection Card
+    And Staff clicks the "Next" button
+    And Staff clicks the "Submit Changes" button
+    Then Staff clicks on "Home" Link in Navbar
+    # Reset case to be reused
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | J1400098   |
+      | schemeYear | 2024       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    And Staff clicks the "Eco" Scheme Selection Card
+    And Staff clicks the "Next" button
+    Then Staff clicks the "Submit Changes" button
+
+
+# ============================ TC_16_STAFF.feature ============================
+@active-farmer
+Feature: TC_16_STAFF - Active Farmer System Notes for History Screen E2E Regression Pack
+
+  # Legacy: "Regression Pack for Active Farmer History Notes - In Progress to be cleared"
+  #         (BISSAGL-7777 AT-TC-01 to 03)
+  # Legacy AT-TC-00: Get 5 Herds with Admin Check Not Started from Database
+  #                   -> @staffdata + herds:5:admincheck
+  # This is the feature that actually exercises the full Admin Check / Appeal flow
+  # (unlike TC_13_STAFF - see the warning in that file's header).
+  #
+  # Legacy AT-TC-02 has its "Start admin check"/"Send" steps COMMENTED OUT - it assumes the
+  # admin check started by AT-TC-01 is still in progress on the SAME herd (row 2). That
+  # ordering dependency is implicit in legacy and becomes explicit here: Sections 1 and 2
+  # run in sequence on the same herd, which is exactly what the E2E chaining gives us.
+
+  @staffdata @herds:5:admincheck
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @active-farmer @admin-check @history @e2e
+  Scenario: AT-STAFF-AF-NOTES-E2E-01 - Staff starts admin check, approves, and appeals with history verification
+
+    # SECTION 1 : Start admin check -> Stop applied note - AT-TC-01 (BISSAGL-14850)
+    When Staff searches on the Home screen using database admin-check herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Active Farmer" Link in Navbar
+    And Staff clicks the "Start admin check" button
+    And Staff clicks the "Send" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the Admin Check entry is "Active Farmer Admin Check in Progress Stop has been Applied with comment: Admin check started manually" in the History screen
+
+    # SECTION 2 : Approve admin check -> Stop lifted note - AT-TC-02 (BISSAGL-14842)
+    # Legacy relies on the check started in Section 1 still being in progress on this herd.
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database admin-check herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Active Farmer" Link in Navbar
+    And Staff selects "APPROVED" as the Admin Check Result
+    And Staff enters "Test Note" as Admin Notes
+    And Staff clicks the "Save changes" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the Admin Check entry is "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Test Note" in the History screen
+
+    # SECTION 3 : Reject -> appeal -> upload -> approve - AT-TC-03 (BISSAGL-14840)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database admin-check herd 4 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Active Farmer" Link in Navbar
+    And Staff clicks the "Start admin check" button
+    And Staff clicks the "Send" button
+    And Staff selects "REJECTED" as the Admin Check Result
+    And Staff enters "Test Note" as Admin Notes
+    And Staff clicks the "Save changes" button
+    When Staff clicks the "Start appeal process" button
+    And Staff clicks the "Yes, Appeal" button
+    And Staff clicks the "Upload document" button
+    And Staff uploads a document in Correspondence
+    And Staff clicks the "Submit" button
+    Then Staff selects "APPROVED" as the Admin Check Result
+    And Staff enters "Appeal Approved" as Admin Notes
+    And Staff clicks the "Save changes" button
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff switches to the "History" tab
+    Then Staff verifies the Admin Check entry is "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Appeal Approved" in the History screen
+
+
+# ============================ TC_17_STAFF.feature ============================
+@correspondence
+Feature: TC_17_STAFF - Free Text Commonage Evidence Query Letter E2E Regression Pack
+
+  # Legacy: "Regression Pack for Free Text Commonage Evidence Query Letter"
+  #         (BISSAGL-7518 AT-TC-01, 02)
+  # Legacy AT-TC-00: Get 5 Herds with Query Letter Not Started from Database
+  #                   -> @staffdata + herds:5:queryletter
+  #
+  # DATA MISMATCH IN LEGACY - preserved:
+  #   AT-TC-01 uses "Herd Number with Query Letter Not Started from row 2"  (correct)
+  #   AT-TC-02 uses "Herd Number with Admin Check Not Started from row 2"   (different query!)
+  #   Both scenarios are otherwise IDENTICAL. The AT-TC-02 herd source looks like a
+  #   copy-paste slip, but it is reproduced faithfully - both query sets are loaded.
+  #   Confirm with the test owner whether AT-TC-02 was meant to use the query-letter herd.
+
+  @staffdata @herds:5:queryletter @herds:5:admincheck
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @correspondence @query-letter @e2e
+  Scenario: AT-STAFF-QUERY-LETTER-E2E-01 - Staff adds free text to Commonage Evidence Query Letter
+
+    # SECTION 1 : Query letter free text, query-letter herd - AT-TC-01 (BISSAGL-14857)
+    When Staff searches on the Home screen using database query-letter herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Correspondence" Link in Navbar
+    And Staff switches to the " Query Letter" tab in the Correspondence header
+    And Staff changes the "docType" query letter dropdown value to "BISS Commonage Evidence Letter"
+    And Staff types text "Test Comment" in the "comment" Query Letters textarea
+    Then Staff clicks the "Preview" button
+
+    # SECTION 2 : Query letter free text, admin-check herd - AT-TC-02 (BISSAGL-14856)
+    # NOTE: legacy sources this herd from the Admin Check query - see header warning.
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database admin-check herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Correspondence" Link in Navbar
+    And Staff switches to the " Query Letter" tab in the Correspondence header
+    And Staff changes the "docType" query letter dropdown value to "BISS Commonage Evidence Letter"
+    And Staff types text "Test Comment" in the "comment" Query Letters textarea
+    Then Staff clicks the "Preview" button
+
+
+# ============================ TC_18_STAFF.feature ============================
+@scheme
+Feature: TC_18_STAFF - Select and Unselect ECO Scheme on BISS Internal Amendments E2E Regression Pack
+
+  # Legacy: "Regression Pack for Select/Unselect ECO Scheme on the BISS Internal Amendments"
+  #         (BISSAGL-8126 AT-TC-01, 02)
+  # Legacy had NO Background query block - L1161200 / A1140364 hardcoded.
+  # Legacy comment: "NeedHErd to Select and Deselect" - literals kept, the herds must have
+  # a known Eco selection state.
+  #
+  # NOTE: legacy AT-TC-01 and AT-TC-02 are BYTE-IDENTICAL - same two herds, same steps,
+  # differing only in @tmslink (14762 vs 14763). Merged into one flow.
+  # Legacy comment on both: "# Just put in validation cases" - i.e. no assertions exist.
+  # Reproduced faithfully: this feature performs Eco toggle + submit, and asserts nothing.
+
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @scheme @eco @amendments @e2e
+  Scenario: AT-STAFF-ECO-E2E-01 - Staff selects and submits Eco scheme on Internal Amendments
+
+    # SECTION 1 : Eco toggle + submit, 2023 herd - AT-TC-01 (BISSAGL-14762) / AT-TC-02 (BISSAGL-14763)
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | L1161200   |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "BISS Amendments" Link in Navbar
+    And Staff clicks the "Eco" Scheme Selection Card
+    And Staff clicks the "Next" button
+    Then Staff clicks the "Submit Changes" button
+
+    # SECTION 2 : Eco toggle + submit, 2024 herd
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | A1140364   |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "BISS Amendments" Link in Navbar
+    And Staff clicks the "Eco" Scheme Selection Card
+    And Staff clicks the "Next" button
+    Then Staff clicks the "Submit Changes" button
+
+
+# ============================ TC_19_STAFF.feature ============================
+@ams
+Feature: TC_19_STAFF - AMS Internal Screen Filter and Search E2E Regression Pack
+
+  # Legacy: "Regression Pack for AMS Internal Screen - Filter and Search Option"
+  #         (BISSAGL-7482 AT-TC-01)
+  # Legacy had NO Background query block - IFP10100 hardcoded (an inspection fixture herd).
+  #
+  # LEGACY COVERAGE WARNING:
+  #   The scenario navigates to Inspections -> AMS tab and STOPS. Its trailing comment reads
+  #   "Change the multi-select Dropdown to suit the dropdowns so value can be passed from
+  #   Feature" - i.e. the filter/search steps this test is named for were never written.
+  #   Legacy AT-TC-02 is entirely commented out.
+  #   Reproduced faithfully: navigation only, no filter assertions.
+
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @ams @filter @e2e
+  Scenario: AT-STAFF-AMS-FILTER-E2E-01 - Staff opens the AMS internal screen for an inspection herd
+
+    # SECTION 1 : Navigate to AMS tab - AT-TC-01 (BISSAGL-14725)
+    When Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | IFP10100   |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Inspections" Link in Navbar
+    And Staff switches to the "AMS" tab
+
+
+# ============================ TC_20_STAFF.feature ============================
+@ams
+Feature: TC_20_STAFF - AMS Internal Status Display Rules E2E Regression Pack
+
+  # Legacy: "Regression Pack for AMS internal - Rules for display of AMS status on internal
+  #          screen" (BISSAGL-7540)
+  # Legacy AT-TC-00: Get 10 Herds with Submission and SIM Opted In from DataBase
+  #                   -> @staffdata + herds:10:simopted
+  #
+  # LEGACY COVERAGE WARNING:
+  #   The scenario sorts the Parcel No column twice (ascending then descending) and makes
+  #   NO assertion about AMS status display - despite that being the feature's entire title.
+  #   Reproduced faithfully. The status-display rules need real assertions written.
+
+  @staffdata @herds:10:simopted
+  Background:
+    Given user on staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @ams @status-rules @e2e
+  Scenario: AT-STAFF-AMS-STATUS-E2E-01 - Staff sorts the Parcel No column on the AMS screen
+
+    # SECTION 1 : Parcel No header sort toggle - (BISSAGL-14749)
+    When Staff searches on the Home screen using database SIM-opted herd 1 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Inspections" Link in Navbar
+    And Staff clicks the Parcel No header on the AMS screen
+    And Staff clicks the Parcel No header on the AMS screen
+# ====================================================================================================================================
+# BATCH 3 - OPENSHIFT
+# Same conventions as BATCH 1 / 2. One legacy Feature -> one file, one chained E2E Scenario,
+# # SECTION markers mapping back to original AT-TC ids.
+#
+# OPENSHIFT vs CENTEST:
+#   These features log in via "user on OpenShift staff login page" - a DIFFERENT entry point
+#   from the CENTEST features in batches 1 and 2. The @openshift tag drives the URL selection
+#   in Hooks; every other step is shared with StaffSteps.java.
+#   Legacy carried a commented-out "Click on the Openshift Basic Income Support for
+#   Sustainability application" alongside the active non-Openshift variant in nearly every
+#   scenario. The ACTIVE step is used here; the commented variant is not reproduced.
+#
+# Author  : Aniket Pathare | aniket.pathare@government.ie
+# Created : 15-07-2026
+# ====================================================================================================================================
+
+
+# ============================ TC_21_STAFF.feature ============================
+@openshift
+Feature: TC_21_STAFF - OpenShift Cases E2E Regression Pack
+
+  # Legacy: "Regression Pack for Openshift Cases" (BISSAGL-12669 AT-TC-01 to 10)
+  # Legacy AT-TC-00:
+  #   Get 5 Herds with Submission   -> @herds:5:submitted
+  #   Get 5 Reference Numbers       -> @refs:5
+  #   Get 5 LPIS Parcels            -> @parcels:5
+  # Legacy repeated the per-scenario query calls commented out inside AT-TC-02/03/04 -
+  # the AT-TC-00 block is the live one.
+  #
+  # Legacy notes preserved:
+  #   AT-TC-01 "Payment QA" navbar step commented out.
+  #   AT-TC-02 all post-search navigation commented out - search only, no assertion.
+  #   AT-TC-09 "Active Farmer" and "Coordination Amendments" navbar steps commented out.
+
+  @staffdata @herds:5:submitted @refs:5 @parcels:5
+  Background:
+    Given user on OpenShift staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @openshift @e2e
+  Scenario: AT-STAFF-OS-CASES-E2E-01 - Staff exercises OpenShift search, maps, amendments and navigation
+
+    # SECTION 1 : Dashboard side menu tab switching - AT-TC-01 (BISSAGL-12669)
+    Then Staff clicks on "Coordination" Link in Navbar
+    And Staff clicks on "Home" Link in Navbar
+
+    # SECTION 2 : Search with reference number - AT-TC-02
+    # Legacy: all post-search navigation commented out - search only.
+    When Staff searches on the Home screen using database reference 1 with the following details
+      | field      | referenceNumber |
+      | schemeYear | 2023            |
+
+    # SECTION 3 : Search with herd number - AT-TC-03
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 1 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+
+    # SECTION 4 : Parcel search - AT-TC-04
+    When Staff switches to the "Parcels" tab
+    And Staff searches on the Parcels screen using database parcel 1 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+
+    # SECTION 5 : Generate map by parcel - AT-TC-05
+    # Legacy switches user to agr11612 (internal map printing user).
+    When Staff re-logs in as a different user with the Username "agr11612"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 2 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2023         |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Inspection Discovery |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+
+    # SECTION 6 : Generate and download map by herd + pagination - AT-TC-06
+    When Staff re-logs in as a different user with the Username "agr2332"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
+    And Staff searches on the Map Printing screen using database submitted herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff prints the "name" of the herd
+    And Staff prints the "address" of the herd
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the "status" of the generated map
+    And Staff verifies the "id" of the generated map
+    And Staff verifies the "herdNumber" of the generated map
+    And Staff verifies the "date" of the generated map
+    And Staff verifies the final status of the generated map
+    Then Staff clicks the "Next page" pagination button
+    And Staff clicks the "Previous page" pagination button
+
+    # SECTION 7 : Online Response activities - AT-TC-07
+    When Staff re-logs in as a different user with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Online Response" tab
+    And Staff searches on the Online Response screen using database submitted herd 3 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+
+    # SECTION 8 : Internal amendments - AT-TC-08
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 4 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    When Staff checks if Admin Inspection is completed after clicking the "Amend" link number 1 in the "application-search-table" table
+    Then Staff clicks the "Next" button
+    And Staff clicks the "Submit Changes" button
+
+    # SECTION 9 : Switch tabs within herd - AT-TC-09
+    # Legacy: "Active Farmer" and "Coordination Amendments" navbar steps commented out.
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 5 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Payments" Link in Navbar
+    And Staff clicks on "Correspondence" Link in Navbar
+    And Staff clicks on "Errors/Stops" Link in Navbar
+    And Staff clicks on "Inspections" Link in Navbar
+    And Staff clicks on "Notes/History" Link in Navbar
+    And Staff clicks on "BISS Application" Link in Navbar
+    And Staff clicks on "SIM" Link in Navbar
+
+    # SECTION 10 : Active Farmer and start admin check - AT-TC-10
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 6 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Active Farmer" Link in Navbar
+    And Staff clicks the "Start admin check" button
+
+
+# ============================ TC_22_STAFF.feature ============================
+@openshift
+Feature: TC_22_STAFF - OpenShift Map Printing E2E Regression Pack
+
+  # Legacy: "Regression Pack for Openshift Map Printing Regression Cases"
+  #         (BISSAGL-12728 AT-TC-01 to 05)
+  # Legacy AT-TC-00: herds:5:submitted + refs:5 + parcels:5
+  #
+  # NOTE: legacy AT-TC-03 searches an invalid herd "ABDAAPT" and makes NO assertion, while
+  # AT-TC-04 searches the same invalid value as a PARCEL and DOES assert the error message.
+  # Both preserved exactly as written - Section 3 asserts nothing.
+
+  @staffdata @herds:5:submitted @refs:5 @parcels:5
+  Background:
+    Given user on OpenShift staff login page
+    When Staff logs in with the Username "agr11612"
+    And Staff opens the "Basic Income Support for Sustainability" application
+    And Staff switches to the "Map Printing" tab
+
+  @regression @staff @openshift @map-printing @e2e
+  Scenario: AT-STAFF-OS-MAP-E2E-01 - Staff generates OpenShift maps and validates search errors
+
+    # SECTION 1 : Herd map generation + download - AT-TC-01 (BISSAGL-18579)
+    When Staff searches on the Map Printing screen using database submitted herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff prints the "name" of the herd
+    And Staff prints the "address" of the herd
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Full Color Ortho A4 |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the "status" of the generated map
+    And Staff verifies the "id" of the generated map
+    And Staff verifies the "herdNumber" of the generated map
+    And Staff verifies the "date" of the generated map
+    And Staff verifies the final status of the generated map
+    Then Staff clicks the "Ready to download" link number 1 in the "mdc-data-table" table
+
+    # SECTION 2 : Parcel map generation + download - AT-TC-02 (BISSAGL-18583)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen using database parcel 3 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2023         |
+    And Staff changes the "parcelSelect" multi-option dropdown value
+    And Staff selects the following map generation settings
+      | mapTypeSelect | Inspection Discovery |
+    And Staff clicks the Legend Indicator checkbox
+    Then Staff clicks the "Generate map" button
+    And Staff verifies the final status of the generated map
+    Then Staff clicks the "Ready to download" link number 1 in the "mdc-data-table" table
+
+    # SECTION 3 : Invalid herd search - AT-TC-03 (BISSAGL-18586)
+    # NO ASSERTION IN LEGACY - searches an invalid herd and stops.
+    When Staff switches to the "Map Printing" tab
+    And Staff searches on the Map Printing screen with the following details
+      | field      | herdNumber |
+      | herdValue  | ABDAAPT    |
+      | schemeYear | 2023       |
+
+    # SECTION 4 : Invalid parcel search -> error - AT-TC-04 (BISSAGL-18589)
+    When Staff switches to the "Map Printing" tab
+    And Staff selects "Parcel" as Map Printing Type
+    And Staff searches on the Map Printing screen with the following details
+      | field       | parcelNumber |
+      | parcelValue | ABDAAPT      |
+      | schemeYear  | 2023         |
+    Then Staff should see the error message "Parcel number is invalid"
+
+    # SECTION 5 : Required field validations - AT-TC-05 (BISSAGL-18591)
+    When Staff switches to the "Map Printing" tab
+    And Staff clicks the "Search" button
+    Then Staff should see the error message "Herd number required."
+    When Staff selects "Parcel" as Map Printing Type
+    And Staff clicks the "Search" button
+    Then Staff should see the error message "Parcel number required."
+
+
+# ============================ TC_23_STAFF.feature ============================
+@openshift
+Feature: TC_23_STAFF - OpenShift View Application E2E Regression Pack
+
+  # Legacy: "Regression Pack for Openshift View Application Cases"
+  #         (BISSAGL-12927/12928/12929/12930/13008/13009/13010/13011 AT-TC-01 to 08)
+  # Legacy AT-TC-00: herds:15:submitted + refs:5 + parcels:5
+  #
+  # LEGACY COVERAGE WARNING - four dead scenarios:
+  #   AT-TC-05 (13008) "View Active Farmer screen"    - searches a herd, never opens it,
+  #                                                     never touches Active Farmer.
+  #   AT-TC-06 (13009) "View Land details screen"     - logs in and STOPS.
+  #   AT-TC-07 (13010) "View GAEC8 screen"            - logs in and STOPS.
+  #   AT-TC-08 (13011) "View Digitisation Task screen"- logs in and STOPS.
+  #   Four Jira cases whose entire body is the Background. They assert nothing and test
+  #   nothing. Sections 5-8 are NOT reproduced - a login-and-stop step adds runtime and
+  #   zero coverage. The Jira cases need real steps written, or closing.
+  #   Only AT-TC-01 to 04 carry real assertions and are converted below.
+
+  @staffdata @herds:15:submitted @refs:5 @parcels:5
+  Background:
+    Given user on OpenShift staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @openshift @view-application @force-majeure @e2e
+  Scenario: AT-STAFF-OS-VIEW-E2E-01 - Staff exercises Force Majeure cancel/save and summary dialogs
+
+    # SECTION 1 : Force Majeure cancel across 2025 / 2024 / 2023 - AT-TC-01 (BISSAGL-12927) @sanity
+    When Staff searches on the Home screen using database submitted herd 6 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2025       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks the "Force-Majeure-input" checkbox
+    And Staff clicks the "Cancel" dialog box button
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 6 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks the "Force-Majeure-input" checkbox
+    And Staff clicks the "Cancel" dialog box button
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 6 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks the "Force-Majeure-input" checkbox
+    And Staff clicks the "Cancel" dialog box button
+
+    # SECTION 2 : Force Majeure save/unsave across 2024 / 2023 - AT-TC-02 (BISSAGL-12928)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 6 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks the "Force-Majeure-input" checkbox
+    And Staff types text "Test Save" in the "addNoteText" Query Letters textarea
+    And Staff clicks the "Save" dialog box button
+    Then Staff clicks the "Force-Majeure-input" checkbox
+    And Staff types text "Test UnSave" in the "addNoteText" Query Letters textarea
+    And Staff clicks the "Save" dialog box button
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 6 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks the "Force-Majeure-input" checkbox
+    And Staff types text "Test Save" in the "addNoteText" Query Letters textarea
+    And Staff clicks the "Save" dialog box button
+    Then Staff clicks the "Force-Majeure-input" checkbox
+    And Staff types text "Test UnSave" in the "addNoteText" Query Letters textarea
+    And Staff clicks the "Save" dialog box button
+
+    # SECTION 3 : Application Summary View Details dialog - AT-TC-03 (BISSAGL-12929)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 6 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    And Staff clicks the "View details" link number 2 in the "mdc-data-table" table
+    Then Staff clicks the "Close" dialog box button
+
+    # SECTION 4 : Land Details panel info icon tooltip - AT-TC-04 (BISSAGL-12930)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 7 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff hovers over the "Determined area with compensation" info icon
+
+
+# ============================ TC_24_STAFF.feature ============================
+@openshift
+Feature: TC_24_STAFF - OpenShift Notes and History E2E Regression Pack
+
+  # Legacy: "Regression Pack for Openshift Notes and History Cases"
+  #         (BISSAGL-12977 AT-TC-01 to 08)
+  # Legacy AT-TC-00: herds:15:submitted + refs:5 + parcels:5
+  #
+  # LEGACY COVERAGE WARNING:
+  #   All 8 scenarios use the SAME herd (row 7), SAME year (2024), and SAME steps:
+  #   search -> View -> Notes/History. Only AT-TC-01 does anything further - it clicks
+  #   "Add Note". AT-TC-02 to 08 are exact duplicates of each other, each carrying its own
+  #   @tmslink (18479, 18481, 18483, 18486, 18492, 18495, 18498). No assertion in any of them.
+  #   Merged into 2 sections: navigation + Add Note. Seven Jira cases map to one navigation
+  #   and need either real steps or closing as duplicates.
+
+  @staffdata @herds:15:submitted @refs:5 @parcels:5
+  Background:
+    Given user on OpenShift staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @openshift @notes-history @e2e
+  Scenario: AT-STAFF-OS-NOTES-E2E-01 - Staff opens Notes and History and adds a note
+
+    # SECTION 1 : Notes/History + Add Note - AT-TC-01 (BISSAGL-18477)
+    When Staff searches on the Home screen using database submitted herd 7 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Notes/History" Link in Navbar
+    And Staff clicks the "Add Note" button
+
+    # SECTION 2 : Notes/History navigation - AT-TC-02 to 08
+    # (BISSAGL-18479, 18481, 18483, 18486, 18492, 18495, 18498 - all identical)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database submitted herd 7 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Notes/History" Link in Navbar
+
+
+# ============================ TC_25_STAFF.feature ============================
+@openshift
+Feature: TC_25_STAFF - OpenShift Home Screen Search E2E Regression Pack
+
+  # Legacy: "Regression Pack for Openshift Home Screen Cases" (BISSAGL-12980 AT-TC-01 to 13)
+  # Legacy AT-TC-00: herds:15:submitted + refs:15 + parcels:15
+  #
+  # NOTE: legacy AT-TC-09 is titled "Reference No. Regression Test (Valid reference no.
+  # search and filters)" but its body is BYTE-IDENTICAL to AT-TC-08 - it searches an invalid
+  # PARCEL, not a reference number. Copy-paste error in legacy. Merged into Section 8 and
+  # flagged; the real reference-no. coverage is Sections 9-10 (AT-TC-10 / AT-TC-11).
+
+  @staffdata @herds:15:submitted @refs:15 @parcels:15
+  Background:
+    Given user on OpenShift staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @openshift @home-screen @search @e2e
+  Scenario: AT-STAFF-OS-HOME-E2E-01 - Staff exercises every Home screen search path and validation
+
+    # SECTION 1 : Herd search - AT-TC-01 (BISSAGL-18521)
+    When Staff searches on the Home screen using database submitted herd 7 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+
+    # SECTION 2 : Invalid herd search -> error - AT-TC-02 (BISSAGL-18524)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen with the following details
+      | field      | herdNumber |
+      | herdValue  | ASUDASHADI |
+      | schemeYear | 2024       |
+    Then Staff should see the error message without span "The herd number you entered is invalid"
+
+    # SECTION 3 : Empty search -> both errors - AT-TC-03 (BISSAGL-18541)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff clicks the "Search" button
+    Then Staff should see the error message without span "The herd number you entered is invalid"
+    And Staff should see the error message without span "The reference number you entered is invalid"
+
+    # SECTION 4 : Reference number search + View - AT-TC-04 (BISSAGL-18544)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database reference 4 with the following details
+      | field      | referenceNumber |
+      | schemeYear | 2024            |
+    Then Staff clicks the "View" link number 1 in the "application-search-table" table
+
+    # SECTION 5 : Farmer search by surname and county - AT-TC-05 (BISSAGL-18546)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff selects "Farmer" as Search By Type
+    And Staff searches on the Home screen with the following details
+      | field       | surname |
+      | surnameValue| mc      |
+      | county      | Donegal |
+
+    # SECTION 6 : Farmer search validation, numeric surname - AT-TC-06 (BISSAGL-18548)
+    # NO ASSERTION IN LEGACY - searches and stops.
+    When Staff clicks on "Home" Link in Navbar
+    And Staff selects "Farmer" as Search By Type
+    And Staff searches on the Home screen with the following details
+      | field       | surname |
+      | surnameValue| 123     |
+      | county      | Donegal |
+
+    # SECTION 7 : Valid parcel search + action buttons - AT-TC-07 (BISSAGL-18653)
+    When Staff switches to the "Parcels" tab
+    And Staff searches on the Parcels screen using database parcel 8 with the following details
+      | field      | parcelNumber |
+      | schemeYear | 2024         |
+    And Staff clicks the "View Claimants" action button
+    Then Staff clicks the "Cancel" button
+    And Staff clicks the "View Commonage" action button
+    And Staff clicks the "Parcel History" action button
+    Then Staff clicks the "Close" button
+    And Staff clicks the "View Map" action button
+    Then Staff clicks "Return to Land Details" button in the GIS Map Application NavLink
+
+    # SECTION 8 : Parcel number validations - AT-TC-08 (BISSAGL-18655) / AT-TC-09 (BISSAGL-18657)
+    # Legacy AT-TC-09 is a byte-identical copy of AT-TC-08 despite its reference-no. title.
+    When Staff switches to the "Parcels" tab
+    And Staff searches on the Parcels screen with the following details
+      | field       | parcelNumber |
+      | parcelValue | adssdasd     |
+      | schemeYear  | 2024         |
+    Then Staff clicks the "Clear" button
+    When Staff searches on the Parcels screen with the following details
+      | field       | parcelNumber |
+      | parcelValue |              |
+    Then Staff clicks the "Search" button
+
+    # SECTION 9 : Reference No. tab search - AT-TC-10 (BISSAGL-18659)
+    When Staff switches to the "Reference No." tab
+    And Staff searches on the Reference No. screen using database reference 2 with the following details
+      | field      | referenceNumber |
+      | schemeYear | 2023            |
+
+    # SECTION 10 : Reference No. validation -> error - AT-TC-11 (BISSAGL-18661)
+    When Staff switches to the "Reference No." tab
+    And Staff searches on the Reference No. screen with the following details
+      | field    | referenceNumber |
+      | refValue | adssdasd        |
+    Then Staff should see the error message without span "Invalid reference no."
+
+    # SECTION 11 : Online Response search - AT-TC-12 (BISSAGL-18665)
+    When Staff switches to the "Online Response" tab
+    And Staff clicks the "Search" button
+
+    # SECTION 12 : Online Response search by herd - AT-TC-13 (BISSAGL-18668)
+    When Staff switches to the "Online Response" tab
+    And Staff searches on the Online Response screen using database submitted herd 8 with the following details
+      | field | herdNumber |
+    Then Staff clicks the "Search" button
+
+
+# ============================ TC_26_STAFF.feature ============================
+@openshift
+Feature: TC_26_STAFF - OpenShift Amend Application E2E Regression Pack
+
+  # Legacy: "Regression Pack for Openshift Amend Application Cases"
+  #         (BISSAGL-12971 AT-TC-01, AT-TC-02)
+  # Legacy AT-TC-00: Get 5 Herds with Submission and SIM Opted In -> @herds:5:simopted
+  #
+  # Legacy AT-TC-01 carries a large commented-out Force Majeure block (duplicated from the
+  # View Application feature) - not reproduced; the live steps are the SIM amend flow.
+  # Legacy AT-TC-02 is titled "Force Majeure Save" but its live steps only navigate
+  # Payments -> BISS Application -> check Force Majeure -> Payments. The save/unsave steps
+  # are commented out. Reproduced as written.
+
+  @staffdata @herds:5:simopted
+  Background:
+    Given user on OpenShift staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @openshift @amend @sim @e2e
+  Scenario: AT-STAFF-OS-AMEND-E2E-01 - Staff amends a SIM application and checks Force Majeure state
+
+    # SECTION 1 : SIM amend submit - AT-TC-01 (BISSAGL-18551) @sanity
+    When Staff searches on the Home screen using database SIM-opted herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "Amend" link number 1 in the "application-search-table" table
+    When Staff checks if Admin Inspection is completed after clicking the "Amend" link number 1 in the "application-search-table" table
+    Then Staff clicks the "Next" button
+    And Staff clicks the "Submit Changes" button
+
+    # SECTION 2 : Force Majeure state check via Payments - AT-TC-02 (BISSAGL-18553)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database SIM-opted herd 3 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2023       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Payments" Link in Navbar
+    And Staff clicks on "BISS Application" Link in Navbar
+    And Staff checks if Force Majeure is selected and clicks
+    Then Staff clicks on "Payments" Link in Navbar
+
+
+# ============================ TC_27_STAFF.feature ============================
+@openshift
+Feature: TC_27_STAFF - OpenShift Active Farmer Approve and Reject E2E Regression Pack
+
+  # Legacy: "Regression Pack for Openshift Active Farmer screen Regression test -
+  #          Approve & Reject" (BISSAGL-12972 AT-TC-01, AT-TC-02)
+  # Legacy AT-TC-00: Get 5 Herds with Admin Check Not Started -> @herds:5:admincheck
+  #
+  # LEGACY COVERAGE WARNING:
+  #   AT-TC-01 is titled "(Reject and appeal)" and AT-TC-02 "(approved)", but BOTH stop
+  #   immediately after Start admin check -> Send. Neither rejects, appeals, nor approves.
+  #   They differ ONLY in herd row (2 vs 3). Nothing is asserted in either.
+  #   Reproduced faithfully as two sections. The approve/reject/appeal steps these cases are
+  #   named for need writing - the CENTEST equivalent (TC_16_STAFF) shows the full flow.
+
+  @staffdata @herds:5:admincheck
+  Background:
+    Given user on OpenShift staff login page
+    When Staff logs in with the Username "agr4442"
+    And Staff opens the "Basic Income Support for Sustainability" application
+
+  @regression @staff @openshift @active-farmer @admin-check @e2e
+  Scenario: AT-STAFF-OS-AF-E2E-01 - Staff starts admin checks on the OpenShift Active Farmer screen
+
+    # SECTION 1 : Start admin check, herd row 2 - AT-TC-01 (BISSAGL-18613)
+    When Staff searches on the Home screen using database admin-check herd 2 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Active Farmer" Link in Navbar
+    And Staff clicks the "Start admin check" button
+    And Staff clicks the "Send" dialog box button
+
+    # SECTION 2 : Start admin check, herd row 3 - AT-TC-02 (BISSAGL-18616)
+    When Staff clicks on "Home" Link in Navbar
+    And Staff searches on the Home screen using database admin-check herd 3 with the following details
+      | field      | herdNumber |
+      | schemeYear | 2024       |
+    And Staff clicks the "View" link number 1 in the "application-search-table" table
+    Then Staff clicks on "Active Farmer" Link in Navbar
+    And Staff clicks the "Start admin check" button
+    And Staff clicks the "Send" dialog box button
