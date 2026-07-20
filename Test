@@ -1,1046 +1,1001 @@
-package stepdefinitions;
+package database;
 
-import commonFunctions.CommonFunctions;
-import io.cucumber.java.After;
-import io.cucumber.java.AfterAll;
-import io.cucumber.java.Before;
-import io.cucumber.java.BeforeAll;
-import io.cucumber.java.Scenario;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import reporting.ReportManager;
-import utilities.ExcelUtilities;
-import utilities.RetryAnalyser;
-import utilities.SoftAssertManager;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.sql.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.Date;
+import java.util.logging.*;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-public class Hooks
-{
-    public static XWPFDocument iDocument    = null;
-    public static String       iDocPath     = null;
-    public static String       iTestCaseID  = null;
-    public static String       iEnvironment = null;
-    public static String       iUrl         = null;
-    public static String istaffUrl    = null;
-    private static final StringBuilder iAccumulatedErrors  = new StringBuilder();
-    private static String              iLastScreenshotPath = "";
-    private static long                iScenarioStartTime  = 0L;
-
-    private static final String iTestDataFilePath  = "src/test/resources/Test_Data/TestData.xlsx";
-    private static final String iTestDataSheetName = "Data";
-    private static final String iConfigSheetName   = "Config";
-    private static final String iDefaultBrowser    = "CHROME";
-
-    // ── Standard runtime herd / username (used by TC_03 through TC_17) ────────────────────────────
-    public static String RUNTIME_HERD     = null;
-    public static String RUNTIME_USERNAME = null;
-
-    // ── Preliminary Checks runtime data (used by TC_18, TC_19, TC_20) ────────────────────────────
-    public static String OVERCLAIM_HERD         = null;
-    public static String OVERCLAIM_USERNAME      = null;
-    public static String DUAL_CLAIM_HERD         = null;
-    public static String DUAL_CLAIM_USERNAME     = null;
-    public static String AGRI_ACTIVITY_HERD      = null;
-    public static String AGRI_ACTIVITY_USERNAME  = null;
-
-    // ── TC_13 NRCISYF runtime data ────────────────────────────────────────────────────────────────
-    // Resolved by @Before("@tc13") immediately before the scenario runs.
-    // Overrides RUNTIME_HERD and RUNTIME_USERNAME so the Background login
-    // and herd search steps automatically use the correct CISYF-eligible J-prefix herd.
-    public static String CISYF_HERD     = null;
-    public static String CISYF_USERNAME = null;
-
-    // ===========================================================================================================================
-    // STAFF RUNTIME DATA POOLS
-    // ---------------------------------------------------------------------------------------------------------------------------
-    // Populated by the @staffdata hook below, which reads the pool tags on the feature (e.g. @herds:5:submitted)
-    // and resolves each pool from the DB via DBRouter before the scenario runs.
-    //
-    // StaffSteps.java consumes these through "the next <kind> herd" style steps, walking its own cursor along each
-    // list. Feature files therefore never name a row index — replacing the legacy "from row N" pattern, which tied
-    // the tests to a fixed Excel ordering.
-    //
-    // Cleared in @After so one scenario's data can never leak into the next.
-    // ===========================================================================================================================
-    public static final List<String> STAFF_SUBMITTED_HERDS   = new ArrayList<>();
-    public static final List<String> STAFF_PENALTY_HERDS     = new ArrayList<>();
-    public static final List<String> STAFF_NOAMEND_HERDS     = new ArrayList<>();
-    public static final List<String> STAFF_ADMINCHECK_HERDS  = new ArrayList<>();
-    public static final List<String> STAFF_QUERYLETTER_HERDS = new ArrayList<>();
-    public static final List<String> STAFF_SIMOPTED_HERDS    = new ArrayList<>();
-    public static final List<String> STAFF_PAYMENT_HERDS     = new ArrayList<>();
-    public static final List<String> STAFF_PARCELS           = new ArrayList<>();
-    public static final List<String> STAFF_REFERENCES        = new ArrayList<>();
-
-    // Default scheme year used when a pool tag does not carry one. Overridable with -Dstaff.year=2024
-    private static final String STAFF_DEFAULT_YEAR = System.getProperty("staff.year", "2024").trim();
-
-    // Matches the pool tags on staff features:
-    //   @herds:5:submitted   -> count=5,  kind=submitted
-    //   @parcels:14          -> count=14, kind=null
-    //   @refs:5              -> count=5,  kind=null
-    private static final Pattern STAFF_POOL_TAG =
-            Pattern.compile("^@(herds|parcels|refs):(\\d+)(?::([a-zA-Z]+))?$");
-    // ─── Blacklisted herds — re-fetch if we land on one of these ─────────────────────────────────
-    public static final Set<String> BLACKLISTED_HERDS = Set.of(
-            "R1230577","C2280025","C1281036","Q1060377","M1391623","M1701886","D1160614",
-            "X1120993","P1261051","E209434X","D1174054","H2621144","B1240361","G1930639",
-            "G194082X","B1560048","R1050781","D201078X","M1952021","W1040563","J1770847","J1710089","B1150150",
-            "B1380562","C129112X","G1221786","T209028X","A1030615","T1790688","G1280928","G1930167",
-            "Y1070492","Y1791564","R1040514","C1430554","C1289029","B1014078","D2450985"
-    );
-
-    // ─── Expired agents — populated at runtime when "Account Expired" is detected on screen.
-//     Once added here an agent is never selected again for the rest of the test run.
-//     Populated by TC_03.theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP() via
-//     Hooks.markAgentExpired(). Checked in the INET candidate loop in beforeAllExecution()
-//     and in theAgentOpensAFarmerDashboardUsingHerdDataFromRow() herd retry loop.
-    public static final Set<String> EXPIRED_AGENTS = new HashSet<>();
-
-    // ***************************************************************************************************************************************************************************************
-// Function Name : markAgentExpired
-// Description   : Called from the login step when "Account Expired" is detected on screen.
-//                 Adds the agent to EXPIRED_AGENTS so it is never selected again.
-//                 Then re-resolves a fresh herd+agent pair from BISS_DATA and BISS_INET,
-//                 excluding all previously expired agents, and updates RUNTIME_HERD and
-//                 RUNTIME_USERNAME so the next login attempt uses the new valid agent.
-// Parameters    : pExpiredUsername — the agent username that showed Account Expired
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 05-05-2026
-// ***************************************************************************************************************************************************************************************
-    public static void markAgentExpired(String pExpiredUsername)
-    {
-        if (pExpiredUsername == null || pExpiredUsername.isBlank()) return;
-
-        EXPIRED_AGENTS.add(pExpiredUsername.trim());
-        CommonFunctions.log.warning("[EXPIRED-AGENT] SSO Account Expired detected for: "
-                + pExpiredUsername + " — added to EXPIRED_AGENTS. Re-resolving herd+agent.");
-
-        String iYear  = System.getProperty("herd.year",  "2026").trim();
-        String iLimit = System.getProperty("herd.limit", "25").trim();
-
-        boolean iFound = false;
-
-        for (int iAttempt = 1; iAttempt <= 5 && !iFound; iAttempt++)
-        {
-            int iNewLimit = Integer.parseInt(iLimit) + (iAttempt * 10);
-            database.DBRouter.runDB("DATA", "List of herds with no errors at all", iYear, String.valueOf(iNewLimit));
-
-            java.util.List<java.util.Map<String, Object>> iRows = database.DBRouter.getRows();
-            if (iRows == null || iRows.isEmpty()) continue;
-
-            java.util.List<String> iCandidates = new java.util.ArrayList<>();
-            for (java.util.Map<String, Object> r : iRows)
-            {
-                String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
-                if (!h.isEmpty()) iCandidates.add(h);
-            }
-            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
-
-            for (String iCandidate : iCandidates)
-            {
-                if (BLACKLISTED_HERDS.contains(iCandidate)) continue;
-
-                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
-                String iUser = database.DBRouter.getValue("USERNAME");
-
-                if (iUser == null || iUser.isBlank()) continue;
-                iUser = iUser.trim();
-
-                if (EXPIRED_AGENTS.contains(iUser))
-                {
-                    CommonFunctions.log.warning("[EXPIRED-AGENT] Candidate agent "
-                            + iUser + " is also expired — skipping.");
-                    continue;
-                }
-
-                RUNTIME_HERD     = iCandidate;
-                RUNTIME_USERNAME = iUser;
-                iFound = true;
-
-                CommonFunctions.log.info("[EXPIRED-AGENT] Re-resolved: Herd="
-                        + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
-                break;
-            }
-        }
-
-        if (!iFound)
-        {
-            throw new RuntimeException(
-                    "[EXPIRED-AGENT] Could not find a replacement herd+agent after "
-                            + "marking " + pExpiredUsername + " as expired. "
-                            + "All candidates exhausted. Try -Dherd.limit=50 or check DB data.");
-        }
-    }
-
-    private static void rerunIfBlacklisted()
-    {
-        int retries = 0;
-
-        while (RUNTIME_HERD != null && BLACKLISTED_HERDS.contains(RUNTIME_HERD) && retries < 50)
-        {
-            retries++;
-            CommonFunctions.log.warning("=========================================================[HOOKS] Blacklisted herd detected: " + RUNTIME_HERD + " — re-fetching (attempt " + retries + ")");
-
-            database.DBRouter.runDB("DATA", "List of herds with no errors at all", String.valueOf(java.time.Year.now().getValue()), String.valueOf(10 + retries)
-            );
-
-            List<Map<String, Object>> rows = database.DBRouter.getRows();
-            if (rows == null || rows.isEmpty()) {
-                throw new RuntimeException("[HOOKS] Re-fetch returned no rows — cannot find replacement herd.");
-            }
-
-            boolean replaced = false;
-            for (Map<String, Object> r : rows) {
-                String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
-                if (!h.isEmpty() && !BLACKLISTED_HERDS.contains(h)) {
-                    RUNTIME_HERD = h;
-                    CommonFunctions.log.info("[HOOKS] Replacement herd selected: " + RUNTIME_HERD);
-                    replaced = true;
-                    break;
-                }
-            }
-
-            if (!replaced) {
-                CommonFunctions.log.warning("[HOOKS] No non-blacklisted herd found — retrying...");
-            }
-        }
-
-        if (BLACKLISTED_HERDS.contains(RUNTIME_HERD)) {
-            throw new RuntimeException("====================================================[HOOKS] Could not resolve a non-blacklisted herd after " + retries + " retries. Last herd=" + RUNTIME_HERD);
-        }
-    }
-
-    // =================================================================================================
-// BEFORE ALL — runs once before any scenario in the test run
-// =================================================================================================
-    @BeforeAll
-    public static void beforeAllExecution()
-    {
-        try
-        {
-            killProcessByName("chrome");
-            killProcessByName("chromedriver");
-            iTestCaseID  = System.getProperty("testcase",    "").trim();
-            iEnvironment = System.getProperty("environment", "").trim();
-
-            if (iTestCaseID.isEmpty())  { throw new RuntimeException("TestCase_ID system property missing."); }
-            if (iEnvironment.isEmpty()) { throw new RuntimeException("Environment system property missing."); }
-
-            iAccumulatedErrors.setLength(0);
-            iLastScreenshotPath = "";
-            iDocument           = null;
-            iDocPath            = "";
-
-            CommonFunctions.log.info("========== EXECUTION START : " + iTestCaseID + " ==========");
-            CommonFunctions.loadDescriptionCache();
-            CommonFunctions.clearStepLog();
-
-            ExcelUtilities iTestDataExcel = new ExcelUtilities(iTestDataFilePath);
-            iTestDataExcel.loadCurrentTestDataRow(iTestDataSheetName, iTestCaseID);
-
-            int iConfigRow = iTestDataExcel.findRow(iConfigSheetName, "Env", iEnvironment);
-            if (iConfigRow == -1) { throw new RuntimeException("Environment not found in Config sheet : " + iEnvironment); }
-
-            iUrl = iTestDataExcel.getCellValue(iConfigSheetName, iConfigRow, "URL").trim();
-            if (iUrl.isEmpty()) { throw new RuntimeException("URL blank for environment : " + iEnvironment); }
-
-            // =====================================================================================
-            // Bootstrap runtime Herd + Username BEFORE any scenario runs (DATA → INET)
-            // =====================================================================================
-            String herdYear         = System.getProperty("herd.year",  "2026").trim();
-            String herdLimit        = System.getProperty("herd.limit", "25").trim();
-            String herdRetry        = System.getProperty("herd.retry", "3").trim();
-            String usernameOverride = System.getProperty("usernameOverride", "").trim();
-
-            String herdFromSheet  = "";
-            String unameFromSheet = "";
-            try { herdFromSheet  = ExcelUtilities.getCurrentTestDataValue("HerdNumber"); } catch (Exception ignored) {}
-            try { unameFromSheet = ExcelUtilities.getCurrentTestDataValue("Username");   } catch (Exception ignored) {}
-
-            RUNTIME_HERD     = null;
-            RUNTIME_USERNAME = null;
-
-            if (!usernameOverride.isEmpty()) {
-                RUNTIME_USERNAME = usernameOverride;
-                RUNTIME_HERD     = herdFromSheet;
-                CommonFunctions.log.info("[BOOT] Using usernameOverride=" + RUNTIME_USERNAME + ", herd(sheet)=" + RUNTIME_HERD);
-                rerunIfBlacklisted();
-            } else {
-                final int maxAttempts = Integer.parseInt(herdRetry);
-                final int limit       = Integer.parseInt(herdLimit);
-
-                boolean found = false;
-
-                for (int attempt = 1; attempt <= maxAttempts && !found; attempt++) {
-                    database.DBRouter.runDB("DATA", "List of herds with no errors at all", herdYear, String.valueOf(limit), "");
-                    List<Map<String,Object>> rows = database.DBRouter.getRows();
-                    if (rows == null || rows.isEmpty()) {
-                        throw new RuntimeException("Runtime DB (DATA) returned no herds for year=" + herdYear + ", limit=" + limit);
-                    }
-
-                    List<String> candidates = new java.util.ArrayList<>();
-                    for (Map<String,Object> r : rows) {
-                        String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
-                        if (!h.isEmpty() && !candidates.contains(h)) candidates.add(h);
-                    }
-                    java.util.Collections.shuffle(candidates, new java.util.Random(System.nanoTime()));
-
-                    CommonFunctions.log.info("[BOOT] Attempt " + attempt + "/" + maxAttempts + " — trying " + candidates.size() + " randomized candidate(s) from DATA (year=" + herdYear + ", limit=" + limit + ")");
-
-                    int idx = 0;
-                    for (String candidate : candidates) {
-                        idx++;
-                        CommonFunctions.log.info("[BOOT] Candidate [" + idx + "/" + candidates.size() + "] : " + candidate);
-
-                        database.DBRouter.runDB("INET", "Get Login Id for herd", candidate);
-                        String candidateUser = database.DBRouter.getValue("USERNAME");
-
-                        if (candidateUser != null && !candidateUser.isBlank()) {
-
-                            // ── Skip if agent has a known expired SSO account ──────────────
-                            if (EXPIRED_AGENTS.contains(candidateUser.trim()))
-                            {
-                                CommonFunctions.log.warning("[BOOT] Agent " + candidateUser.trim()
-                                        + " is in EXPIRED_AGENTS (SSO account expired) — skipping herd="
-                                        + candidate);
-                                continue;
-                            }
-
-                            RUNTIME_HERD     = candidate;
-                            RUNTIME_USERNAME = candidateUser.trim();
-                            CommonFunctions.log.info("[BOOT] SELECTED Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
-
-                            rerunIfBlacklisted();
-                            found = true;
-                            break;
-                        } else {
-                            CommonFunctions.log.warning("[BOOT] INET: no USERNAME for herd=" + candidate + " — next candidate...");
-                        }
-                    }
-
-                    if (!found) {
-                        CommonFunctions.log.warning("[BOOT] No mapped USERNAME found in attempt " + attempt + ". Re-running DATA query to get a fresh set of " + limit + " candidates...");
-                    }
-                }
-
-                if (!found) {
-                    if (!unameFromSheet.isBlank()) {
-                        RUNTIME_USERNAME = unameFromSheet;
-                        RUNTIME_HERD     = (RUNTIME_HERD == null || RUNTIME_HERD.isBlank()) ? herdFromSheet : RUNTIME_HERD;
-                        CommonFunctions.log.warning("[BOOT] Falling back to Username from sheet: " + RUNTIME_USERNAME + " | Herd=" + RUNTIME_HERD);
-                        rerunIfBlacklisted();
-                    } else {
-                        throw new RuntimeException("Runtime DB (INET) returned no USERNAME after " + herdRetry + " attempt(s). Try -Dherd.limit=10 or set -DusernameOverride=... for this run.");
-                    }
-                }
-            }
-
-            System.setProperty("TD:HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
-            System.setProperty("TD:Username",   RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
-
-            Hooks.RUNTIME_HERD     = RUNTIME_HERD;
-            Hooks.RUNTIME_USERNAME = RUNTIME_USERNAME;
-
-            try {
-                int dataRowIdx = iTestDataExcel.findRow(iTestDataSheetName, "TestCase_ID", iTestCaseID);
-                if (dataRowIdx != -1) {
-                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
-                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "Username", RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
-                    CommonFunctions.log.info("[BOOT→Excel] Data updated: HerdNumber=" + RUNTIME_HERD + ", Username=" + RUNTIME_USERNAME);
-                } else {
-                    CommonFunctions.log.warning("[BOOT→Excel] Row not found for TestCase_ID=" + iTestCaseID + " (skipped write-back)");
-                }
-            } catch (Exception e) {
-                CommonFunctions.log.warning("[BOOT→Excel] Persist failed: " + e.getMessage());
-            }
-
-            String iBrowserType = System.getProperty("browser", iDefaultBrowser).trim().toUpperCase();
-            CommonFunctions.launchBrowser(iBrowserType, iUrl);
-
-            Object[] iReportObjects = CommonFunctions.startWordReport(iTestCaseID);
-            iDocument = (XWPFDocument) iReportObjects[0];
-            iDocPath  = String.valueOf(iReportObjects[1]);
-
-            ReportManager.setWordDocPath(iDocPath);
-
-            CommonFunctions.log.info("BeforeAll complete | URL=" + iUrl + " | Report=" + iDocPath);
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("BeforeAll failed for [" + iTestCaseID + "] : "
-                    + iException.getMessage(), iException);
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-// @Before("@preliminary")
-// Description   : Resolves one valid herd+username per preliminary check type
-//                 (Overclaim, Dual claim, Agricultural Activity) for TC_18 / TC_19 / TC_20.
+// =====================================================================================================================================
+// File          : DBRouter.java
+// Package       : database
+// Description   : Multi-database query router for the BISS Automation Framework.
+//                 Provides a single entry point for all SQL execution across BISS_DATA
+//                 and BISS_INET Oracle databases. All queries are identified by a logical
+//                 label string and resolved to parameterised SQL internally, keeping
+//                 step definitions and hooks free of SQL syntax.
 //
-//                 FIX (22-04-2026) — RUNTIME_USERNAME sync:
-//                   @TC_18 / @TC_15 → RUNTIME_USERNAME = OVERCLAIM_USERNAME
-//                   @TC_19 / @TC_16 → RUNTIME_USERNAME = DUAL_CLAIM_USERNAME
-//                   @TC_20 / @TC_17 → RUNTIME_USERNAME = AGRI_ACTIVITY_USERNAME
-// ***************************************************************************************************************************************************************************************
-    @Before("@preliminary")
-    public void resolveRuntimePreliminaryHerds(Scenario pScenario)
-    {
-        final int    MAX_ATTEMPTS = 100;
-        final String YEAR         = System.getProperty("herd.year", "2026").trim();
-
-        CommonFunctions.log.info("[PRELIM-HOOK] Resolving preliminary herds for: " + pScenario.getName());
-
-        boolean iAllResolved = false;
-
-        for (int iOffset = 0; iOffset < MAX_ATTEMPTS; iOffset++)
-        {
-            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_ATTEMPTS
-                    + " — offset=" + iOffset);
-
-            database.DBRouter.runDB("DATA", "Preliminary checks herds", YEAR, String.valueOf(iOffset));
-
-            List<Map<String, Object>> iRows = database.DBRouter.getRows();
-            if (iRows == null || iRows.isEmpty())
-            {
-                CommonFunctions.log.warning("[PRELIM-HOOK] No rows from DB at offset=" + iOffset + ". Stopping.");
-                break;
-            }
-
-            String iOverclaimHerd    = null; String iOverclaimUser    = null;
-            String iDualClaimHerd    = null; String iDualClaimUser    = null;
-            String iAgriActivityHerd = null; String iAgriActivityUser = null;
-
-            for (Map<String, Object> iRow : iRows)
-            {
-                String iLvc  = Objects.toString(iRow.get("LVC_DESC"),    "").trim();
-                String iHerd = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
-                if (iHerd.isEmpty()) continue;
-
-                database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
-                String iUsername = database.DBRouter.getValue("USERNAME");
-
-                if (iUsername == null || iUsername.isBlank())
-                {
-                    CommonFunctions.log.warning("[PRELIM-HOOK] No INET agent for "
-                            + iLvc + " herd=" + iHerd + " — retrying next offset.");
-                    continue;
-                }
-
-                iUsername = iUsername.trim();
-                CommonFunctions.log.info("[PRELIM-HOOK] DB+INET resolved: "
-                        + iLvc + " → " + iHerd + " / " + iUsername);
-
-                switch (iLvc)
-                {
-                    case "Overclaim":
-                        iOverclaimHerd    = iHerd; iOverclaimUser    = iUsername; break;
-                    case "Dual claim":
-                        iDualClaimHerd    = iHerd; iDualClaimUser    = iUsername; break;
-                    case "Agricultural Activity":
-                        iAgriActivityHerd = iHerd; iAgriActivityUser = iUsername; break;
-                }
-            }
-
-            if (iOverclaimHerd != null && iDualClaimHerd != null && iAgriActivityHerd != null)
-            {
-                OVERCLAIM_HERD         = iOverclaimHerd;    OVERCLAIM_USERNAME     = iOverclaimUser;
-                DUAL_CLAIM_HERD        = iDualClaimHerd;    DUAL_CLAIM_USERNAME    = iDualClaimUser;
-                AGRI_ACTIVITY_HERD     = iAgriActivityHerd; AGRI_ACTIVITY_USERNAME = iAgriActivityUser;
-
-                CommonFunctions.log.info("[PRELIM-HOOK] All 3 resolved:");
-                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
-                CommonFunctions.log.info("[PRELIM-HOOK]  Overclaim         → " + OVERCLAIM_HERD + " / " + OVERCLAIM_USERNAME);
-                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
-                CommonFunctions.log.info("[PRELIM-HOOK]  Dual claim        → " + DUAL_CLAIM_HERD + " / " + DUAL_CLAIM_USERNAME);
-                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
-                CommonFunctions.log.info("[PRELIM-HOOK]  Agri Activity     → " + AGRI_ACTIVITY_HERD + " / " + AGRI_ACTIVITY_USERNAME);
-                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
-
-                if (pScenario.getSourceTagNames().contains("@TC_18") || pScenario.getSourceTagNames().contains("@TC_15"))
-                {
-                    RUNTIME_USERNAME = OVERCLAIM_USERNAME;
-                }
-                else if (pScenario.getSourceTagNames().contains("@TC_19") || pScenario.getSourceTagNames().contains("@TC_16"))
-                {
-                    RUNTIME_USERNAME = DUAL_CLAIM_USERNAME;
-                }
-                else if (pScenario.getSourceTagNames().contains("@TC_20") || pScenario.getSourceTagNames().contains("@TC_17"))
-                {
-                    RUNTIME_USERNAME = AGRI_ACTIVITY_USERNAME;
-                }
-
-                CommonFunctions.log.info("[PRELIM-HOOK] RUNTIME_USERNAME synced → " + RUNTIME_USERNAME + " | Background login will use this agent.");
-
-                iAllResolved = true;
-                break;
-            }
-
-            CommonFunctions.log.warning("[PRELIM-HOOK] Not all 3 resolved at offset=" + iOffset
-                    + " — Overclaim=" + (iOverclaimHerd != null ? "✓" : "✗")
-                    + " DualClaim="   + (iDualClaimHerd != null ? "✓" : "✗")
-                    + " AgriAct="     + (iAgriActivityHerd != null ? "✓" : "✗"));
-        }
-
-        if (!iAllResolved)
-        {
-            throw new RuntimeException("[PRELIM-HOOK] Could not resolve all 3 preliminary check herds after " + MAX_ATTEMPTS + " attempts for year=" + YEAR);
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-// Method        : fetchPrelimUsername
-// Description   : Queries BISS_INET for the agent login ID for a given herd number.
-// Parameters    : pHerd      — herd number string e.g. "A1060204"
-//                 pCheckType — label used only for log messages e.g. "OVERCLAIM"
+//                 Supports two execution modes:
+//                   1. runDB()     — label-based execution (predefined queries only)
+//                   2. runRawSQL() — raw SQL execution (utility tools and ad-hoc queries)
+//
+//                 Connection properties are loaded once at class initialisation from:
+//                   src/test/resources/db.properties
+//
+//                 Usage:
+//                   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "25");
+//                   String herd = DBRouter.getValue("APP_HERD_NO");
+//
+//                   DBRouter.runDB("INET", "Get Login Id for herd", herd);
+//                   String username = DBRouter.getValue("USERNAME");
+//
+//                   DBRouter.runDB("DATA", "List of individual herds with CISYF scheme", "2026", "25");
+//                   DBRouter.runDB("DATA", "List of not started individual herds eligible for CISYF", "2026", "25");
+//                   String herd = DBRouter.getValue("APP_HERD_NO");
+//
+//                   DBRouter.runRawSQL("DATA", "SELECT app_herd_no FROM vwbs_application WHERE ...");
+//                   List<Map<String, Object>> rows = DBRouter.getRows();
+//
+//                 db.properties keys:
+//                   db.url              — BISS_DATA JDBC connection URL
+//                   db.username         — BISS_DATA username
+//                   db.password         — BISS_DATA password
+//                   db.inet.url         — BISS_INET JDBC connection URL
+//                   db.inet.username    — BISS_INET username
+//                   db.inet.password    — BISS_INET password
+//
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 17-04-2026
-// ***************************************************************************************************************************************************************************************
-    private String fetchPrelimUsername(String pHerd, String pCheckType)
+// Date Created  : 27-04-2026
+// =====================================================================================================================================
+
+public class DBRouter
+{
+    // =====================================================================
+    // STATIC RESULT STORE
+    // =====================================================================
+    public static List<Map<String, Object>> lastRows   = new ArrayList<>();
+    public static Object                    lastScalar = null;
+    public static String                    lastLabel  = "";
+
+    // =====================================================================
+    // DB CONFIGURATION
+    // =====================================================================
+    private static final Logger log             = Logger.getLogger(DBRouter.class.getName());
+    private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
+
+    // BISS_DATA connection
+    private static String DB_URL;
+    private static String DB_USER;
+    private static String DB_PASSWORD;
+
+    // BISS_INET connection
+    private static String DB_INET_URL;
+    private static String DB_INET_USER;
+    private static String DB_INET_PASSWORD;
+
+    static
     {
-        if (pHerd == null || pHerd.isBlank())
-        {
-            CommonFunctions.log.warning("[HOOKS] fetchPrelimUsername — herd is null/blank for " + pCheckType + " — skipping INET query.");
-            return null;
-        }
-
-        database.DBRouter.runDB("INET", "Get Login Id for herd", pHerd);
-        String iUsername = database.DBRouter.getValue("USERNAME");
-
-        if (iUsername == null || iUsername.isBlank())
-        {
-            CommonFunctions.log.warning("[HOOKS] fetchPrelimUsername — no login ID found in BISS_INET for herd: " + pHerd + " (" + pCheckType + ")");
-            return null;
-        }
-
-        return iUsername.trim();
+        setupLogger();
+        loadDBProperties();
     }
-    //***************************************************************************************************************************************************************************************
-    // @Before("@tc13")
-    // Description   : Resolves a random CISYF-eligible J-prefix herd and its agent login
-    //                 from BISS_DATA and BISS_INET before the TC_13 NRCISYF scenario runs.
-    //
-    //                 Strategy:
-    //                   1. Query BISS_DATA using "List of individual herds with CISYF scheme"
-    //                      (J-prefix, submitted, CISYF scheme applied, no payment yet).
-    //                   2. Shuffle the result pool randomly — a different herd is picked each run.
-    //                   3. For each candidate, query BISS_INET for the agent login.
-    //                   4. Skip candidates with no INET agent or in EXPIRED_AGENTS.
-    //                   5. On success: overwrite RUNTIME_HERD and RUNTIME_USERNAME so the
-    //                      Background login step and herd search step use the correct CISYF herd.
-    //                   6. If all candidates exhausted: retry with a larger limit (up to 5 attempts).
-    //
-    //                 Why random:
-    //                   Shuffling gives a different herd on each run, avoiding repeated use of
-    //                   the same herd and making the test suite more robust across environments.
-    //
-    //                 After this hook:
-    //                   Hooks.RUNTIME_HERD     = resolved CISYF J-prefix herd
-    //                   Hooks.RUNTIME_USERNAME = agent who owns that herd in BISS_INET
-    //                   Hooks.CISYF_HERD       = same as RUNTIME_HERD (kept for clarity in logs)
-    //                   Hooks.CISYF_USERNAME   = same as RUNTIME_USERNAME
-    //
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 15-05-2026
+
+    // =====================================================================
+    // PUBLIC API — LABEL-BASED EXECUTION
+    // =====================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // ===============================================================================================================================
-    // Function Name : resolveStaffRuntimeData
-    // Description   : Resolves every runtime data pool a staff scenario declares, before it runs.
-    //
-    //                 The feature declares what it needs as tags, e.g.:
-    //                     @staffdata @herds:5:submitted @parcels:14 @refs:5
-    //
-    //                 This hook reads those tags, runs the matching DBRouter query for each, and fills the
-    //                 corresponding STAFF_* pool. StaffSteps.java then walks each pool with its own cursor, so a
-    //                 feature can say "the next submitted herd" without ever naming a row index.
-    //
-    //                 Why pools rather than a single RUNTIME_HERD: a staff scenario chains many sections and often
-    //                 needs a DIFFERENT herd per section (TC_21 walks six), or several DIFFERENT KINDS at once
-    //                 (TC_12 compares a penalty herd against a clean one). A single field cannot express that.
-    //
-    //                 Supported tags:
-    //                     @herds:N:submitted    - submitted applications
-    //                     @herds:N:penalty      - submitted WITH an application penalty
-    //                     @herds:N:noamend      - submitted with no amendment raised
-    //                     @herds:N:admincheck   - no admin check started
-    //                     @herds:N:queryletter  - no query letter submitted
-    //                     @herds:N:simopted     - submitted with SIM opted in
-    //                     @herds:N:payments     - carrying payments
-    //                     @parcels:N            - LPIS parcels
-    //                     @refs:N               - TRN reference numbers
-    //
-    //                 Scheme year comes from -Dstaff.year, defaulting to 2024.
-    //
-    // Parameters    : pScenario (Scenario) - supplies the tag list for this scenario
+    // Function Name : runDB
+    // Description   : Executes a predefined SQL query identified by a logical label string.
+    //                 The label is normalised (trimmed, uppercased, special characters replaced)
+    //                 and matched in a switch block to the corresponding parameterised SQL.
+    //                 Results are stored in lastRows and lastScalar for caller access via
+    //                 getValue(), getRows(), and hasRows().
+    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
+    //                 label  — logical query label e.g. "List of herds with no errors at all"
+    //                 params — bind parameter values for the selected query (varies per label)
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 15-07-2026
-    // ===============================================================================================================================
-    @Before("@staffdata")
-    public void resolveStaffRuntimeData(Scenario pScenario)
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void runDB(String dbKey, String label, String... params)
     {
-        clearStaffPools();
+        Objects.requireNonNull(dbKey,  "dbKey cannot be null");
+        Objects.requireNonNull(label,  "label cannot be null");
 
-        CommonFunctions.log.info("[STAFF-DATA] Resolving runtime pools for: " + pScenario.getName());
+        final String which = normalizeDb(dbKey);
+        final String key   = normalize(label);
 
-        boolean iAnyPoolRequested = false;
+        lastLabel = label;
 
-        for (String iTag : pScenario.getSourceTagNames())
+        String   sql        = null;
+        Object[] jdbcParams = new Object[0];
+
+        switch (key)
         {
-            Matcher iMatcher = STAFF_POOL_TAG.matcher(iTag.trim());
-
-            if (!iMatcher.matches())
+            // ----------------------------------------------------------------
+            // DATA DB: Not Started individual herds (A prefix) with no errors
+            //
+            // Confirmed final query (27-04-2026) after full DB investigation.
+            //
+            // Selection criteria:
+            //   app_mde_code = 1        → RI status (Renewal iNet preprint / Not Started)
+            //   app_herd_no LIKE 'A%'   → Individual herds only. Excludes D/Z/C prefix
+            //                             herds which belong to other agent portfolios
+            //                             and cause BISS_INET mismatch.
+            //   EXISTS land parcel      → Herd must have at least one non-deleted land parcel.
+            //   NOT EXISTS mde_code IN  → Excludes herds with any of the following statuses:
+            //     (3, 4, 6, 8)              3 = D  (Draft)
+            //                               4 = I  (iNet / Submitted)
+            //                               6 = H  (Helpdesk)
+            //                               8 = DD (Draft Dept)
+            //
+            // Expired herd handling:
+            //   Herd expiry is not stored in vwbs_application — confirmed by column-by-column
+            //   comparison of A1010096 (valid) vs A1010070 (expired). Expiry is in Keycloak
+            //   SSO only. Expired agents are handled at runtime by Hooks.markAgentExpired()
+            //   which detects the "Account Expired" screen and re-resolves a fresh herd+agent.
+            //
+            // Column returned: APP_HERD_NO
+            //   executeQuery() uppercases all column labels so Hooks.java r.get("APP_HERD_NO")
+            //   works without any additional mapping.
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH NO ERRORS AT ALL":
             {
-                continue;
+                requireParamCountBetween(key, params, 1, 3);
+
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 150;
+                // params[2] accepted for backward compatibility — not used in current query
+
+                sql =
+                        "SELECT ap_ri.app_herd_no " +
+                                "FROM vwbs_application ap_ri " +
+                                "WHERE ap_ri.app_mde_code = 1 " +
+                                "AND ap_ri.app_year = ? " +
+                                "AND ap_ri.app_herd_no LIKE 'B%' " +
+                                "AND EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM tdbs_application_land x " +
+                                "    WHERE x.apl_year        = ap_ri.app_year " +
+                                "    AND   x.apl_app_id      = ap_ri.app_id " +
+                                "    AND   x.apl_deleted_ind = 'N' " +
+                                ") " +
+                                "AND NOT EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM vwbs_application app " +
+                                "    WHERE app.app_year     = ap_ri.app_year " +
+                                "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
+                                "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
+                                ") " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY ap_ri.app_herd_no";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
             }
 
-            iAnyPoolRequested = true;
-
-            String iPoolType = iMatcher.group(1);
-            String iCount    = iMatcher.group(2);
-            String iKind     = iMatcher.group(3);
-
-            CommonFunctions.log.info("[STAFF-DATA] Tag " + iTag + " -> type=" + iPoolType
-                    + ", count=" + iCount + ", kind=" + (iKind == null ? "n/a" : iKind));
-
-            try
+            // ----------------------------------------------------------------
+            // DATA DB: Herds by scheme year
+            // ----------------------------------------------------------------
+            case "HERDS BY SCHEME YEAR":
             {
-                switch (iPoolType)
-                {
-                    case "herds":
-                        resolveHerdPool(iKind, iCount);
-                        break;
-
-                    case "parcels":
-                        fillPool(STAFF_PARCELS,
-                                "Get LPIS parcels", "LPS_PARCEL_LABEL", new String[]{ iCount });
-                        break;
-
-                    case "refs":
-                        fillPool(STAFF_REFERENCES,
-                                "Get reference numbers", "APP_HERD_NO", new String[]{ STAFF_DEFAULT_YEAR, iCount });
-                        break;
-
-                    default:
-                        CommonFunctions.log.warning("[STAFF-DATA] Unknown pool type in tag: " + iTag);
-                        break;
-                }
+                requireParamCountBetween(key, params, 1, 1);
+                sql =
+                        "SELECT h.hld_herd_no " +
+                                "FROM tddp_application a " +
+                                "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
+                                "WHERE a.app_syr_code = ? " +
+                                "ORDER BY h.hld_herd_no";
+                jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
+                break;
             }
-            catch (Exception iException)
+
+            // ----------------------------------------------------------------
+            // DATA DB: Resolve holding ID for a given herd number
+            // ----------------------------------------------------------------
+            case "GET HOLD ID FOR HERD":
             {
-                // Fail loudly. A scenario that runs with an empty pool will either throw an obscure error deep in a
-                // step, or worse, silently skip the data it was meant to exercise.
-                throw new IllegalStateException(
-                        "[STAFF-DATA] Failed to resolve pool for tag " + iTag + ": " + iException.getMessage(),
-                        iException);
+                requireParamCountBetween(key, params, 1, 1);
+                sql        = "SELECT get_hold(?) AS holding_id FROM dual";
+                jdbcParams = new Object[]{ params[0] };
+                break;
             }
-        }
 
-        if (!iAnyPoolRequested)
-        {
-            CommonFunctions.log.warning("[STAFF-DATA] Scenario is tagged @staffdata but declares no pool tags "
-                    + "(e.g. @herds:5:submitted). No runtime data has been resolved.");
-        }
-
-        CommonFunctions.log.info("[STAFF-DATA] Pools resolved — "
-                + "submitted=" + STAFF_SUBMITTED_HERDS.size()
-                + ", penalty=" + STAFF_PENALTY_HERDS.size()
-                + ", noamend=" + STAFF_NOAMEND_HERDS.size()
-                + ", admincheck=" + STAFF_ADMINCHECK_HERDS.size()
-                + ", queryletter=" + STAFF_QUERYLETTER_HERDS.size()
-                + ", simopted=" + STAFF_SIMOPTED_HERDS.size()
-                + ", payments=" + STAFF_PAYMENT_HERDS.size()
-                + ", parcels=" + STAFF_PARCELS.size()
-                + ", refs=" + STAFF_REFERENCES.size());
-    }
-
-    // ===============================================================================================================================
-    // Function Name : resolveHerdPool
-    // Description   : Routes a @herds:N:<kind> tag to its DBRouter query and target pool.
-    // Parameters    : pKind  (String) - the kind suffix from the tag; defaults to submitted when absent
-    //                 pCount (String) - how many rows to fetch
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 15-07-2026
-    // ===============================================================================================================================
-    private void resolveHerdPool(String pKind, String pCount)
-    {
-        String iKind = (pKind == null || pKind.trim().isEmpty()) ? "submitted" : pKind.trim().toLowerCase();
-
-        switch (iKind)
-        {
-            case "submitted":
-                fillPool(STAFF_SUBMITTED_HERDS,
-                        "Get submitted herds", "APP_HERD_NO", new String[]{ STAFF_DEFAULT_YEAR, pCount });
+            // ----------------------------------------------------------------
+            // INET DB: Get agent username for a given herd number
+            //
+            // Source: Query 19 from BISS test data reference document.
+            //
+            // Uses a correlated subquery with ROWNUM = 1 to return the first
+            // available agent login for the given herd. Works for any herd
+            // regardless of how many agents are associated.
+            //
+            // ORDER BY ca.ca_start_date DESC returns the most recently associated
+            // agent first — most likely to be the current active/primary agent.
+            //
+            // Expired agent handling:
+            //   SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date filters
+            //   expired herd registrations at the DB level. If the returned agent
+            //   has an expired SSO account, the TC_03 login step detects
+            //   "Account Expired" on screen and calls Hooks.markAgentExpired()
+            //   which re-resolves a fresh herd+agent pair automatically.
+            //
+            // Column returned: USERNAME
+            //   Aliased as LoginId in the original query but uppercased to USERNAME
+            //   by executeQuery() so getValue("USERNAME") works consistently.
+            // ----------------------------------------------------------------
+            case "GET LOGIN ID FOR HERD":
+            {
+                requireParamCountBetween(key, params, 1, 1);
+                sql =
+                        "SELECT hbcus.bcus_bus_id AS HERDNO, " +
+                                "       (SELECT ui.uri_username " +
+                                "          FROM tdcr_user_info ui " +
+                                "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
+                                "           AND ROWNUM = 1) AS USERNAME " +
+                                "  FROM tdco_customer_asscs ca, " +
+                                "       tdco_business_customers abcus, " +
+                                "       tdco_business_customers hbcus " +
+                                " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
+                                "   AND ca.ca_cac_code     = 194 " +
+                                "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
+                                "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
+                                "   AND hbcus.bcus_bus_id  = ? " +
+                                " ORDER BY ca.ca_start_date DESC";
+                jdbcParams = new Object[]{ params[0] };
                 break;
+            }
 
-            case "penalty":
-                fillPool(STAFF_PENALTY_HERDS,
-                        "Get submitted herds with penalty", "APP_HERD_NO", new String[]{ STAFF_DEFAULT_YEAR, pCount });
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with active Preliminary Checks (year)
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIMINARY CHECKS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
+                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, maxRows };
                 break;
+            }
 
-            case "noamend":
-                fillPool(STAFF_NOAMEND_HERDS,
-                        "Get submitted herds with no amendment", "APP_HERD_NO",
-                        new String[]{ STAFF_DEFAULT_YEAR, pCount });
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with Dual Claims or Overlap findings (year)
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH DUAL CLAIMS CHECK":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT * " +
+                                "FROM vwbs_preliminary_check_dc_ol " +
+                                "WHERE scheme_year = ? " +
+                                "AND ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
                 break;
+            }
 
-            case "admincheck":
-                fillPool(STAFF_ADMINCHECK_HERDS,
-                        "Get herds with admin check not started", "APP_HERD_NO",
-                        new String[]{ STAFF_DEFAULT_YEAR, pCount });
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with Overclaim findings (year)
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH OVERCLAIMS CHECK":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT * " +
+                                "FROM vwbs_preliminary_check_oc " +
+                                "WHERE scheme_year = ? " +
+                                "AND ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
                 break;
+            }
 
-            case "queryletter":
-                fillPool(STAFF_QUERYLETTER_HERDS,
-                        "Get herds with query letter not started", "APP_HERD_NO",
-                        new String[]{ STAFF_DEFAULT_YEAR, pCount });
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with Preliminary Checks on commonage parcels
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
+                sql =
+                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
+                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND lvl_commonage_id IS NOT NULL " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, maxRows };
                 break;
+            }
 
-            case "simopted":
-                fillPool(STAFF_SIMOPTED_HERDS,
-                        "Get submitted herds with SIM opted in", "APP_HERD_NO",
-                        new String[]{ STAFF_DEFAULT_YEAR, pCount });
+            // ----------------------------------------------------------------
+            // DATA DB: Herds with Preliminary Checks filtered by response status
+            //
+            // params[0] = year
+            // params[1] = status e.g. "Pending", "Accepted", "Rejected"
+            // params[2] = limit (optional)
+            // ----------------------------------------------------------------
+            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS":
+            {
+                requireParamCountBetween(key, params, 2, 3);
+                int    year     = parseInt(params[0], "year");
+                String status   = params[1].trim();
+                int    maxRows  = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
+                sql =
+                        "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
+                                "FROM vwbs_land_validation " +
+                                "WHERE lvl_year = ? " +
+                                "AND lvt_desc = 'Preliminary Check' " +
+                                "AND lvs_desc = ? " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY LVL_HERD_NO";
+                jdbcParams = new Object[]{ year, status, maxRows };
                 break;
+            }
 
-            case "payments":
-                fillPool(STAFF_PAYMENT_HERDS,
-                        "Get herds with payments", "PHD_HERD_NO", new String[]{ STAFF_DEFAULT_YEAR, pCount });
+            // ----------------------------------------------------------------
+            // DATA DB: One herd per Preliminary Check type (offset-based retry)
+            //
+            // Returns one herd per check type (Overclaim, Dual claim, Agricultural
+            // Activity) using ROW_NUMBER() OVER (PARTITION BY LVC_DESC).
+            // The offset parameter increments on each retry so a different herd
+            // is returned if the previous candidate fails INET validation.
+            //
+            // params[0] = year
+            // params[1] = offset (0 on first call, increment on each retry)
+            // ----------------------------------------------------------------
+            case "PRELIMINARY CHECKS HERDS":
+            {
+                requireParamCountBetween(key, params, 2, 2);
+                int year     = parseInt(params[0], "year");
+                int offset   = parseInt(params[1], "offset");
+                int targetRn = offset + 1;
+
+                sql =
+                        "SELECT * FROM ( " +
+                                "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
+                                "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
+                                "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
+                                "         ROW_NUMBER() OVER ( " +
+                                "             PARTITION BY LVC_DESC " +
+                                "             ORDER BY LVL_HERD_NO " +
+                                "         ) AS RN " +
+                                "  FROM vwbs_land_validation " +
+                                "  WHERE LVL_YEAR = ? " +
+                                "  AND LVT_DESC = 'Preliminary Check' " +
+                                "  AND LVS_DESC = 'Pending' " +
+                                "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
+                                ") WHERE RN = ?";
+                jdbcParams = new Object[]{ year, targetRn };
                 break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Individual herds with CISYF scheme applied (TC_13 ENTS)
+            //
+            // Returns individual herds (applicant_type = 'I') where:
+            //   - Application status is Submitted (mde_abbrev = 'I')
+            //   - Herd prefix is 'J%' (intentional for TC_13 ENTS scenarios)
+            //   - At least one non-deleted land parcel exists
+            //   - No payment has been processed yet (pap_payment_ind = 'Y' absent)
+            //   - CISYF scheme is applied — fn_GetSchemeApplied(aph_app_id, 3) = 'Y'
+            //     (scheme code 3 = CISYF in pkbs_payment_utils)
+            //   - substr(app_herd_no, 1, 1) > 'A' excludes TRNs as an additional guard
+            //
+            // J% prefix is intentional — TC_13 ENTS transfer scenarios require
+            // J-prefix herds specifically. Do not generalise to other prefixes
+            // without confirming TC_13 test data requirements.
+            //
+            // params[0] = year  (required)
+            // params[1] = limit (optional — defaults to 50)
+            // ----------------------------------------------------------------
+            case "LIST OF INDIVIDUAL HERDS WITH CISYF SCHEME":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
+                sql =
+                        "SELECT app_herd_no, app_year, aph_herd_type " +
+                                "FROM vwbs_application_herd " +
+                                "WHERE mde_abbrev     = 'I' " +
+                                "AND   applicant_type = 'I' " +
+                                "AND EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM tdbs_application_land x " +
+                                "    WHERE x.apl_year        = app_year " +
+                                "    AND   x.apl_aph_id      = aph_id " +
+                                "    AND   x.apl_app_id      = aph_app_id " +
+                                "    AND   x.apl_deleted_ind = 'N' " +
+                                ") " +
+                                "AND NOT EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM tdbs_payment_application x " +
+                                "    WHERE x.pap_app_id      = aph_app_id " +
+                                "    AND   x.pap_payment_ind = 'Y' " +
+                                ") " +
+                                "AND app_year = ? " +
+                                "AND NVL(( " +
+                                "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
+                                "    FROM dual " +
+                                "), 'N') = 'Y' " +
+                                "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY app_herd_no ASC";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+            // ----------------------------------------------------------------
+            // DATA DB: Submitted individual herds with CISYF scheme (TC_13 post-submission)
+            //
+            // Returns herds where application is fully submitted (mde_abbrev = 'I')
+            // and CISYF scheme was applied. Used for post-submission verification
+            // flow — viewing, correspondence, document download.
+            //
+            // params[0] = year  (required)
+            // params[1] = limit (optional — defaults to 100)
+            // ----------------------------------------------------------------
+            case "LIST OF SUBMITTED INDIVIDUAL HERDS WITH CISYF SCHEME":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no, app_year " +
+                                "FROM vwbs_application_herd " +
+                                "WHERE mde_abbrev     = 'I' " +
+                                "AND   applicant_type = 'I' " +
+                                "AND   app_year       = ? " +
+                                "AND   NVL(( " +
+                                "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
+                                "    FROM dual " +
+                                "), 'N') = 'Y' " +
+                                "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY DBMS_RANDOM.VALUE";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: Not Started individual herds eligible for CISYF (TC_13 ENTS)
+            //
+            // Returns J-prefix individual herds where the CURRENT year application
+            // is Not Started (mde_abbrev = 'RI') but the PREVIOUS year's submitted
+            // application had CISYF applied — meaning the herd is eligible for
+            // NR/CISYF in the current year but hasn't started yet.
+            //
+            // Use case: TC_13 full submission flow from scratch — herd appears on
+            // the NR/CISYF tab with no existing application, allowing a fresh Apply.
+            //
+            // Selection criteria:
+            //   curr.mde_abbrev = 'RI'                → Not Started (current year)
+            //   curr.app_herd_no LIKE 'J%'             → J-prefix individual herds
+            //   curr.applicant_type = 'I'              → Individual only
+            //   EXISTS land parcel (current year)      → Herd has active land
+            //   EXISTS prev year submitted with CISYF  → CISYF-eligible based on
+            //                                            previous year application
+            //   SUBSTR > 'A'                           → Excludes TRNs
+            //
+            // params[0] = year  (required — current scheme year)
+            // params[1] = limit (optional — defaults to 50)
+            // ----------------------------------------------------------------
+            case "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
+                sql =
+                        "SELECT curr.app_herd_no, curr.app_year, curr.aph_herd_type " +
+                                "FROM vwbs_application_herd curr " +
+                                "WHERE curr.mde_abbrev     = 'RI' " +
+                                "AND   curr.applicant_type = 'I' " +
+                                "AND   curr.app_year       = ? " +
+                                "AND EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM tdbs_application_land x " +
+                                "    WHERE x.apl_year        = curr.app_year " +
+                                "    AND   x.apl_aph_id      = curr.aph_id " +
+                                "    AND   x.apl_app_id      = curr.aph_app_id " +
+                                "    AND   x.apl_deleted_ind = 'N' " +
+                                ") " +
+                                "AND EXISTS ( " +
+                                "    SELECT 1 " +
+                                "    FROM vwbs_application_herd prev " +
+                                "    WHERE prev.app_herd_no = curr.app_herd_no " +
+                                "    AND   prev.app_year    = curr.app_year - 1 " +
+                                "    AND   prev.mde_abbrev  = 'I' " +
+                                "    AND   NVL(( " +
+                                "        SELECT pkbs_payment_utils.fn_GetSchemeApplied(prev.aph_app_id, 3) " +
+                                "        FROM dual " +
+                                "    ), 'N') = 'Y' " +
+                                ") " +
+                                "AND SUBSTR(curr.app_herd_no, 1, 1) > 'A' " +
+                                "AND ROWNUM <= ? " +
+                                "ORDER BY curr.app_herd_no ASC";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB: STAFF pools — aligned from legacy DatabaseQueriesPage.java
+            //
+            // Corrections vs legacy:
+            //   (1) The legacy NOT-EXISTS guard used LIKE '[A-Z]%', which Oracle
+            //       treats as a literal bracket (no character classes) and never
+            //       excluded anything. Replaced with the framework TRN guard
+            //       SUBSTR(app_herd_no,1,1) > 'A'.
+            //   (2) Legacy 'fetch first N rows only' replaced with an
+            //       order-then-limit subquery so ORDER BY applies before ROWNUM caps.
+            //   (3) Year parameterised on every query (honours -Dstaff.year via the
+            //       @staff hook), where legacy hardcoded 2023/2024/2025 per query.
+            //
+            // Each SELECT projects the exact column Hooks.fillPool reads:
+            //   herds/refs -> APP_HERD_NO | payments -> PHD_HERD_NO | parcels -> LPS_PARCEL_LABEL
+            // ----------------------------------------------------------------
+
+            // submitted -> STAFF_SUBMITTED_HERDS | reads APP_HERD_NO
+            case "GET SUBMITTED HERDS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM vwbs_application_herd " +
+                                "  WHERE mde_abbrev = 'I' " +
+                                "  AND   app_year   = ? " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  AND NOT EXISTS ( " +
+                                "      SELECT 1 FROM tdbs_application_land " +
+                                "      WHERE apl_year = ? AND apl_app_id = aph_app_id ) " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, year, maxRows };
+                break;
+            }
+
+            // penalty -> STAFF_PENALTY_HERDS | reads APP_HERD_NO
+            case "GET SUBMITTED HERDS WITH PENALTY":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM vwbs_application_penalty " +
+                                "  WHERE penalty_type = 'APPLICATION' " +
+                                "  AND   app_year     = ? " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // noamend -> STAFF_NOAMEND_HERDS | reads APP_HERD_NO
+            case "GET SUBMITTED HERDS WITH NO AMENDMENT":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM tdbs_application " +
+                                "  WHERE app_year      = ? " +
+                                "  AND   app_mde_code  = 4 " +
+                                "  AND   app_dct_code != 7 " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // admincheck -> STAFF_ADMINCHECK_HERDS | reads APP_HERD_NO
+            case "GET HERDS WITH ADMIN CHECK NOT STARTED":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT ta.app_herd_no " +
+                                "  FROM tdbs_application ta " +
+                                "  LEFT JOIN tdbs_admin_check tac ON tac.adc_app_id = ta.app_id " +
+                                "  WHERE ta.app_mde_code = 4 " +
+                                "  AND   ta.app_year     = ? " +
+                                "  AND   tac.adc_app_id IS NULL " +
+                                "  AND   SUBSTR(ta.app_herd_no, 1, 1) > 'A' " +
+                                "  ORDER BY ta.app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // queryletter -> STAFF_QUERYLETTER_HERDS | reads APP_HERD_NO
+            case "GET HERDS WITH QUERY LETTER NOT STARTED":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT DISTINCT app_year, app_herd_no " +
+                                "  FROM tdbs_system_note, tdbs_application " +
+                                "  WHERE snt_app_id = app_id " +
+                                "  AND   app_year   = ? " +
+                                "  AND   snt_action_subtype != 'QUERY_LETTER_SUBMITTED' " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // simopted -> STAFF_SIMOPTED_HERDS | reads APP_HERD_NO
+            // (legacy read APH_HERD_NO — projecting APP_HERD_NO to match the new hook)
+            case "GET SUBMITTED HERDS WITH SIM OPTED IN":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM vwbs_application_herd " +
+                                "  WHERE mde_abbrev = 'I' " +
+                                "  AND   app_year   = ? " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  AND aph_app_id IN ( " +
+                                "      SELECT apf_app_id FROM tdbs_application_flag " +
+                                "      WHERE apf_flag_value = 'Y' AND apf_flg_code = 7 ) " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // payments -> STAFF_PAYMENT_HERDS | reads PHD_HERD_NO
+            // (aliased join from legacy dummy-code, which projects PHD_HERD_NO)
+            case "GET HERDS WITH PAYMENTS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT phd_herd_no FROM ( " +
+                                "  SELECT ta.app_herd_no AS phd_herd_no " +
+                                "  FROM tdbs_application ta " +
+                                "  LEFT JOIN tdbs_payment_header tph ON tph.phd_app_id = ta.app_id " +
+                                "  WHERE ta.app_year      = ? " +
+                                "  AND   tph.phd_ptp_code = 9 " +
+                                "  ORDER BY ta.app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // parcels -> STAFF_PARCELS | reads LPS_PARCEL_LABEL (no year in legacy)
+            case "GET LPIS PARCELS":
+            {
+                requireParamCountBetween(key, params, 1, 1);
+                int maxRows = parseInt(params[0], "limit");
+                sql =
+                        "SELECT lps_parcel_label FROM ( " +
+                                "  SELECT DISTINCT twp.lps_parcel_label " +
+                                "  FROM vwlp_parcel twp " +
+                                "  JOIN tddp_scheme_land_unit tslu ON tslu.slu_lnu_id = twp.lps_parcel_id " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ maxRows };
+                break;
+            }
+
+            // refs -> STAFF_REFERENCES | reads APP_HERD_NO (TRN: substr < 'A', inverse guard)
+            case "GET REFERENCE NUMBERS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM vwbs_application_herd " +
+                                "  WHERE mde_abbrev = 'I' " +
+                                "  AND   app_year   = ? " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) < 'A' " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
 
             default:
-                throw new IllegalArgumentException("[STAFF-DATA] Unknown herd kind '" + iKind
-                        + "'. Supported: submitted, penalty, noamend, admincheck, queryletter, simopted, payments.");
+                throw new RuntimeException("Unknown DB label: " + label);
         }
+
+        executeQuery(which, sql, jdbcParams);
     }
 
-    // ===============================================================================================================================
-    // Function Name : fillPool
-    // Description   : Runs a DBRouter query and fills a pool from one column of the result set.
-    //
-    //                 Blacklisted herds are skipped, reusing the BLACKLISTED_HERDS guard the CISYF hook relies on -
-    //                 those herds are known to break scenarios and must not enter any pool.
-    //
-    //                 Duplicates are skipped: a scenario asking for 5 distinct herds must not silently receive the
-    //                 same herd twice, which would make two sections operate on one application.
-    //
-    // Parameters    : pPool       (List<String>) - target pool
-    //                 pLabel      (String)       - DBRouter query label
-    //                 pColumn     (String)       - column to read from each row
-    //                 pParams     (String[])     - query parameters
+    // =====================================================================
+    // PUBLIC API — RAW SQL EXECUTION
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : runRawSQL
+    // Description   : Executes a user-supplied raw SQL string directly on the chosen database,
+    //                 bypassing the label switch in runDB(). Used by utility tools such as
+    //                 HerdAgentExtractor where the SQL is composed at runtime and does not
+    //                 correspond to a predefined label.
+    //                 Results are stored identically to runDB() — accessible via getValue(),
+    //                 getRows(), and hasRows().
+    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
+    //                 sql    — raw SQL string to execute
+    //                 params — optional bind parameters matching '?' placeholders in sql
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 15-07-2026
-    // ===============================================================================================================================
-    private void fillPool(List<String> pPool, String pLabel, String pColumn, String[] pParams)
+    // Date Created  : 05-05-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void runRawSQL(String dbKey, String sql, Object... params)
     {
-        database.DBRouter.runDB("DATA", pLabel, pParams);
-
-        List<Map<String, Object>> iRows = database.DBRouter.getRows();
-
-        if (iRows == null || iRows.isEmpty())
-        {
-            CommonFunctions.log.warning("[STAFF-DATA] Query '" + pLabel + "' returned no rows.");
-            return;
-        }
-
-        for (Map<String, Object> iRow : iRows)
-        {
-            Object iRaw = iRow.get(pColumn);
-
-            if (iRaw == null)
-            {
-                continue;
-            }
-
-            String iValue = String.valueOf(iRaw).trim();
-
-            if (iValue.isEmpty() || BLACKLISTED_HERDS.contains(iValue) || pPool.contains(iValue))
-            {
-                continue;
-            }
-
-            pPool.add(iValue);
-        }
-
-        CommonFunctions.log.info("[STAFF-DATA] Query '" + pLabel + "' -> " + pPool.size() + " usable value(s).");
+        Objects.requireNonNull(dbKey, "dbKey cannot be null");
+        Objects.requireNonNull(sql,   "sql cannot be null");
+        lastLabel = "RAW_SQL";
+        executeQuery(normalizeDb(dbKey), sql, params);
     }
 
-    // ===============================================================================================================================
-    // Function Name : clearStaffPools
-    // Description   : Empties every staff pool. Called before resolution and again after each scenario, so data
-    //                 from one scenario can never leak into the next.
+    // =====================================================================
+    // EXECUTE SQL (internal — shared by runDB and runRawSQL)
+    // =====================================================================
+    private static void executeQuery(String whichDb, String sql, Object... params)
+    {
+        lastRows   = new ArrayList<>();
+        lastScalar = null;
+
+        try (Connection conn = "INET".equals(whichDb)
+                ? getInetConnection() : getDataConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql))
+        {
+            for (int i = 0; i < params.length; i++)
+            {
+                stmt.setObject(i + 1, params[i]);
+            }
+
+            try (ResultSet rs = stmt.executeQuery())
+            {
+                ResultSetMetaData md       = rs.getMetaData();
+                int               colCount = md.getColumnCount();
+
+                while (rs.next())
+                {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    for (int c = 1; c <= colCount; c++)
+                    {
+                        String col = md.getColumnLabel(c);
+                        if (col == null || col.isEmpty()) col = md.getColumnName(c);
+                        // Always uppercase — callers use getValue("APP_HERD_NO") etc.
+                        row.put(col.toUpperCase(Locale.ROOT), rs.getObject(c));
+                    }
+                    lastRows.add(row);
+                }
+
+                if (!lastRows.isEmpty())
+                {
+                    lastScalar = lastRows.get(0).values().iterator().next();
+                }
+            }
+        }
+        catch (SQLException e)
+        {
+            throw new RuntimeException("DB (" + whichDb + ") execution failed: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    private static Connection getDataConnection() throws SQLException
+    {
+        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
+    }
+
+    private static Connection getInetConnection() throws SQLException
+    {
+        return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
+    }
+
+    // =====================================================================
+    // HELPER ACCESSORS
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getValue
+    // Description   : Returns the value of the specified column from the first row of the last
+    //                 query result. Column name matching is case-insensitive. Returns null if
+    //                 the result set is empty or the column is not found.
+    // Parameters    : column — column name e.g. "APP_HERD_NO" or "USERNAME"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 15-07-2026
-    // ===============================================================================================================================
-    private static void clearStaffPools()
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static String getValue(String column)
     {
-        STAFF_SUBMITTED_HERDS.clear();
-        STAFF_PENALTY_HERDS.clear();
-        STAFF_NOAMEND_HERDS.clear();
-        STAFF_ADMINCHECK_HERDS.clear();
-        STAFF_QUERYLETTER_HERDS.clear();
-        STAFF_SIMOPTED_HERDS.clear();
-        STAFF_PAYMENT_HERDS.clear();
-        STAFF_PARCELS.clear();
-        STAFF_REFERENCES.clear();
-    }
-
-
-    @Before("@tc13")
-    public void resolveRuntimeCISYFHerd(Scenario pScenario)
-    {
-        final String YEAR      = System.getProperty("herd.year",  "2026").trim();
-        final int    MAX_TRIES = 50;
-
-        CommonFunctions.log.info("[TC13-HOOK] Resolving random CISYF J-prefix herd for: " + pScenario.getName());
-
-        boolean iFound = false;
-
-        for (int iAttempt = 1; iAttempt <= MAX_TRIES && !iFound; iAttempt++)
-        {
-            // Increase limit on each retry to surface more candidates
-            int iLimit = 50 + ((iAttempt - 1) * 25);
-
-            CommonFunctions.log.info("[TC13-HOOK] Attempt " + iAttempt + "/" + MAX_TRIES + " — querying BISS_DATA (year=" + YEAR + ", limit=" + iLimit + ")");
-
-            database.DBRouter.runDB("DATA", "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF", YEAR, String.valueOf(iLimit));
-
-            List<Map<String, Object>> iRows = database.DBRouter.getRows();
-
-            if (iRows == null || iRows.isEmpty())
-            {
-                CommonFunctions.log.warning("[TC13-HOOK] BISS_DATA returned no CISYF herds " + "at limit=" + iLimit + ". Retrying...");
-                continue;
-            }
-
-            CommonFunctions.log.info("[TC13-HOOK] Candidate pool: " + iRows.size() + " herd(s).");
-
-            // ── Shuffle for random selection — different herd each run ────────────────
-            List<String> iCandidates = new java.util.ArrayList<>();
-            for (Map<String, Object> iRow : iRows)
-            {
-                String iHerd = Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
-                if (!iHerd.isEmpty()) iCandidates.add(iHerd);
-            }
-            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
-
-            CommonFunctions.log.info("[TC13-HOOK] Pool shuffled. Evaluating candidates...");
-
-            int iIdx = 0;
-            for (String iCandidate : iCandidates)
-            {
-                iIdx++;
-
-                // Skip blacklisted herds
-                if (BLACKLISTED_HERDS.contains(iCandidate))
-                {
-                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " is blacklisted — skipping.");
-                    continue;
-                }
-
-                // Query BISS_INET for agent login
-                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
-                String iUsername = database.DBRouter.getValue("USERNAME");
-
-                if (iUsername == null || iUsername.isBlank())
-                {
-                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " — no INET agent found. Skipping.");
-                    continue;
-                }
-
-                iUsername = iUsername.trim();
-
-                // Skip agents with expired SSO accounts
-                if (EXPIRED_AGENTS.contains(iUsername))
-                {
-                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " — agent " + iUsername + " is in EXPIRED_AGENTS. Skipping.");
-                    continue;
-                }
-
-                // ── Valid candidate found ─────────────────────────────────────────────
-                CISYF_HERD     = iCandidate;
-                CISYF_USERNAME = iUsername;
-
-                // Overwrite RUNTIME_HERD and RUNTIME_USERNAME so Background login
-                // and herd search steps use the correct CISYF herd automatically
-                RUNTIME_HERD     = iCandidate;
-                RUNTIME_USERNAME = iUsername;
-
-                iFound = true;
-
-                CommonFunctions.log.info("[TC13-HOOK] ✓ CISYF herd resolved:");
-                CommonFunctions.log.info("[TC13-HOOK]   Herd     = " + CISYF_HERD);
-                CommonFunctions.log.info("[TC13-HOOK]   Username = " + CISYF_USERNAME);
-                break;
-            }
-
-            if (!iFound)
-            {
-                CommonFunctions.log.warning("[TC13-HOOK] No valid candidate in attempt " + iAttempt + " — retrying with larger limit.");
-            }
-        }
-
-        if (!iFound)
-        {
-            throw new RuntimeException(
-                    "[TC13-HOOK] Could not resolve a CISYF J-prefix herd after " + MAX_TRIES + " attempts for year=" + YEAR + ". " + "Verify the query 'List of individual herds with CISYF scheme' " + "returns rows in BISS_DATA for this environment.");
-        }
-    }
-    // =================================================================================================
-// BEFORE — runs before every scenario
-// =================================================================================================
-    @Before
-    public void beforeScenarioExecution(Scenario pScenario)
-    {
-        SoftAssertManager.reset();
-        RetryAnalyser.clearRetryState();
-        iScenarioStartTime = System.currentTimeMillis();
-        CommonFunctions.log.info("---------- Scenario START : " + pScenario.getName() + " ----------");
-
-        String iScenarioTags = String.join(" ", pScenario.getSourceTagNames());
-        ReportManager.beginTestCase(iTestCaseID, pScenario.getName(), iScenarioTags);
-    }
-
-    // =================================================================================================
-// AFTER — runs after every scenario
-// =================================================================================================
-    @After
-    public void afterScenarioExecution(Scenario pScenario)
-    {
-        SoftAssertManager.assertAll();
-
-        // Empty the staff runtime pools so this scenario's herds cannot leak into the next one.
-        clearStaffPools();
-
-        long iScenarioDuration = System.currentTimeMillis() - iScenarioStartTime;
-        utilities.ScreenshotManager.appendScenarioDivider(iDocument, pScenario.getName(), !pScenario.isFailed(), iScenarioDuration);
-
-        try
-        {
-            if (pScenario.isFailed())
-            {
-                CommonFunctions.log.severe("---------- Scenario FAILED : " + pScenario.getName()
-                        + " ----------");
-
-                iAccumulatedErrors.append("Scenario [").append(pScenario.getName())
-                        .append("] FAILED. Status=").append(pScenario.getStatus().name()).append("\n");
-
-                try
-                {
-                    if (iDocument != null && !iDocPath.isEmpty())
-                    {
-                        iLastScreenshotPath = CommonFunctions.addScreenshotToReport(iDocument, iDocPath, iTestCaseID);
-                    }
-                    else
-                    {
-                        String iSafeName = iTestCaseID + "_" + pScenario.getName().replaceAll("[^a-zA-Z0-9]", "_");
-                        iLastScreenshotPath = CommonFunctions.takeScreenshot(iSafeName);
-                    }
-                }
-                catch (Exception iShotException)
-                {
-                    CommonFunctions.log.severe("Screenshot failed : " + iShotException.getMessage());
-                }
-            }
-            else
-            {
-                CommonFunctions.log.info("---------- Scenario PASSED : " + pScenario.getName()
-                        + " ----------");
-            }
-        }
-        catch (Exception iException)
-        {
-            CommonFunctions.log.severe("After hook error : " + iException.getMessage());
-        }
-    }
-
-    // =================================================================================================
-// AFTER ALL — runs once after all scenarios complete
-// =================================================================================================
-    @AfterAll
-    public static void afterAllExecution()
-    {
-        try
-        {
-            if (iAccumulatedErrors.length() > 0)
-            {
-                System.setProperty("lastFailureReason." + iTestCaseID,
-                        iAccumulatedErrors.toString().trim());
-            }
-            if (!iLastScreenshotPath.isEmpty())
-            {
-                System.setProperty("lastScreenshotPath." + iTestCaseID, iLastScreenshotPath);
-            }
-        }
-        catch (Exception iException)
-        {
-            CommonFunctions.log.severe("Failed to publish failure properties : "
-                    + iException.getMessage());
-        }
-
-        try
-        {
-            if (iDocument != null && !iDocPath.isEmpty())
-            {
-                CommonFunctions.finalizeWordReport(iDocument, iDocPath);
-            }
-        }
-        catch (Exception iException)
-        {
-            CommonFunctions.log.severe("Word report finalization failed : " + iException.getMessage());
-        }
-
-        try
-        {
-            CommonFunctions.closeBrowser();
-        }
-        catch (Exception iException)
-        {
-            CommonFunctions.log.severe("Browser close failed : " + iException.getMessage());
-        }
-
-        CommonFunctions.log.info("========== EXECUTION END : " + iTestCaseID + " ==========");
-    }
-
-    // =================================================================================================
-// UTILITY
-// =================================================================================================
-    public static void killProcessByName(String processName)
-    {
-        String os = System.getProperty("os.name").toLowerCase();
-        String command;
-        try {
-            if (os.contains("win")) {
-                String processWithExe = processName.endsWith(".exe") ? processName : processName + ".exe";
-                command = "taskkill /F /IM " + processWithExe + " /T";
-            } else {
-                command = "pkill -f " + processName;
-            }
-            Process process = Runtime.getRuntime().exec(command);
-            process.waitFor();
-            Thread.sleep(1000);
-            CommonFunctions.log.info("Cleaned up process: " + processName);
-        } catch (Exception e) {
-            CommonFunctions.log.warning("Could not kill process " + processName + ": " + e.getMessage());
-        }
+        if (lastRows.isEmpty()) return null;
+        Map<String, Object> first = lastRows.get(0);
+        for (String k : first.keySet())
+            if (k.equalsIgnoreCase(column))
+                return Objects.toString(first.get(k), null);
+        return null;
     }
 
     // ***************************************************************************************************************************************************************************************
-// Function Name : captureStep
-// Description   : On-demand screenshot method for step definitions.
-// Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 26-03-2026
-// ***************************************************************************************************************************************************************************************
-    public static void captureStep(String pStepLabel)
+    // Function Name : getRows
+    // Description   : Returns all rows from the last query result as a list of column-value maps.
+    //                 Column names are always stored in uppercase.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static List<Map<String, Object>> getRows()  { return lastRows; }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : hasRows
+    // Description   : Returns true if the last query returned at least one row.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean hasRows() { return !lastRows.isEmpty(); }
+
+    // =====================================================================
+    // PROPERTY LOADER
+    // =====================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : loadDBProperties
+    // Description   : Loads BISS_DATA and BISS_INET JDBC connection properties from
+    //                 src/test/resources/db.properties at class initialisation time.
+    //                 Throws RuntimeException if any required property is missing or blank.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void loadDBProperties()
     {
-        CommonFunctions.captureStepScreenshot(iDocument, iDocPath, pStepLabel);
+        Properties props = new Properties();
+        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE))
+        {
+            props.load(fis);
+
+            DB_URL      = props.getProperty("db.url");
+            DB_USER     = props.getProperty("db.username");
+            DB_PASSWORD = props.getProperty("db.password");
+            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD))
+            {
+                throw new RuntimeException(
+                        "Missing BISS_DATA properties (db.url / db.username / db.password)");
+            }
+
+            DB_INET_URL      = props.getProperty("db.inet.url");
+            DB_INET_USER     = props.getProperty("db.inet.username");
+            DB_INET_PASSWORD = props.getProperty("db.inet.password");
+            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD))
+            {
+                throw new RuntimeException(
+                        "Missing BISS_INET properties " +
+                                "(db.inet.url / db.inet.username / db.inet.password)");
+            }
+
+            log.info("[DBRouter] DATA and INET connection properties loaded successfully.");
+        }
+        catch (IOException e)
+        {
+            throw new RuntimeException("Cannot load db.properties at "
+                    + PROPERTIES_FILE + " : " + e.getMessage(), e);
+        }
     }
 
+    // =====================================================================
+    // LOGGER SETUP
+    // =====================================================================
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setupLogger
+    // Description   : Configures a custom ConsoleHandler with a timestamped log format.
+    //                 Removes any default parent handlers to prevent duplicate log output.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 27-04-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void setupLogger()
+    {
+        try
+        {
+            Logger iRoot = Logger.getLogger(DBRouter.class.getName());
+            iRoot.setUseParentHandlers(false);
+            iRoot.setLevel(Level.ALL);
+
+            java.util.logging.Formatter iFmt = new java.util.logging.Formatter()
+            {
+                @Override
+                public String format(LogRecord r)
+                {
+                    return String.format("[%s] [%s] %s%n",
+                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+                                    .format(new Date(r.getMillis())),
+                            r.getLevel(),
+                            r.getMessage());
+                }
+            };
+
+            ConsoleHandler iConsole = new ConsoleHandler();
+            iConsole.setLevel(Level.ALL);
+            iConsole.setFormatter(iFmt);
+
+            for (Handler h : iRoot.getHandlers()) iRoot.removeHandler(h);
+            iRoot.addHandler(iConsole);
+        }
+        catch (Exception e)
+        {
+            System.err.println("Logger setup failed: " + e.getMessage());
+        }
+    }
+
+    // =====================================================================
+    // NORMALIZERS AND VALIDATORS
+    // =====================================================================
+
+    private static String normalizeDb(String s)
+    {
+        String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
+        if ("DATA".equals(v) || "INET".equals(v)) return v;
+        throw new IllegalArgumentException(
+                "dbKey must be 'DATA' or 'INET' (was: " + s + ")");
+    }
+
+    private static String normalize(String s)
+    {
+        if (s == null) return "";
+        return s.replace(':', ' ')
+                .replace("\u2013", "-")
+                .replace("\u2014", "-")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toUpperCase(Locale.ROOT);
+    }
+
+    private static void requireParamCountBetween(String labelKey,
+                                                 String[] params,
+                                                 int min, int max)
+    {
+        int n = (params == null) ? 0 : params.length;
+        if (n < min || n > max)
+        {
+            throw new IllegalArgumentException(
+                    "Label '" + labelKey + "' expects between "
+                            + min + " and " + max + " parameter(s); got " + n);
+        }
+    }
+
+    private static int parseInt(String s, String name)
+    {
+        try { return Integer.parseInt(s.trim()); }
+        catch (Exception e)
+        {
+            throw new IllegalArgumentException(
+                    "Expected integer for " + name + " but got: " + s);
+        }
+    }
+
+    private static boolean isBlank(String s)
+    {
+        return s == null || s.trim().isEmpty();
+    }
 }
