@@ -79,7 +79,9 @@ import reporting.HtmlReportGenerator;
 import reporting.JUnitXmlGenerator;
 import reporting.ReportManager;
 import utilities.ExcelUtilities;
-
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.io.File;
 import java.util.logging.Logger;
 
@@ -235,22 +237,39 @@ public class TestRunner
                 //    TC_Login_01  →  src/test/resources/Test_Cases/TC_Login_01.feature
                 String iFeaturePath = iFeatureDirectoryPath + iTestCaseID + ".feature";
 
-                    // If not found at root, scan one level of subdirectories
-                if (!new java.io.File(iFeaturePath).exists())
+                if (!new File(iFeaturePath).exists())
                 {
-                    java.io.File iDir = new java.io.File(iFeatureDirectoryPath);
-                    for (java.io.File iSub : iDir.listFiles(f -> f.isDirectory()))
+                    try
                     {
-                        String iSubPath = iSub.getAbsolutePath()
-                                + java.io.File.separator + iTestCaseID + ".feature";
-                        if (new java.io.File(iSubPath).exists())
+                        final String iFeatureName = iTestCaseID + ".feature";
+
+                        java.nio.file.Path iFoundFeature =
+                                java.nio.file.Files.walk(
+                                                java.nio.file.Paths.get(iFeatureDirectoryPath))
+                                        .filter(java.nio.file.Files::isRegularFile)
+                                        .filter(p -> p.getFileName().toString()
+                                                .equalsIgnoreCase(iFeatureName))
+                                        .findFirst()
+                                        .orElse(null);
+
+                        if (iFoundFeature != null)
                         {
-                            iFeaturePath = iSubPath;
-                            break;
+                            iFeaturePath = iFoundFeature.toString();
+                        }
+                        else
+                        {
+                            throw new RuntimeException(
+                                    "Feature file not found: " + iFeatureName);
                         }
                     }
+                    catch (Exception e)
+                    {
+                        throw new RuntimeException(
+                                "Failed searching for feature file: "
+                                        + iTestCaseID,
+                                e);
+                    }
                 }
-
                 // ── Push values to Hooks via system properties ───────────────────────────────────
                 //    Hooks.beforeAllExecution() reads exactly these three properties.
                 //    It then uses "testcase" value to load the matching row from TestData.xlsx.
