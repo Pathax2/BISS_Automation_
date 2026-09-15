@@ -1508,7 +1508,7 @@ public class CommonFunctions
             WebDriver     iDriver = iDriverHolder.get();
             WebDriverWait iWait   = iWaitHolder.get();
             JavascriptExecutor js = (JavascriptExecutor) iDriver;
-            js.executeScript("document.body.style.zoom='84%'");
+          //  js.executeScript("document.body.style.zoom='64%'");
             if (iDriver == null || iWait == null)
             {
                 throw new RuntimeException("WebDriver or WebDriverWait is not initialised on this thread. Call launchBrowser() before iAction().");
