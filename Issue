@@ -1,303 +1,75 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- ===================================================================================================================================
-     File          : pom.xml
-     Project       : Biss_Automation_Playwright  (NEW project - the Selenium project Biss_Automation stays untouched)
-     Description   : Maven build for the BISS BDD Cucumber framework on Playwright for Java.
+// ===================================================================================================================================
+// File          : PlaywrightSmokeTest.java
+// Package       : playground
+// Description   : STEP 01 installation check - NOT part of the framework.
+//                 Proves that the Playwright jar, the browser download and the SIT network path all work
+//                 before any framework file is migrated.
+//
+//                 Run it from IntelliJ with the green arrow next to the method (mvn test will NOT pick it up,
+//                 because Surefire only includes TestRunner.java).
+//
+//                 Optional VM options (Run > Edit Configurations > Modify options > Add VM options):
+//                   -Dpw.channel=chrome       use the Google Chrome already installed on the laptop (no download needed)
+//                   -Dpw.channel=msedge      use the installed Microsoft Edge
+//                   -Dsmoke.url=https://...  open a different URL
+//                 Optional environment variable:
+//                   PWDEBUG=1                opens the Playwright Inspector so you can step through each action
+//
+// Author        : Aniket Pathare | aniket.pathare@goverment.ie
+// Date Created  : 15-09-2026
+// ===================================================================================================================================
 
-     What is in here and why:
-       - playwright          : browser automation (replaces selenium-java; includes its own Node driver - no Node install)
-       - cucumber-*          : same BDD engine and version as the Selenium project, so feature files move over unchanged
-       - junit 5             : TestRunner is a JUnit 5 test (Surefire entry point), same as today
-       - poi-ooxml           : ExecutionControl.xlsx / TestData.xlsx + Word evidence reports (copied classes)
-       - ojdbc11 + HikariCP  : DBRouter herd/agent lookups (copied class)
-       - javax.mail          : ExecutionSummaryEmailer (copied class)
-       - slf4j + logback     : logging, same as today
-       - exec-maven-plugin   : runs the Playwright CLI (install browsers, codegen, show-trace) from Maven
+package playground;
 
-     Everyday commands (IntelliJ Terminal, PowerShell):
-       .\mvnw.cmd -q test-compile                                   <- compile only
-       .\mvnw.cmd exec:java "-Dexec.args=install chromium"          <- one-off browser download (laptop only)
-       .\mvnw.cmd exec:java "-Dexec.args=codegen https://..."       <- record locators
-       .\mvnw.cmd exec:java "-Dexec.args=show-trace <file>.zip"     <- open a trace
-       .\mvnw.cmd test "-Dtest=PlaywrightSmokeTest"                 <- Step 01 installation check
-       .\mvnw.cmd test -Pdev "-Dtestcase.ids=TC_01_Login"           <- framework run (from Step 08)
-       mvn test -Pdocker                                            <- inside the container (from Step 09)
+import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.Locator;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Playwright;
+import org.junit.jupiter.api.Test;
 
-     RULE          : playwright.version must equal the Docker image tag mcr.microsoft.com/playwright/java:v<version>-noble
+import java.nio.file.Paths;
 
-     Author        : Aniket Pathare | aniket.pathare@goverment.ie
-     Date Created  : 15-09-2026
-     =================================================================================================================================== -->
+import static com.microsoft.playwright.assertions.PlaywrightAssertions.assertThat;
 
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+public class PlaywrightSmokeTest
+{
+    private static final String iUrl = System.getProperty("smoke.url",
+            "https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/");
 
-    <modelVersion>4.0.0</modelVersion>
+    @Test
+    void openBissLandingPage()
+    {
+        // try-with-resources closes the browser and the Playwright driver process even when the test fails
+        try (Playwright iPlaywright = Playwright.create())
+        {
+            BrowserType.LaunchOptions iLaunchOptions = new BrowserType.LaunchOptions()
+                    .setHeadless(false)      // you can watch the browser
+                    .setSlowMo(500);         // 0.5 s pause between actions, only for learning
 
-    <!-- ============================================================
-         PROJECT COORDINATES
-         ============================================================ -->
-    <groupId>ie.gov.biss</groupId>
-    <artifactId>Biss_Automation_Playwright</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
-    <packaging>jar</packaging>
-    <name>BISS BDD Cucumber Automation Framework - Playwright</name>
+            String iChannel = System.getProperty("pw.channel", "").trim();
+            if (!iChannel.isEmpty())
+            {
+                iLaunchOptions.setChannel(iChannel);
+            }
 
-    <!-- ============================================================
-         PROPERTIES - bump versions here only
-         ============================================================ -->
-    <properties>
-        <java.version>17</java.version>
-        <maven.compiler.release>${java.version}</maven.compiler.release>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+            Browser        iBrowser = iPlaywright.chromium().launch(iLaunchOptions);
+            BrowserContext iContext = iBrowser.newContext(new Browser.NewContextOptions().setIgnoreHTTPSErrors(true));
+            Page           iPage    = iContext.newPage();
 
-        <playwright.version>1.61.0</playwright.version>
-        <cucumber.version>7.15.0</cucumber.version>
-        <junit.version>5.10.2</junit.version>
-        <junit.platform.version>1.10.2</junit.platform.version>
-        <poi.version>5.2.5</poi.version>
-        <hikari.version>5.1.0</hikari.version>
-        <ojdbc.version>21.9.0.0</ojdbc.version>
-        <logback.version>1.4.14</logback.version>
-        <slf4j.version>2.0.12</slf4j.version>
-        <log4j.version>2.23.1</log4j.version>
-        <javax.mail.version>1.6.2</javax.mail.version>
+            iPage.navigate(iUrl);
+            System.out.println("[SMOKE] Browser : " + iBrowser.browserType().name() + " " + iBrowser.version());
+            System.out.println("[SMOKE] Title   : " + iPage.title());
 
-        <surefire.version>3.2.5</surefire.version>
-        <compiler.version>3.12.1</compiler.version>
-        <exec.plugin.version>3.1.0</exec.plugin.version>
+            // Same XPath as iWelcomeLoginBtn in ObjectRepository.properties - only the "xpath=" prefix is new
+            Locator iLoginButton = iPage.locator("xpath=//span[normalize-space()='Log in']");
 
-        <!-- Framework defaults - overridden by profiles, -D on the command line, or BISS_ env vars (from Step 02) -->
-        <env>dev</env>
-        <browser>CHROME</browser>
-        <headless>false</headless>
-        <retry.count>1</retry.count>
-        <bamboo.buildNumber>LOCAL</bamboo.buildNumber>
-        <bamboo.buildPlanKey>BISS-PW</bamboo.buildPlanKey>
-        <bamboo.agentName>Local Machine</bamboo.agentName>
-    </properties>
+            // Web-first assertion: retries automatically for up to 5 seconds, no explicit wait needed
+            assertThat(iLoginButton).isVisible();
 
-    <!-- ============================================================
-         DEPENDENCIES
-         ============================================================ -->
-    <dependencies>
-
-        <!-- Playwright for Java -->
-        <dependency>
-            <groupId>com.microsoft.playwright</groupId>
-            <artifactId>playwright</artifactId>
-            <version>${playwright.version}</version>
-        </dependency>
-
-        <!-- Cucumber BDD -->
-        <dependency>
-            <groupId>io.cucumber</groupId>
-            <artifactId>cucumber-java</artifactId>
-            <version>${cucumber.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.cucumber</groupId>
-            <artifactId>cucumber-core</artifactId>
-            <version>${cucumber.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.cucumber</groupId>
-            <artifactId>cucumber-junit-platform-engine</artifactId>
-            <version>${cucumber.version}</version>
-        </dependency>
-
-        <!-- JUnit 5 -->
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-api</artifactId>
-            <version>${junit.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-engine</artifactId>
-            <version>${junit.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.platform</groupId>
-            <artifactId>junit-platform-suite</artifactId>
-            <version>${junit.platform.version}</version>
-        </dependency>
-
-        <!-- Apache POI - Excel test data + Word evidence reports -->
-        <dependency>
-            <groupId>org.apache.poi</groupId>
-            <artifactId>poi-ooxml</artifactId>
-            <version>${poi.version}</version>
-        </dependency>
-
-        <!-- Database layer (DBRouter) -->
-        <dependency>
-            <groupId>com.oracle.database.jdbc</groupId>
-            <artifactId>ojdbc11</artifactId>
-            <version>${ojdbc.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.zaxxer</groupId>
-            <artifactId>HikariCP</artifactId>
-            <version>${hikari.version}</version>
-        </dependency>
-
-        <!-- Email summary -->
-        <dependency>
-            <groupId>com.sun.mail</groupId>
-            <artifactId>javax.mail</artifactId>
-            <version>${javax.mail.version}</version>
-        </dependency>
-
-        <!-- Logging: SLF4J + Logback, with bridges so JUL (java.util.logging) and Log4j2 end up in Logback -->
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <version>${logback.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>${slf4j.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>jul-to-slf4j</artifactId>
-            <version>${slf4j.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-to-slf4j</artifactId>
-            <version>${log4j.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-api</artifactId>
-            <version>${log4j.version}</version>
-        </dependency>
-
-    </dependencies>
-
-    <!-- ============================================================
-         BUILD
-         ============================================================ -->
-    <build>
-        <plugins>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>${compiler.version}</version>
-                <configuration>
-                    <release>${java.version}</release>
-                    <encoding>UTF-8</encoding>
-                </configuration>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>${surefire.version}</version>
-                <configuration>
-                    <!-- Framework-wide defaults only. Everything else (testcase.ids, environment, db.bootstrap,
-                         trace.mode, app.url ...) is passed with -D on the mvn command line (Surefire forwards
-                         those) or with BISS_ environment variables. -->
-                    <systemPropertyVariables>
-                        <env>${env}</env>
-                        <browser>${browser}</browser>
-                        <headless>${headless}</headless>
-                        <retry.count>${retry.count}</retry.count>
-                        <bamboo.buildNumber>${bamboo.buildNumber}</bamboo.buildNumber>
-                        <bamboo.buildPlanKey>${bamboo.buildPlanKey}</bamboo.buildPlanKey>
-                        <bamboo.agentName>${bamboo.agentName}</bamboo.agentName>
-                    </systemPropertyVariables>
-
-                    <!-- Single entry point, exactly like the Selenium framework.
-                         -Dtest=SomeClass overrides this for one-off classes such as PlaywrightSmokeTest. -->
-                    <includes>
-                        <include>**/TestRunner.java</include>
-                    </includes>
-
-                    <!-- Fresh JVM per run - no static state leaks between runs -->
-                    <forkCount>1</forkCount>
-                    <reuseForks>false</reuseForks>
-                    <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
-                </configuration>
-            </plugin>
-
-            <!-- Playwright CLI:  .\mvnw.cmd exec:java "-Dexec.args=install chromium" -->
-            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>exec-maven-plugin</artifactId>
-                <version>${exec.plugin.version}</version>
-                <configuration>
-                    <mainClass>com.microsoft.playwright.CLI</mainClass>
-                    <classpathScope>compile</classpathScope>
-                </configuration>
-            </plugin>
-
-        </plugins>
-    </build>
-
-    <!-- ============================================================
-         PROFILES
-         ============================================================ -->
-    <profiles>
-
-        <!-- Tag profiles -->
-        <profile>
-            <id>smoke</id>
-            <properties>
-                <cucumber.filter.tags>@smoke</cucumber.filter.tags>
-            </properties>
-        </profile>
-        <profile>
-            <id>regression</id>
-            <properties>
-                <cucumber.filter.tags>@regression</cucumber.filter.tags>
-                <retry.count>2</retry.count>
-            </properties>
-        </profile>
-        <profile>
-            <id>full</id>
-            <properties>
-                <cucumber.filter.tags>not @wip</cucumber.filter.tags>
-                <retry.count>2</retry.count>
-            </properties>
-        </profile>
-
-        <!-- Environment profiles -->
-        <profile>
-            <id>dev</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-            <properties>
-                <env>dev</env>
-                <headless>false</headless>
-            </properties>
-        </profile>
-        <profile>
-            <id>staging</id>
-            <properties>
-                <env>staging</env>
-                <headless>true</headless>
-                <retry.count>2</retry.count>
-            </properties>
-        </profile>
-
-        <!-- Container profile (used by the Docker entrypoint from Step 09) -->
-        <profile>
-            <id>docker</id>
-            <properties>
-                <env>docker</env>
-                <headless>true</headless>
-            </properties>
-        </profile>
-
-    </profiles>
-
-</project>
+            iPage.screenshot(new Page.ScreenshotOptions().setPath(Paths.get("target/playwright-smoke.png")));
+            System.out.println("[SMOKE] PASS - screenshot saved to target/playwright-smoke.png");
+        }
+    }
+}
