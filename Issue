@@ -1,529 +1,303 @@
-# ====================================================================================================================================
-# CATEGORY : MAPS
-# ====================================================================================================================================
-# Covers all Map Printing regression packs for the BISS internal (staff) portal:
-#   TC_01 - Map generation by herd number search
-#   TC_02 - Map generation by parcel number search, incl. every required-field validation
-#   TC_03 - Generated map metadata and pagination
-#   TC_04 - Partnership herd maps and download
-#   TC_05 - Maps surfaced on the Correspondence screen
-#   TC_10 - Map download from the generated maps table
-#   TC_11 - Parcel search format tolerance
-#
-# DATA
-#   Herds, parcels and references are resolved from the DB at runtime by the @staffdata hook
-#   via DBRouter. Features never name a herd index - "the next submitted herd" pops the next
-#   unused value from the resolved list, so sections stay independent and re-runnable.
-#   Staff accounts (agr11612 / agr2332 / agr4442 / agr5033) are hardcoded permission
-#   fixtures, not test data - each carries a specific role the test depends on.
-#
-# STEP DEFINITIONS : MapPrintingSteps.java (stepdefinitions.STAFF)
-# LOCATORS         : ObjectRepository.properties - Section: Map Printing
-# Author           : Aniket Pathare | aniket.pathare@government.ie
-# Created          : 15-07-2026
-# ====================================================================================================================================
-
-# ====================================================================================================================================
-# TC_01_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_01_STAFF - Map Printing by Herd Number
-
-  # Migrated from legacy "Regression Suite for Map Printing with Herd" (AT-TC-01, 02, 04).
-  # Legacy AT-TC-03 was commented out as a depleted case and is not carried forward.
-  #
-  # BUSINESS FLOW
-  #   An internal map printing user searches a herd on the Map Printing screen, chooses the
-  #   parcels and map layout to render, and requests generation. The screen must also refuse
-  #   a search with no herd number.
-  #
-  # WHAT THIS VALIDATES
-  #   1. A map can be generated for a single selected parcel of a herd.
-  #   2. Searching with an empty herd field raises the mandatory-field error.
-  #   3. A map can be generated across all parcels of a herd.
-
-
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr11612"
-    And the staff user is on the Map Printing screen
-
-  @e2e @map-generation
-  Scenario: Staff generates herd maps for single and all parcel selections
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14969)
-    # Validates: a map is accepted for generation when one parcel of a submitted herd is
-    # selected against a Full Colour Ortho A4 layout with the legend enabled.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2025"
-    And the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the map generation request should be accepted
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14968)
-    # Validates: the herd number is mandatory - searching with an empty field is rejected.
-    When the staff user searches Map Printing with no herd number
-    Then the staff user should see the validation error "Herd number required."
-
-    # SECTION 3 - AT-TC-04 (BISSAGL-14966)
-    # Validates: generation is accepted when every parcel on the herd is selected, proving
-    # the multi-parcel path as well as the single-parcel path in Section 1.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the map generation request should be accepted
-
----------------------------------------------------------------
-  # ====================================================================================================================================
-# TC_02_STAFF.feature
-# ====================================================================================================================================
-  @maps @regression @staff
-  Feature: TC_02_STAFF - Map Printing by Parcel Number
-
-  # Migrated from legacy "Regression Suite for Map Printing with Parcel"
-  # (AT-TC-01, 02, 04, 05, 07-14). Legacy AT-TC-03 and AT-TC-06 were commented out as
-  # depleted cases and are not carried forward.
-  #
-  # BUSINESS FLOW
-  #   An internal map printing user searches by LPIS parcel rather than herd, selects a map
-  #   layout - either a preset (Ortho / Inspection Discovery) or a custom composition of
-  #   imagery, raster and vector layers - and requests generation. Every field required by
-  #   the chosen layout must be enforced before generation is allowed.
-  #
-  # WHAT THIS VALIDATES
-  #   1. Preset and custom layouts both generate, at A3 and A4, for single and all parcels.
-  #   2. Each mandatory selection raises its own error when omitted: parcel number, parcel
-  #      selection, map type, imagery layer, vector layer.
-  #   3. The Map Printing tab is not visible to a non-internal user.
-
-
-  Background:
-  Given the staff user is logged in to the BISS internal portal as "agr11612"
-  And the staff user is on the Map Printing screen
-
-
-  @e2e @map-generation @validation
-  Scenario: Staff generates parcel maps across layouts and is blocked on every missing field
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14997)
-    # Validates: the Inspection Discovery preset generates for a single parcel.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user requests a map with the following settings
-  | parcels | single               |
-  | mapType |Inspection Discovery A4|
-  | legend  | yes                  |
-  Then the map generation request should be accepted
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14996)
-    # Validates: a custom layout generates when imagery, raster and vector are all supplied.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user requests a map with the following settings
-  | parcels | single               |
-  | mapType | Custom Layer A4      |
-  | imagery | 2009 Low Flown Ortho |
-  | raster  | Raster 1:5000        |
-  | vector  | default              |
-  Then the map generation request should be accepted
-
-    # SECTION 3 - AT-TC-04 (BISSAGL-14993)
-    # Validates: the Full Colour Ortho A4 preset generates for a single parcel.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user requests a map with the following settings
-  | parcels | single              |
-  | mapType | Full Color Ortho A4 |
-  | legend  | yes                 |
-  Then the map generation request should be accepted
-
-    # SECTION 4 - AT-TC-05 (BISSAGL-14988)
-    # Validates: the parcel number is mandatory when searching by parcel.
-  When the staff user searches Map Printing with no parcel number
-  Then the staff user should see the validation error "Parcel number required."
-
-    # SECTION 5 - AT-TC-07 (BISSAGL-14986)
-    # Validates: A3 generates across all parcels returned by a parcel search - the multi
-    # parcel path at a different page size from Section 3.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user requests a map with the following settings
-  | parcels | all                 |
-  | mapType | Full Color Ortho A3 |
-  | legend  | yes                 |
-  Then the map generation request should be accepted
-
-    # SECTION 6 - AT-TC-08 (BISSAGL-14983)
-    # Validates: a custom layout generates across all parcels, combining the custom-layer
-    # path of Section 2 with the all-parcels path of Section 5.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user requests a map with the following settings
-  | parcels | all                  |
-  | mapType | Custom Layer A4      |
-  | imagery | 2008 Low Flown Ortho |
-  | raster  | Raster 1:5000        |
-  | vector  | default              |
-  Then the map generation request should be accepted
-
-    # SECTION 7 - AT-TC-09 (BISSAGL-14982)
-    # Legacy carries the note "Fix case by next week" and has NO assertion - it searches a
-    # future scheme year and stops. The intended check ("no results warning") is commented
-    # out in legacy. Reproduced as a search only; the warning assertion needs writing.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2025"
-
-    # SECTION 8 - AT-TC-10 (BISSAGL-14981)
-    # Validates: opening and dismissing the parcel selector without choosing a parcel
-    # raises the selection error.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user opens and dismisses the "parcelSelect" selector without choosing a value
-  Then the staff user should see the validation error "select a parcel required"
-
-    # SECTION 9 - AT-TC-11 (BISSAGL-14980)
-    # Validates: with a parcel chosen, dismissing the map type selector raises its error.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user requests a map with the following settings
-  | parcels | single |
-  And the staff user opens and dismisses the "mapTypeSelect" selector without choosing a value
-  Then the staff user should see the validation error "select a map type required"
-
-    # SECTION 10 - AT-TC-12 (BISSAGL-14979)
-    # Validates: a custom layout requires an imagery layer - dismissing it raises its error.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user requests a map with the following settings
-  | parcels | single          |
-  | mapType | Custom Layer A4 |
-  And the staff user opens and dismisses the "imagerySelect" selector without choosing a value
-  Then the staff user should see the validation error "select an imagery layer required"
-
-    # SECTION 11 - AT-TC-13 (BISSAGL-14978)
-    # Validates: a custom layout requires a vector layer even once imagery is chosen.
-  When the staff user searches Map Printing for the next submitted herd for scheme year "2024"
-  And the staff user requests a map with the following settings
-  | parcels | single               |
-  | mapType | Custom Layer A4      |
-  | imagery | 2009 Low Flown Ortho |
-  And the staff user opens and dismisses the "vectorSelect" selector without choosing a value
-  Then the staff user should see the validation error "select a vector layer required"
-
-    # SECTION 12 - AT-TC-14 (BISSAGL-14977)
-    # Validates: Map Printing is restricted by role - a non-internal user cannot see the tab.
-  When the staff user re-logs in to the BISS internal portal as "agr5033"
-  Then the staff user should not have access to the "Map Printing" tab
-
-
-----------------------------------------------------------------------------
-# ====================================================================================================================================
-# TC_03_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_03_STAFF - Generated Map Details and Pagination
-
-  # Migrated from legacy "Regression Suite for Checking Map Generated for HerdNumber"
-  # (AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   After requesting a map, the generated maps table records the request. Staff confirm the
-  #   herd identity on screen, then confirm the request was recorded with its full metadata
-  #   and reached a terminal status. The table paginates once enough requests exist.
-  #
-  # WHAT THIS VALIDATES
-  #   1. Herd name and address are displayed for the searched herd.
-  #   2. A generated map row carries status, id, herd number and date.
-  #   3. The request reaches its final status rather than staying in progress.
-  #   4. The generated maps table pages forward and back.
-
-
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr2332"
-    And the staff user is on the Map Printing screen
-
-  @e2e @generated-map
-  Scenario: Staff verifies generated map metadata and pages through the results table
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14962)
-    # Validates: the herd is identified on screen and the resulting request row carries every
-    # metadata field. Legacy printed name/address rather than asserting them - the herd is DB
-    # resolved so its expected name is not known to the feature; presence is what is checked.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    Then the staff user should see the herd identity details
-      | name    |
-      | address |
-    When the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14960)
-    # Validates: as Section 1, plus the request settles at its final status and the results
-    # table pages forward and back once a second request exists.
-    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
-    Then the staff user should see the herd identity details
-      | name    |
-      | address |
-    When the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    Then the map generation request should be accepted
-    And the generated map should reach its final status
-    When the staff user pages through the generated maps table
-      | Next page     |
-      | Previous page |
-    Then the generated maps table should remain displayed
-
-----------------------------------------------------------------------------------------------------
-# ====================================================================================================================================
-# TC_04_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_04_STAFF - Partnership Herd Maps and Download
-
-  # Migrated from legacy "Regression Pack for Generating Map" (BISSAGL-3161 AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   Herds held in a partnership span multiple herd owners, so a map request must resolve
-  #   every parcel across the partnership - whether the search starts from the herd or from
-  #   one of its parcels. Once generated, the map is downloadable from the results table.
-  #
-  # WHAT THIS VALIDATES
-  #   1. A partnership herd generates an A3 map across all its parcels, with full metadata.
-  #   2. The same holds when the search starts from a parcel belonging to the partnership.
-  #   3. The completed map exposes a working download link.
-  #
-  # TEST DATA NOTE
-  #   K1361753 (herd) and K1360100094 (parcel) are hardcoded partnership fixtures. No legacy
-  #   query returns partnership herds, so these cannot be DB-resolved without a new query -
-  #   substituting a generic submitted herd would silently stop testing the partnership path.
-  #   ACTION: add a "partnership herds" DBRouter case to remove these literals.
-
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
-    And the staff user is on the Map Printing screen
-
-  @e2e @partnership @download
-  Scenario: Staff generates and downloads maps spanning a partnership holding
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14866)
-    # Validates: an A3 map generates across all parcels of the partnership herd, records
-    # full metadata, settles at its final status, and can be downloaded.
-    When the staff user searches Map Printing for partnership herd "K1361753" for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A3 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    Then the map generation request should be accepted
-    And the generated map should reach its final status
-    And the staff user should be able to download the generated map
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14865)
-    # Validates: the multi-herd path - starting from a partnership parcel resolves the same
-    # holding and produces an equally complete, downloadable map.
-
-    When the staff user searches Map Printing with no parcel number
-
-    When the staff user searches Map Printing for partnership parcel "K1360100094" for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A3 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    Then the map generation request should be accepted
-    And the generated map should reach its final status
-    And the staff user should be able to download the generated map
-
------------------------------------------------------------------------------------------
-# ====================================================================================================================================
-# TC_05_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_05_STAFF - Maps on the Correspondence Screen
-
-  # Migrated from legacy "Regression Pack for Maps in Correspondence" (BISSAGL-3161 / 3162).
-  # Both legacy @tmslink tags were commented out.
-  #
-  # BUSINESS FLOW
-  #   A map generated for a herd should be saved against the application and viewable from
-  #   the Correspondence screen alongside the herd's other documents.
-  #
-  # WHAT THIS VALIDATES
-  #   Currently: nothing beyond the searches completing.
-  #
-  # LEGACY COVERAGE WARNING
-  #   Both scenarios are searches with their assertions commented out:
-  #     AT-TC-01 - "Staff Scroll to Documents Section" disabled, note reads
-  #                "Expected Link not found / Clicking on Links throws issues".
-  #     AT-TC-02 - "Click on Correspondence Quick Link in Navbar" disabled.
-  #   The Correspondence link appears to have been broken or moved when these were written.
-  #   Reproduced faithfully as searches. ACTION: confirm the current Correspondence UI and
-  #   write the document-visibility assertion this pack is named for.
-  #
-  # TEST DATA NOTE
-  #   O1020191 is the hardcoded correspondence fixture - kept as a literal.
-
-
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr2332"
-
-  @e2e @correspondence
-  Scenario: Staff searches a herd and generates a parcel map intended for Correspondence
-
-    # SECTION 1 - AT-TC-01
-    # Legacy asserts nothing - the Documents section step is commented out.
-    When the staff user searches the Home screen for herd "O1020191" for scheme year "2023"
-
-    # SECTION 2 - AT-TC-02
-    # Legacy asserts nothing - the Correspondence navigation step is commented out.
-    When the staff user is on the Map Printing screen
-    When the staff user searches Map Printing with no parcel number
-    When the staff user searches Map Printing for partnership parcel "K1360100094" for scheme year "2023"
-------------------------------------------------------
-# ====================================================================================================================================
-# TC_10_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff
-Feature: TC_10_STAFF - Map Download from the Generated Maps Table
-
-  # Migrated from legacy "Regression Pack for Generating and Downloading Map"
-  # (BISSAGL-7682 AT-TC-01, 02).
-  #
-  # BUSINESS FLOW
-  #   A generated map moves through its statuses to completion, at which point the results
-  #   table offers it for download. This pack covers the download itself, from both a herd
-  #   search and a parcel search.
-  #
-  # WHAT THIS VALIDATES
-  #   1. A herd map records full metadata and reaches its final status.
-  #   2. A parcel map does the same and exposes a working download link.
-  #
-  # LEGACY INCONSISTENCY
-  #   AT-TC-01 has its download step COMMENTED OUT while AT-TC-02 does not - so the herd
-  #   path never actually asserts the download this pack exists to test. Preserved exactly:
-  #   Section 1 stops at final status. ACTION: confirm whether the omission was deliberate.
-  #
-  # TEST DATA NOTE
-  #   K1361753 is the same partnership fixture used by TC_04; B1410500035 is a parcel
-  #   fixture. Both hardcoded in legacy and kept as literals.
-
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr2332"
-    And the staff user is on the Map Printing screen
-
-  @e2e @download
-  Scenario: Staff generates maps by herd and parcel and downloads the completed output
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14884)
-    # Validates: metadata and final status only - legacy disables the download assertion.
-    When the staff user searches Map Printing for partnership herd "K1361753" for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | single              |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    Then the map generation request should be accepted
-    And the generated map should reach its final status
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14883)
-    # Validates: the full path including download, from a parcel search across all parcels.
-    When the staff user searches Map Printing with no parcel number
-    And the staff user searches Map Printing for parcel "B1410500035" for scheme year "2023"
-    And the staff user requests a map with the following settings
-      | parcels | all                 |
-      | mapType | Full Color Ortho A4 |
-      | legend  | yes                 |
-    Then the generated map should be recorded with the following details
-      | status     |
-      | id         |
-      | herdNumber |
-      | date       |
-    Then the map generation request should be accepted
-    And the generated map should reach its final status
-    And the staff user should be able to download the generated map
------------------------------------------------------
-# ====================================================================================================================================
-# TC_11_STAFF.feature
-# ====================================================================================================================================
-@maps @regression @staff @parcel:10
-Feature: TC_11_STAFF - Parcel Search Format Tolerance
-
-  # Migrated from legacy "Regression Pack for Map Printing Case Sensitive"
-  # (BISSAGL-8080 AT-TC-01 to 05).
-  #
-  # BUSINESS FLOW
-  #   Parcel numbers are entered by hand and arrive in inconsistent formats. The search must
-  #   normalise case and tolerate stray characters, resolving to the same parcel either way.
-  #
-  # WHAT THIS VALIDATES
-  #   Intended: lower case, upper case, trailing special characters, invalid values and a
-  #   blank value all behave correctly on the parcel search.
-  #
-  # LEGACY DEFECT - THIS PACK NO LONGER TESTS WHAT IT IS NAMED FOR
-  #   The commented-out literals show the original intent:
-  #     AT-TC-01 "o1170800024"   lower case
-  #     AT-TC-02 "O1170800024"   upper case
-  #     AT-TC-03 "O1060300013*"  trailing special character
-  #     AT-TC-04 "4354543648894" invalid
-  #     AT-TC-05 " "             blank
-  #   When the pack was moved to DB-driven data, those literals were replaced with parcel
-  #   rows 11-15 - which are all valid, correctly-cased LPIS parcels. Sections 1-3 now search
-  #   three valid parcels three times, and Section 5 searches a fourth. The case-insensitivity
-  #   and blank-input coverage was lost silently in the refactor.
-  #   Sections 1-3 and 5 below preserve the current (weakened) behaviour rather than invent
-  #   new coverage. Section 4 keeps the invalid literals that ARE still live in legacy.
-  #   ACTION: restore intent by deriving case variants from one DB parcel at runtime -
-  #   e.g. "the next LPIS parcel in lower case" - which needs a step def, not new test data.
-
-
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr11612"
-    And the staff user is on the Map Printing screen
-
-
-  @e2e @validation
-  Scenario: Staff searches parcels in varying formats and reaches the generation settings
-
-    # SECTION 1 - AT-TC-01 (BISSAGL-14833) - intended: lower case
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-
-    # SECTION 2 - AT-TC-02 (BISSAGL-14832) - intended: upper case
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-
-    # SECTION 3 - AT-TC-03 (BISSAGL-14831) - intended: trailing special character
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-
-    # SECTION 4 - AT-TC-04 (BISSAGL-14824)
-    # Validates: three malformed parcel values in sequence. Legacy asserts the settings
-    # section is still available after each - i.e. the screen does not break on bad input.
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
-    When the staff user searches Map Printing for each of the following invalid parcels for scheme year "2023"
-      | hdgfhggdfhjkdhj |
-      | 345dhf564gh48   |
-    Then the generate map settings should be available
-
-    # SECTION 5 - AT-TC-05 (BISSAGL-14823) - intended: blank value
-    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
-    Then the generate map settings should be available
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ===================================================================================================================================
+     File          : pom.xml
+     Project       : Biss_Automation_Playwright  (NEW project - the Selenium project Biss_Automation stays untouched)
+     Description   : Maven build for the BISS BDD Cucumber framework on Playwright for Java.
+
+     What is in here and why:
+       - playwright          : browser automation (replaces selenium-java; includes its own Node driver - no Node install)
+       - cucumber-*          : same BDD engine and version as the Selenium project, so feature files move over unchanged
+       - junit 5             : TestRunner is a JUnit 5 test (Surefire entry point), same as today
+       - poi-ooxml           : ExecutionControl.xlsx / TestData.xlsx + Word evidence reports (copied classes)
+       - ojdbc11 + HikariCP  : DBRouter herd/agent lookups (copied class)
+       - javax.mail          : ExecutionSummaryEmailer (copied class)
+       - slf4j + logback     : logging, same as today
+       - exec-maven-plugin   : runs the Playwright CLI (install browsers, codegen, show-trace) from Maven
+
+     Everyday commands (IntelliJ Terminal, PowerShell):
+       .\mvnw.cmd -q test-compile                                   <- compile only
+       .\mvnw.cmd exec:java "-Dexec.args=install chromium"          <- one-off browser download (laptop only)
+       .\mvnw.cmd exec:java "-Dexec.args=codegen https://..."       <- record locators
+       .\mvnw.cmd exec:java "-Dexec.args=show-trace <file>.zip"     <- open a trace
+       .\mvnw.cmd test "-Dtest=PlaywrightSmokeTest"                 <- Step 01 installation check
+       .\mvnw.cmd test -Pdev "-Dtestcase.ids=TC_01_Login"           <- framework run (from Step 08)
+       mvn test -Pdocker                                            <- inside the container (from Step 09)
+
+     RULE          : playwright.version must equal the Docker image tag mcr.microsoft.com/playwright/java:v<version>-noble
+
+     Author        : Aniket Pathare | aniket.pathare@goverment.ie
+     Date Created  : 15-09-2026
+     =================================================================================================================================== -->
+
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ============================================================
+         PROJECT COORDINATES
+         ============================================================ -->
+    <groupId>ie.gov.biss</groupId>
+    <artifactId>Biss_Automation_Playwright</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>BISS BDD Cucumber Automation Framework - Playwright</name>
+
+    <!-- ============================================================
+         PROPERTIES - bump versions here only
+         ============================================================ -->
+    <properties>
+        <java.version>17</java.version>
+        <maven.compiler.release>${java.version}</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <playwright.version>1.61.0</playwright.version>
+        <cucumber.version>7.15.0</cucumber.version>
+        <junit.version>5.10.2</junit.version>
+        <junit.platform.version>1.10.2</junit.platform.version>
+        <poi.version>5.2.5</poi.version>
+        <hikari.version>5.1.0</hikari.version>
+        <ojdbc.version>21.9.0.0</ojdbc.version>
+        <logback.version>1.4.14</logback.version>
+        <slf4j.version>2.0.12</slf4j.version>
+        <log4j.version>2.23.1</log4j.version>
+        <javax.mail.version>1.6.2</javax.mail.version>
+
+        <surefire.version>3.2.5</surefire.version>
+        <compiler.version>3.12.1</compiler.version>
+        <exec.plugin.version>3.1.0</exec.plugin.version>
+
+        <!-- Framework defaults - overridden by profiles, -D on the command line, or BISS_ env vars (from Step 02) -->
+        <env>dev</env>
+        <browser>CHROME</browser>
+        <headless>false</headless>
+        <retry.count>1</retry.count>
+        <bamboo.buildNumber>LOCAL</bamboo.buildNumber>
+        <bamboo.buildPlanKey>BISS-PW</bamboo.buildPlanKey>
+        <bamboo.agentName>Local Machine</bamboo.agentName>
+    </properties>
+
+    <!-- ============================================================
+         DEPENDENCIES
+         ============================================================ -->
+    <dependencies>
+
+        <!-- Playwright for Java -->
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+            <version>${playwright.version}</version>
+        </dependency>
+
+        <!-- Cucumber BDD -->
+        <dependency>
+            <groupId>io.cucumber</groupId>
+            <artifactId>cucumber-java</artifactId>
+            <version>${cucumber.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.cucumber</groupId>
+            <artifactId>cucumber-core</artifactId>
+            <version>${cucumber.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.cucumber</groupId>
+            <artifactId>cucumber-junit-platform-engine</artifactId>
+            <version>${cucumber.version}</version>
+        </dependency>
+
+        <!-- JUnit 5 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-suite</artifactId>
+            <version>${junit.platform.version}</version>
+        </dependency>
+
+        <!-- Apache POI - Excel test data + Word evidence reports -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+
+        <!-- Database layer (DBRouter) -->
+        <dependency>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc11</artifactId>
+            <version>${ojdbc.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>${hikari.version}</version>
+        </dependency>
+
+        <!-- Email summary -->
+        <dependency>
+            <groupId>com.sun.mail</groupId>
+            <artifactId>javax.mail</artifactId>
+            <version>${javax.mail.version}</version>
+        </dependency>
+
+        <!-- Logging: SLF4J + Logback, with bridges so JUL (java.util.logging) and Log4j2 end up in Logback -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>${logback.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>jul-to-slf4j</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-to-slf4j</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+
+    </dependencies>
+
+    <!-- ============================================================
+         BUILD
+         ============================================================ -->
+    <build>
+        <plugins>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${compiler.version}</version>
+                <configuration>
+                    <release>${java.version}</release>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surefire.version}</version>
+                <configuration>
+                    <!-- Framework-wide defaults only. Everything else (testcase.ids, environment, db.bootstrap,
+                         trace.mode, app.url ...) is passed with -D on the mvn command line (Surefire forwards
+                         those) or with BISS_ environment variables. -->
+                    <systemPropertyVariables>
+                        <env>${env}</env>
+                        <browser>${browser}</browser>
+                        <headless>${headless}</headless>
+                        <retry.count>${retry.count}</retry.count>
+                        <bamboo.buildNumber>${bamboo.buildNumber}</bamboo.buildNumber>
+                        <bamboo.buildPlanKey>${bamboo.buildPlanKey}</bamboo.buildPlanKey>
+                        <bamboo.agentName>${bamboo.agentName}</bamboo.agentName>
+                    </systemPropertyVariables>
+
+                    <!-- Single entry point, exactly like the Selenium framework.
+                         -Dtest=SomeClass overrides this for one-off classes such as PlaywrightSmokeTest. -->
+                    <includes>
+                        <include>**/TestRunner.java</include>
+                    </includes>
+
+                    <!-- Fresh JVM per run - no static state leaks between runs -->
+                    <forkCount>1</forkCount>
+                    <reuseForks>false</reuseForks>
+                    <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
+                </configuration>
+            </plugin>
+
+            <!-- Playwright CLI:  .\mvnw.cmd exec:java "-Dexec.args=install chromium" -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>${exec.plugin.version}</version>
+                <configuration>
+                    <mainClass>com.microsoft.playwright.CLI</mainClass>
+                    <classpathScope>compile</classpathScope>
+                </configuration>
+            </plugin>
+
+        </plugins>
+    </build>
+
+    <!-- ============================================================
+         PROFILES
+         ============================================================ -->
+    <profiles>
+
+        <!-- Tag profiles -->
+        <profile>
+            <id>smoke</id>
+            <properties>
+                <cucumber.filter.tags>@smoke</cucumber.filter.tags>
+            </properties>
+        </profile>
+        <profile>
+            <id>regression</id>
+            <properties>
+                <cucumber.filter.tags>@regression</cucumber.filter.tags>
+                <retry.count>2</retry.count>
+            </properties>
+        </profile>
+        <profile>
+            <id>full</id>
+            <properties>
+                <cucumber.filter.tags>not @wip</cucumber.filter.tags>
+                <retry.count>2</retry.count>
+            </properties>
+        </profile>
+
+        <!-- Environment profiles -->
+        <profile>
+            <id>dev</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <env>dev</env>
+                <headless>false</headless>
+            </properties>
+        </profile>
+        <profile>
+            <id>staging</id>
+            <properties>
+                <env>staging</env>
+                <headless>true</headless>
+                <retry.count>2</retry.count>
+            </properties>
+        </profile>
+
+        <!-- Container profile (used by the Docker entrypoint from Step 09) -->
+        <profile>
+            <id>docker</id>
+            <properties>
+                <env>docker</env>
+                <headless>true</headless>
+            </properties>
+        </profile>
+
+    </profiles>
+
+</project>
