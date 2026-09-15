@@ -153,7 +153,7 @@ public class DBRouter
                                 "FROM vwbs_application ap_ri " +
                                 "WHERE ap_ri.app_mde_code = 1 " +
                                 "AND ap_ri.app_year = ? " +
-                                "AND ap_ri.app_herd_no LIKE 'B%' " +
+                               " AND REGEXP_LIKE(ap_ri.app_herd_no, '^[D-Z]')" +
                                 "AND EXISTS ( " +
                                 "    SELECT 1 " +
                                 "    FROM tdbs_application_land x " +
@@ -525,6 +525,216 @@ public class DBRouter
                                 "AND SUBSTR(curr.app_herd_no, 1, 1) > 'A' " +
                                 "AND ROWNUM <= ? " +
                                 "ORDER BY curr.app_herd_no ASC";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // =========================================================================================================
+            // STAFF PORTAL QUERIES - migrated from the legacy com.pages.DatabaseQueriesPage
+            // ---------------------------------------------------------------------------------------------------------
+            // Consumed by the @staffdata hook in Hooks.java, which fills the STAFF_* pools these labels feed.
+            //
+            // MIGRATION NOTES
+            //   - Legacy built its SQL by string-concatenating a row count, wrote the result to .xls, then read it
+            //     back by row index. These cases return rows directly - no Excel round-trip, no row references.
+            //   - Legacy hardcoded the scheme year (2023 / 2024 / 2025) inside each query. Year is now a bind
+            //     parameter, matching the convention of every case above.
+            //   - Legacy used "fetch first N rows only"; ROWNUM is used here for consistency with this class.
+            //
+            // LEGACY DEFECT NOT CARRIED FORWARD
+            //   getQueryForSubmittedHerd() and getQueryForSubmittedHerdWithSimOptedIn() both contained:
+            //       app_herd_no like '[A-Z]%'
+            //   That is SQL Server bracket syntax. Oracle LIKE has no character classes, so Oracle compares against
+            //   the literal string "[A-Z]%" and the predicate is NEVER true. It sat inside NOT EXISTS(...), which
+            //   made the whole clause a no-op - the filter never filtered anything.
+            //   These cases OMIT it, so the result set matches what the legacy actually returned at runtime rather
+            //   than what it appeared to intend.
+            //   If the intent was real, the Oracle form is REGEXP_LIKE(app_herd_no, '^[A-Z]') - but adding it
+            //   CHANGES the returned data and the affected packs must be re-baselined.
+            // =========================================================================================================
+
+
+            // submitted -> STAFF_SUBMITTED_HERDS | reads APP_HERD_NO
+            case "GET SUBMITTED HERDS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT h.app_herd_no " +
+                                "  FROM vwbs_application_herd h " +
+                                "  JOIN vwbs_application_land l " +
+                                "    ON l.app_herd_no = h.app_herd_no " +
+                                "   AND l.app_year = h.app_year " +
+                                "   AND l.app_mde_code = 4 " +
+                                "  WHERE h.mde_abbrev = 'I' " +
+                                "    AND h.app_year = ? " +
+                                "    AND REGEXP_LIKE(h.app_herd_no, '^[A-Z]') " +
+                                "  GROUP BY h.app_herd_no " +
+                                "  HAVING COUNT(DISTINCT l.parcel_id) >= 2 " +
+                                "  ORDER BY DBMS_RANDOM.VALUE " +
+                                ") WHERE ROWNUM <= ?";
+
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // penalty -> STAFF_PENALTY_HERDS | reads APP_HERD_NO
+            case "GET SUBMITTED HERDS WITH PENALTY":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM vwbs_application_penalty " +
+                                "  WHERE penalty_type = 'APPLICATION' " +
+                                "  AND   app_year     = ? " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // noamend -> STAFF_NOAMEND_HERDS | reads APP_HERD_NO
+            case "GET SUBMITTED HERDS WITH NO AMENDMENT":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM tdbs_application " +
+                                "  WHERE app_year      = ? " +
+                                "  AND   app_mde_code  = 4 " +
+                                "  AND   app_dct_code != 7 " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // admincheck -> STAFF_ADMINCHECK_HERDS | reads APP_HERD_NO
+            case "GET HERDS WITH ADMIN CHECK NOT STARTED":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT ta.app_herd_no " +
+                                "  FROM tdbs_application ta " +
+                                "  LEFT JOIN tdbs_admin_check tac ON tac.adc_app_id = ta.app_id " +
+                                "  WHERE ta.app_mde_code = 4 " +
+                                "  AND   ta.app_year     = ? " +
+                                "  AND   tac.adc_app_id IS NULL " +
+                                "  AND   SUBSTR(ta.app_herd_no, 1, 1) > 'A' " +
+                                "  ORDER BY ta.app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // queryletter -> STAFF_QUERYLETTER_HERDS | reads APP_HERD_NO
+            case "GET HERDS WITH QUERY LETTER NOT STARTED":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT DISTINCT app_year, app_herd_no " +
+                                "  FROM tdbs_system_note, tdbs_application " +
+                                "  WHERE snt_app_id = app_id " +
+                                "  AND   app_year   = ? " +
+                                "  AND   snt_action_subtype != 'QUERY_LETTER_SUBMITTED' " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // simopted -> STAFF_SIMOPTED_HERDS | reads APP_HERD_NO
+            // (legacy read APH_HERD_NO — projecting APP_HERD_NO to match the new hook)
+            case "GET SUBMITTED HERDS WITH SIM OPTED IN":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM vwbs_application_herd " +
+                                "  WHERE mde_abbrev = 'I' " +
+                                "  AND   app_year   = ? " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
+                                "  AND aph_app_id IN ( " +
+                                "      SELECT apf_app_id FROM tdbs_application_flag " +
+                                "      WHERE apf_flag_value = 'Y' AND apf_flg_code = 7 ) " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // payments -> STAFF_PAYMENT_HERDS | reads PHD_HERD_NO
+            // (aliased join from legacy dummy-code, which projects PHD_HERD_NO)
+            case "GET HERDS WITH PAYMENTS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT phd_herd_no FROM ( " +
+                                "  SELECT ta.app_herd_no AS phd_herd_no " +
+                                "  FROM tdbs_application ta " +
+                                "  LEFT JOIN tdbs_payment_header tph ON tph.phd_app_id = ta.app_id " +
+                                "  WHERE ta.app_year      = ? " +
+                                "  AND   tph.phd_ptp_code = 9 " +
+                                "  ORDER BY ta.app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // parcels -> STAFF_PARCELS | reads LPS_PARCEL_LABEL (no year in legacy)
+            case "GET LPIS PARCELS":
+            {
+                requireParamCountBetween(key, params, 1, 1);
+                int maxRows = parseInt(params[0], "limit");
+                sql =
+                        "SELECT lps_parcel_label FROM ( " +
+                                "  SELECT DISTINCT twp.lps_parcel_label " +
+                                "  FROM vwlp_parcel twp " +
+                                "  JOIN tddp_scheme_land_unit tslu ON tslu.slu_lnu_id = twp.lps_parcel_id " +
+                                ") WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ maxRows };
+                break;
+            }
+
+            // refs -> STAFF_REFERENCES | reads APP_HERD_NO (TRN: substr < 'A', inverse guard)
+            case "GET REFERENCE NUMBERS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
+                sql =
+                        "SELECT app_herd_no FROM ( " +
+                                "  SELECT app_herd_no " +
+                                "  FROM vwbs_application_herd " +
+                                "  WHERE mde_abbrev = 'I' " +
+                                "  AND   app_year   = ? " +
+                                "  AND   SUBSTR(app_herd_no, 1, 1) < 'A' " +
+                                "  ORDER BY app_herd_no " +
+                                ") WHERE ROWNUM <= ?";
                 jdbcParams = new Object[]{ year, maxRows };
                 break;
             }
