@@ -1,218 +1,318 @@
 // ===================================================================================================================================
-// File          : ConfigManager.java
-// Package       : utilities
-// Description   : Centralised configuration manager for the BISS automation framework.
-//                 Loads a base application.properties file and overlays an environment-specific
-//                 profile file (application-dev.properties, application-docker.properties, etc.).
+// File          : PlaywrightFactory.java
+// Package       : commonFunctions
+// Description   : Owns the Playwright object graph for the BISS automation framework.
+//                   Playwright  ->  Browser  ->  BrowserContext  ->  Page
+//                 One graph per thread (ThreadLocal) because Playwright objects are NOT thread-safe.
+//                 Replaces the Selenium WebDriver / WebDriverWait ThreadLocals that lived in CommonFunctions.
 //
-// Profile resolution order (highest wins):
-//   1. JVM -D system properties                 (-Dexplicit.wait.seconds=40)
-//   2. OS environment variables with BISS_ prefix (BISS_EXPLICIT_WAIT_SECONDS=40)   <- NEW for Docker
-//   3. application-<env>.properties
-//   4. application.properties (base defaults)
+//                 Container-first design:
+//                   - headless by default under the docker profile, fixed 1920x1080 viewport
+//                   - no driver binaries, no chromedriver.exe, no taskkill / pkill
+//                   - browsers come from the image (PLAYWRIGHT_BROWSERS_PATH), never downloaded at run time
+//                   - every BrowserContext is already isolated (equivalent of Chrome --incognito + temp profile)
+//                   - Playwright trace (.zip) recorded per test case and kept on failure for offline debugging
 //
-// Environment variable naming rule : prefix BISS_, upper-case, dots and dashes become underscores
-//   explicit.wait.seconds  ->  BISS_EXPLICIT_WAIT_SECONDS
-//   app.url                ->  BISS_APP_URL
-//
-// Active profile : -Denv=<profile>  or  BISS_ENV=<profile>  (default "dev")
-// Config folder  : -Dconfig.path=<folder> or BISS_CONFIG_PATH (default src/test/resources/config/)
+// Config keys (application*.properties, -D or BISS_ env var):
+//   headless                       true | false
+//   browser.channel                blank (bundled Chromium) | chrome | msedge  (set = no browser download)
+//   playwright.skip.browser.download   true = never download browsers (laptops behind the web gateway)
+//   viewport.width / viewport.height   default 1920 / 1080
+//   browser.maximize               true = headed window uses full screen size (local runs only)
+//   explicit.wait.seconds          default action timeout
+//   page.load.timeout.seconds      default navigation timeout
+//   playwright.slowmo.ms           slow motion for demos (default 0)
+//   ignore.https.errors            accept self-signed / internal CA certificates
+//   browser.proxy.server           e.g. http://proxy.agriculture.gov.ie:8080 (blank = none)
+//   browser.proxy.bypass           e.g. *.agriculture.gov.ie
+//   browser.locale / browser.timezone   default en-IE / Europe/Dublin
+//   trace.mode                     off | on | retain-on-failure
+//   report.traces.path             default Test_Report/traces
+//   report.downloads.path          default Test_Report/downloads
 //
 // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-// Date Created  : 10-03-2026
-// Updated       : 15-09-2026 - Environment variable layer and configurable folder for container execution
+// Date Created  : 15-09-2026
 // ===================================================================================================================================
 
-package utilities;
+package commonFunctions;
 
-import java.io.FileInputStream;
-import java.io.InputStream;
+import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.Tracing;
+import com.microsoft.playwright.options.Proxy;
+import utilities.ConfigManager;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
-import java.util.Properties;
 import java.util.logging.Logger;
 
-public class ConfigManager
+public final class PlaywrightFactory
 {
-    private static final Logger log = Logger.getLogger(ConfigManager.class.getName());
+    private static final Logger log = Logger.getLogger(PlaywrightFactory.class.getName());
 
-    private static final String iEnvPrefix = "BISS_";
+    private static final ThreadLocal<Playwright>     iPlaywrightHolder = new ThreadLocal<>();
+    private static final ThreadLocal<Browser>        iBrowserHolder    = new ThreadLocal<>();
+    private static final ThreadLocal<BrowserContext> iContextHolder    = new ThreadLocal<>();
+    private static final ThreadLocal<Page>           iPageHolder       = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean>        iTracingHolder    = ThreadLocal.withInitial(() -> Boolean.FALSE);
 
-    private static final String iConfigBasePath = resolveBootstrapValue("config.path", "src/test/resources/config/");
-    private static final String iBaseFileName   = "application.properties";
+    private static final DateTimeFormatter iFileTimestamp = DateTimeFormatter.ofPattern("dd_MM_yyyy_HH_mm_ss");
 
-    private static final Properties iProperties = new Properties();
-
-    private static final String iActiveProfile = resolveBootstrapValue("env", "dev").trim().toLowerCase(Locale.ROOT);
-
-    static
-    {
-        loadBaseProperties();
-        loadProfileProperties();
-        log.info("[ConfigManager] Loaded | Profile='" + iActiveProfile + "' | Folder='" + iConfigBasePath
-                + "' | Total keys=" + iProperties.size());
-    }
-
-    private ConfigManager() {}
+    private PlaywrightFactory() {}
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : toEnvName
-    // Description   : Converts a property key into its BISS_ environment variable name.
-    // Parameters    : pKey (String) - property key e.g. explicit.wait.seconds
+    // Function Name : start
+    // Description   : Creates Playwright, launches the requested browser, opens an isolated context and a page.
+    //                 Any graph already bound to this thread is closed first (safe re-entry per test case).
+    // Parameters    : pBrowserType (String) - CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
     // Date Created  : 15-09-2026
     // ***************************************************************************************************************************************************************************************
-    public static String toEnvName(String pKey)
+    public static Page start(String pBrowserType)
     {
-        return iEnvPrefix + pKey.trim().toUpperCase(Locale.ROOT).replace('.', '_').replace('-', '_');
-    }
-
-    private static String resolveBootstrapValue(String pKey, String pDefault)
-    {
-        String iValue = System.getProperty(pKey);
-        if (iValue != null && !iValue.trim().isEmpty()) { return iValue.trim(); }
-
-        iValue = System.getenv(toEnvName(pKey));
-        if (iValue != null && !iValue.trim().isEmpty()) { return iValue.trim(); }
-
-        return pDefault;
-    }
-
-    private static void loadBaseProperties()
-    {
-        String iPath = iConfigBasePath + iBaseFileName;
-
-        try (InputStream iStream = new FileInputStream(iPath))
+        if (iPageHolder.get() != null)
         {
-            iProperties.load(iStream);
-            log.info("[ConfigManager] Base config loaded from : " + iPath);
+            log.warning("[PlaywrightFactory] A browser is already open on this thread. Closing it before starting a new one.");
+            stop(false, "stale");
+        }
+
+        String  iBrowserType = pBrowserType == null ? "CHROME" : pBrowserType.trim().toUpperCase(Locale.ROOT);
+        boolean iHeadless    = ConfigManager.getBool("headless", false);
+        boolean iMaximize    = !iHeadless && ConfigManager.getBool("browser.maximize", false);
+        String  iChannel     = ConfigManager.getOrDefault("browser.channel", "");
+        double  iSlowMo      = ConfigManager.getInt("playwright.slowmo.ms", 0);
+
+        // Installed Chrome/Edge (browser.channel) or an explicit flag means Playwright must not download its own
+        // Chromium. The department web gateway blocks cdn.playwright.dev (HTTP 407), so this avoids a hard failure.
+        java.util.Map<String, String> iDriverEnv = new java.util.HashMap<>(System.getenv());
+        if (!iChannel.isEmpty() || "EDGE".equals(iBrowserType)
+                || ConfigManager.getBool("playwright.skip.browser.download", false))
+        {
+            iDriverEnv.put("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
+        }
+
+        Playwright iPlaywright = Playwright.create(new Playwright.CreateOptions().setEnv(iDriverEnv));
+        iPlaywrightHolder.set(iPlaywright);
+
+        BrowserType.LaunchOptions iLaunch = new BrowserType.LaunchOptions()
+                .setHeadless(iHeadless)
+                .setSlowMo(iSlowMo);
+
+        String iProxyServer = ConfigManager.getOrDefault("browser.proxy.server", "");
+        if (!iProxyServer.isEmpty())
+        {
+            Proxy iProxy = new Proxy(iProxyServer);
+            String iBypass = ConfigManager.getOrDefault("browser.proxy.bypass", "");
+            if (!iBypass.isEmpty()) { iProxy.setBypass(iBypass); }
+            iLaunch.setProxy(iProxy);
+        }
+
+        BrowserType iType;
+        List<String> iArgs = new ArrayList<>();
+
+        switch (iBrowserType)
+        {
+            case "CHROME":
+            case "CHROMIUM":
+                iType = iPlaywright.chromium();
+                if (!iChannel.isEmpty()) { iLaunch.setChannel(iChannel); }
+                // Containers often ship a tiny /dev/shm - this keeps Chromium stable even without --ipc=host
+                iArgs.add("--disable-dev-shm-usage");
+                if (iMaximize) { iArgs.add("--start-maximized"); }
+                break;
+
+            case "EDGE":
+                // Edge is NOT inside the official Playwright image. Use locally or build a custom image.
+                iType = iPlaywright.chromium();
+                iLaunch.setChannel("msedge");
+                if (iMaximize) { iArgs.add("--start-maximized"); }
+                break;
+
+            case "FIREFOX":
+                iType = iPlaywright.firefox();
+                break;
+
+            case "WEBKIT":
+            case "SAFARI":
+                iType = iPlaywright.webkit();
+                break;
+
+            default:
+                closeQuietly();
+                throw new RuntimeException("Unsupported browser type : '" + pBrowserType
+                        + "'. Supported values: CHROME, CHROMIUM, EDGE, FIREFOX, WEBKIT.");
+        }
+
+        if (!iArgs.isEmpty()) { iLaunch.setArgs(iArgs); }
+
+        Browser iBrowser = iType.launch(iLaunch);
+        iBrowserHolder.set(iBrowser);
+
+        Browser.NewContextOptions iContextOptions = new Browser.NewContextOptions()
+                .setIgnoreHTTPSErrors(ConfigManager.getBool("ignore.https.errors", false))
+                .setAcceptDownloads(true)
+                .setLocale(ConfigManager.getOrDefault("browser.locale", "en-IE"))
+                .setTimezoneId(ConfigManager.getOrDefault("browser.timezone", "Europe/Dublin"));
+
+        if (iMaximize)
+        {
+            iContextOptions.setViewportSize(null);
+        }
+        else
+        {
+            iContextOptions.setViewportSize(ConfigManager.getInt("viewport.width", 1920),
+                                            ConfigManager.getInt("viewport.height", 1080));
+        }
+
+        BrowserContext iContext = iBrowser.newContext(iContextOptions);
+        iContext.setDefaultTimeout(ConfigManager.getInt("explicit.wait.seconds", 30) * 1000d);
+        iContext.setDefaultNavigationTimeout(ConfigManager.getInt("page.load.timeout.seconds", 60) * 1000d);
+        iContextHolder.set(iContext);
+
+        startTracingIfEnabled(iContext);
+
+        Page iPage = iContext.newPage();
+        iPageHolder.set(iPage);
+
+        log.info("[PlaywrightFactory] Started | Browser=" + iBrowserType
+                + (iChannel.isEmpty() ? "" : " | Channel=" + iChannel)
+                + " | Version=" + iBrowser.version()
+                + " | Headless=" + iHeadless
+                + " | TraceMode=" + traceMode());
+
+        return iPage;
+    }
+
+    private static String traceMode()
+    {
+        return ConfigManager.getOrDefault("trace.mode", "retain-on-failure").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static void startTracingIfEnabled(BrowserContext pContext)
+    {
+        if ("off".equals(traceMode()))
+        {
+            iTracingHolder.set(Boolean.FALSE);
+            return;
+        }
+
+        try
+        {
+            pContext.tracing().start(new Tracing.StartOptions()
+                    .setScreenshots(true)
+                    .setSnapshots(true)
+                    .setSources(false));
+            iTracingHolder.set(Boolean.TRUE);
         }
         catch (Exception iException)
         {
-            throw new RuntimeException("[ConfigManager] Failed to load base config from : '"
-                    + iPath + "' | Reason : " + iException.getMessage(), iException);
-        }
-    }
-
-    private static void loadProfileProperties()
-    {
-        String iPath = iConfigBasePath + "application-" + iActiveProfile + ".properties";
-
-        try (InputStream iStream = new FileInputStream(iPath))
-        {
-            Properties iProfileProps = new Properties();
-            iProfileProps.load(iStream);
-            iProperties.putAll(iProfileProps);
-            log.info("[ConfigManager] Profile config loaded from : " + iPath + " | Keys overridden=" + iProfileProps.size());
-        }
-        catch (Exception iException)
-        {
-            log.warning("[ConfigManager] Profile config not found for env='" + iActiveProfile
-                    + "'. Using base defaults only. Path attempted: " + iPath);
+            iTracingHolder.set(Boolean.FALSE);
+            log.warning("[PlaywrightFactory] Tracing could not start : " + iException.getMessage());
         }
     }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : get
-    // Description   : Returns a String config value. -D system property wins, then BISS_ environment variable,
-    //                 then the profile file, then the base file.
-    // Parameters    : pKey (String) - property key
+    // Function Name : stop
+    // Description   : Stops tracing (saving the zip when required), then closes page, context, browser and Playwright.
+    //                 Never throws - a teardown problem must not hide the real test result.
+    // Parameters    : pTestFailed (boolean) - true keeps the trace when trace.mode=retain-on-failure
+    //                 pTraceName  (String)  - logical name used in the trace file name (usually the test case ID)
+    // Returns       : String - absolute path of the saved trace zip, or empty string when no trace was kept
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 10-03-2026 | Updated: 15-09-2026 (environment variable layer)
+    // Date Created  : 15-09-2026
     // ***************************************************************************************************************************************************************************************
-    public static String get(String pKey)
+    public static String stop(boolean pTestFailed, String pTraceName)
     {
-        if (pKey == null || pKey.trim().isEmpty())
-        {
-            throw new RuntimeException("[ConfigManager] Key cannot be null or blank.");
-        }
+        String         iTracePath = "";
+        BrowserContext iContext   = iContextHolder.get();
 
-        String iJvmValue = System.getProperty(pKey.trim());
-        if (iJvmValue != null && !iJvmValue.trim().isEmpty())
-        {
-            return iJvmValue.trim();
-        }
-
-        String iEnvValue = System.getenv(toEnvName(pKey));
-        if (iEnvValue != null && !iEnvValue.trim().isEmpty())
-        {
-            return iEnvValue.trim();
-        }
-
-        String iValue = iProperties.getProperty(pKey.trim());
-
-        if (iValue == null || iValue.trim().isEmpty())
-        {
-            throw new RuntimeException("[ConfigManager] Key not found in config : '" + pKey
-                    + "' | Active profile : '" + iActiveProfile + "'");
-        }
-
-        return iValue.trim();
-    }
-
-    public static String getOrDefault(String pKey, String pDefault)
-    {
         try
         {
-            return get(pKey);
+            if (iContext != null && Boolean.TRUE.equals(iTracingHolder.get()))
+            {
+                String  iMode = traceMode();
+                boolean iKeep = "on".equals(iMode) || ("retain-on-failure".equals(iMode) && pTestFailed);
+
+                if (iKeep)
+                {
+                    File iDir = new File(ConfigManager.getOrDefault("report.traces.path", "Test_Report/traces"));
+                    if (!iDir.exists()) { iDir.mkdirs(); }
+
+                    String iSafeName = (pTraceName == null || pTraceName.isBlank() ? "trace" : pTraceName)
+                            .trim().replaceAll("[^A-Za-z0-9_-]+", "_");
+                    Path iPath = Paths.get(iDir.getAbsolutePath(),
+                            iSafeName + "_" + LocalDateTime.now().format(iFileTimestamp) + ".zip");
+
+                    iContext.tracing().stop(new Tracing.StopOptions().setPath(iPath));
+                    iTracePath = iPath.toString();
+                    log.info("[PlaywrightFactory] Trace saved : " + iTracePath
+                            + "  (drag the zip onto https://trace.playwright.dev to replay it)");
+                }
+                else
+                {
+                    iContext.tracing().stop();
+                }
+            }
         }
         catch (Exception iException)
         {
-            return pDefault;
+            log.warning("[PlaywrightFactory] Trace stop failed : " + iException.getMessage());
         }
+        finally
+        {
+            closeQuietly();
+        }
+
+        return iTracePath;
     }
 
-    public static int getInt(String pKey, int pDefault)
+    private static void closeQuietly()
     {
-        try
-        {
-            return Integer.parseInt(get(pKey));
-        }
-        catch (Exception iException)
-        {
-            return pDefault;
-        }
+        try { if (iContextHolder.get() != null)    { iContextHolder.get().close(); } }    catch (Exception iIgnored) { }
+        try { if (iBrowserHolder.get() != null)    { iBrowserHolder.get().close(); } }    catch (Exception iIgnored) { }
+        try { if (iPlaywrightHolder.get() != null) { iPlaywrightHolder.get().close(); } } catch (Exception iIgnored) { }
+
+        iPageHolder.remove();
+        iContextHolder.remove();
+        iBrowserHolder.remove();
+        iPlaywrightHolder.remove();
+        iTracingHolder.remove();
     }
 
-    public static boolean getBool(String pKey, boolean pDefault)
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------------------------------------------------------------
+    public static Page getPage()                { return iPageHolder.get(); }
+    public static BrowserContext getContext()   { return iContextHolder.get(); }
+    public static Browser getBrowser()          { return iBrowserHolder.get(); }
+
+    public static String getBrowserVersion()
     {
-        try
-        {
-            return Boolean.parseBoolean(get(pKey));
-        }
-        catch (Exception iException)
-        {
-            return pDefault;
-        }
+        Browser iBrowser = iBrowserHolder.get();
+        return iBrowser == null ? "-" : iBrowser.browserType().name() + " " + iBrowser.version();
     }
 
-    public static long getLong(String pKey, long pDefault)
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : switchToPage
+    // Description   : Makes another tab/popup of the current context the active page for iAction().
+    //                 Replacement for driver.switchTo().window(handle).
+    // Parameters    : pPage (Page) - page returned by context.waitForPage(...) or page.waitForPopup(...)
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void switchToPage(Page pPage)
     {
-        try
-        {
-            return Long.parseLong(get(pKey));
-        }
-        catch (Exception iException)
-        {
-            return pDefault;
-        }
-    }
-
-    public static String getActiveProfile()
-    {
-        return iActiveProfile;
-    }
-
-    public static void printAll()
-    {
-        log.info("[ConfigManager] ===== Active Configuration (Profile: " + iActiveProfile + ") =====");
-        iProperties.stringPropertyNames().stream().sorted().forEach(iKey ->
-        {
-            String iLower = iKey.toLowerCase(Locale.ROOT);
-            String iValue = iLower.contains("password") || iLower.contains("secret") || iLower.contains("token")
-                    ? "****MASKED****"
-                    : getOrDefault(iKey, "");
-
-            log.info("[ConfigManager]   " + iKey + " = " + iValue);
-        });
+        if (pPage == null) { throw new RuntimeException("switchToPage: page cannot be null."); }
+        pPage.bringToFront();
+        iPageHolder.set(pPage);
     }
 }
