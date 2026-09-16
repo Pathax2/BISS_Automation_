@@ -19,6 +19,8 @@
 // Updated       : 16-09-2026 - JavaScript click (JSCLICK action, click.strategy, jsClick) and Selenium-style executeScript()
 // Updated       : 16-09-2026 - LIST/mat-select: pinned by id, opened via its trigger div, panel scoped by aria-controls
 //                              (works for searchable lib-biss-select-search dropdowns and popover panels), selection verified
+// Updated       : 16-09-2026 - LIST/mat-select: waits for a disabled dropdown (e.g. Townland until County has loaded),
+//                              step-by-step search (full text, then the name before " - ", then the code, then no filter)
 // ===================================================================================================================================
 
 package commonFunctions;
@@ -919,7 +921,8 @@ public class CommonFunctions
     //                   1. Open it by clicking the .mat-mdc-select-trigger div (the element Angular listens on).
     //                      Fallbacks: JavaScript click on the trigger div, then Enter key on the mat-select.
     //                   2. Find the panel through aria-controls (the id of THIS dropdown's panel).
-    //                   3. Searchable panel: type into the panel's search box first.
+    //                   1a. A disabled dropdown (Townland before County has loaded) is waited for first.
+    //                   3. Searchable panel: type into the panel's search box first (full text, name, code, then no filter).
     //                   4. Click the option (normal click, JavaScript click if blocked).
     //                   5. Check the dropdown now shows the chosen text.
     // Date Updated  : 16-09-2026 (Playwright - pinned by id, trigger-div open, panel by aria-controls, verification)
@@ -999,6 +1002,7 @@ public class CommonFunctions
             iText = pValue.trim();
         }
 
+        Locator iTarget;
         if (iIsSearchable)
         {
             Locator iSearchInput = iPanel.locator("css=input.mat-select-search-input:not(.mat-select-search-hidden)").first();
@@ -1008,20 +1012,18 @@ public class CommonFunctions
                         "css=mat-option.contains-mat-select-search input.mat-select-search-input:not(.mat-select-search-hidden)").first();
             }
 
-            typeIntoSelectSearch(iSearchInput, iText);
+            iTarget = searchForOption(pPage, iSearchInput, iOptions, iText);
+        }
+        else
+        {
+            iTarget = waitForOption(iOptions, iText, iListOptionTimeoutMs);
         }
 
-        Locator iTarget = iOptions.filter(new Locator.FilterOptions().setHasText(exactTextPattern(iText))).first();
-
-        try
+        if (iTarget == null)
         {
-            iTarget.waitFor(waitState(WaitForSelectorState.VISIBLE, iListOptionTimeoutMs));
-        }
-        catch (TimeoutError iNotFound)
-        {
-            String iAvailable = String.join(" | ", iOptions.allInnerTexts());
+            String iAvailable = describeOptions(iOptions);
             pPage.keyboard().press("Escape");
-            throw new RuntimeException("MAT-SELECT | No option found matching: '" + iText + "' in " + iName + "\nAvailable: " + iAvailable, iNotFound);
+            throw new RuntimeException("MAT-SELECT | No option found matching: '" + iText + "' in " + iName + "\nAvailable: " + iAvailable);
         }
 
         scrollIntoView(iTarget);
@@ -1068,6 +1070,8 @@ public class CommonFunctions
             log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | Panel already open for " + pName + ".");
             return;
         }
+
+        waitMatSelectEnabled(pPage, pSelect, pName);
 
         Locator iTrigger = pSelect.locator("css=.mat-mdc-select-trigger, .mat-select-trigger").first();
         Locator iTarget  = iTrigger.count() > 0 ? iTrigger : pSelect;
@@ -1150,6 +1154,140 @@ public class CommonFunctions
             log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | Could not type into the search box, picking from the full list : "
                     + firstLine(iJsError.getMessage()));
         }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : searchForOption
+    // Description   : Searchable dropdowns (ngx-mat-select-search) do not all filter the same way - some match the whole
+    //                 label, some only the name, and some load the options from the server after typing.
+    //                 The search is tried with, in order:
+    //                   1. the full text              "Aghadachor - E22301"
+    //                   2. the part before " - "      "Aghadachor"
+    //                   3. the part after " - "       "E22301"
+    //                   4. an empty search box        (full list)
+    //                 and stops at the first search that shows the option. After each search it waits for the list to settle.
+    // Returns       : Locator of the visible option, or null when it never appears
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static Locator searchForOption(Page pPage, Locator pSearchInput, Locator pOptions, String pText)
+    {
+        List<String> iTerms = new ArrayList<>();
+        iTerms.add(pText);
+        int iDash = pText.indexOf(" - ");
+        if (iDash > 0)
+        {
+            iTerms.add(pText.substring(0, iDash).trim());
+            iTerms.add(pText.substring(iDash + 3).trim());
+        }
+        iTerms.add("");
+
+        double iPerTermTimeoutMs = Math.max(5000d, iListOptionTimeoutMs / iTerms.size());
+
+        for (String iTerm : iTerms)
+        {
+            typeIntoSelectSearch(pSearchInput, iTerm);
+            waitForOptionsToSettle(pPage, pOptions);
+            Locator iTarget = waitForOption(pOptions, pText, iPerTermTimeoutMs);
+            if (iTarget != null)
+            {
+                return iTarget;
+            }
+            log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | '" + pText + "' not shown after searching '" + iTerm + "'"
+                    + (iTerm.isEmpty() ? "." : " - trying the next search."));
+        }
+        return null;
+    }
+
+    // The search filter is often debounced (and townlands may come from the server), so the old, unfiltered list
+    // stays on screen for a moment after typing. Picking an option from it would click an element that is about to be
+    // removed. Wait until the option count has stopped changing (checked every 250 ms, at most 5 s).
+    private static void waitForOptionsToSettle(Page pPage, Locator pOptions)
+    {
+        sleepOnPage(pPage, 300);
+        int  iPrevious = -1;
+        int  iStable   = 0;
+        long iEnd      = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < iEnd && iStable < 2)
+        {
+            int iCount = pOptions.count();
+            iStable    = (iCount == iPrevious) ? iStable + 1 : 0;
+            iPrevious  = iCount;
+            sleepOnPage(pPage, 250);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : waitForOption
+    // Description   : Waits for an option whose text equals pText (case-insensitive, spaces ignored at both ends).
+    //                 If none appears, accepts a single option that CONTAINS pText (e.g. "Aghadachor - E22301 (Donegal)").
+    // Returns       : Locator of the visible option, or null
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static Locator waitForOption(Locator pOptions, String pText, double pTimeoutMs)
+    {
+        Locator iExact = pOptions.filter(new Locator.FilterOptions().setHasText(exactTextPattern(pText))).first();
+        try
+        {
+            iExact.waitFor(waitState(WaitForSelectorState.VISIBLE, pTimeoutMs));
+            return iExact;
+        }
+        catch (TimeoutError iNotExact)
+        {
+            Locator iContains = pOptions.filter(new Locator.FilterOptions().setHasText(
+                    Pattern.compile(escapeForJsRegex(pText.trim()), Pattern.CASE_INSENSITIVE)));
+            if (iContains.count() == 1)
+            {
+                log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | No exact match for '" + pText
+                        + "' - using the only option that contains it: '" + iContains.first().innerText().trim() + "'");
+                return iContains.first();
+            }
+            return null;
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : waitMatSelectEnabled
+    // Description   : A dependent dropdown (Townland after County) stays aria-disabled="true" until its options have loaded.
+    //                 Playwright will not click a disabled element, and Angular ignores clicks on it, so wait for it first.
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void waitMatSelectEnabled(Page pPage, Locator pSelect, String pName)
+    {
+        if (!isMatSelectDisabled(pSelect)) { return; }
+
+        log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | " + pName + " is disabled - waiting for it to be enabled.");
+        long iEnd = System.currentTimeMillis() + (long) iActionTimeoutMs;
+        while (System.currentTimeMillis() < iEnd)
+        {
+            sleepOnPage(pPage, iPollIntervalMs);
+            if (!isMatSelectDisabled(pSelect))
+            {
+                log.info("[" + getCurrentTimestamp() + "] MAT-SELECT | " + pName + " is now enabled.");
+                return;
+            }
+        }
+        throw new RuntimeException("MAT-SELECT | " + pName + " is still disabled after " + (long) iActionTimeoutMs
+                + " ms. A dropdown it depends on (e.g. County for Townland) may not have been set.");
+    }
+
+    private static boolean isMatSelectDisabled(Locator pSelect)
+    {
+        String iAriaDisabled = pSelect.getAttribute("aria-disabled");
+        String iClass        = pSelect.getAttribute("class");
+        return "true".equalsIgnoreCase(iAriaDisabled) || (iClass != null && iClass.contains("mat-mdc-select-disabled"));
+    }
+
+    // Townland lists can hold hundreds of entries - keep the error message readable
+    private static String describeOptions(Locator pOptions)
+    {
+        List<String> iTexts = new ArrayList<>();
+        for (String iText : pOptions.allInnerTexts())
+        {
+            String iClean = iText.replaceAll("\\s+", " ").trim();
+            if (!iClean.isEmpty()) { iTexts.add(iClean); }
+        }
+        if (iTexts.size() <= 30) { return String.join(" | ", iTexts); }
+        return String.join(" | ", iTexts.subList(0, 30)) + " | ... (" + iTexts.size() + " options in total)";
     }
 
     private static boolean isMatSelectOpen(Locator pSelect)
