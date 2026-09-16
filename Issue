@@ -1,241 +1,387 @@
 // ===================================================================================================================================
-// File          : UiHelpers.java
-// Package       : commonFunctions
-// Description   : Shared Playwright helpers that replace the ~111 direct getDriver() usages found in step definitions
-//                 (TC_03, TC_18, TC_13_ENTS, TC_03_ENTS, ...). One implementation instead of ten private copies.
+// File          : TestRunner.java
+// Package       : runner
+// Description   : Entry point for the BISS BDD Cucumber automation framework (Playwright edition).
+//                 Reads ExecutionControl.xlsx, runs the selected test cases one by one through the Cucumber CLI,
+//                 writes PASS/FAIL back and drives the reporting pipeline:
+//                   ReportManager -> HtmlReportGenerator -> JUnitXmlGenerator
 //
-//                 Selenium pattern                                        ->  UiHelpers call
-//                 ---------------------------------------------------------------------------------------------------
-//                 private isVisible(By, int) (10 copies)                  ->  UiHelpers.isVisible("iKey", 5)
-//                 getDriver().findElements(By.xpath(x))                   ->  UiHelpers.findAll("iKey")
-//                 row.findElement(By.xpath(".//td[...]"))                 ->  row.locator("xpath=.//td[...]")
-//                 ((JavascriptExecutor) d).executeScript("arguments[0].click()", e) -> UiHelpers.jsClick(locator)  or  iAction("JSCLICK", ...)
-//                 ((JavascriptExecutor) d).executeScript(anyScript, e, v)     -> CommonFunctions.executeScript(anyScript, locator, v)
-//                 JS removeAttribute('disabled') + value + dispatchEvent  ->  UiHelpers.setValueByJs(locator, "01/01/2026")
-//                 JS un-hide file input + sendKeys(path)                  ->  UiHelpers.uploadFile("iKey", "path")
-//                 getDriver().navigate().to(url) / back()                 ->  UiHelpers.navigateTo(url) / navigateBack()
-//                 getDriver().manage().deleteAllCookies()                 ->  UiHelpers.clearCookies()
-//                 Keys.chord(Keys.CONTROL, "a"), Keys.TAB                 ->  locator.press("ControlOrMeta+A"), press("Tab")
-//                 switchTo().window(handle)                               ->  UiHelpers.clickAndSwitchToNewTab("iKey")
-//                 switchTo().frame(...)                                   ->  UiHelpers.frame("css=iframe#map").locator(...)
-//                 switchTo().alert().accept()                             ->  UiHelpers.acceptNextDialog()   (before the click that opens it)
-//                 switchTo().alert().dismiss() / getText()                ->  UiHelpers.dismissNextDialog() / lastDialogText()
-//                 file in ~/Downloads                                     ->  UiHelpers.downloadByClicking("iKey")
-//                 Thread.sleep(n)                                         ->  delete it; use waitVisible / waitHidden
+// Selection (NEW - container friendly):
+//   -Dtestcase.ids=TC_01_Login,TC_04   or  BISS_TESTCASE_IDS=TC_01_Login,TC_04
+//       Runs exactly these IDs, ignoring the Execution=Y flag. Lets CI shard one test case per container
+//       without editing the Excel file inside the image.
+//   (not set)
+//       Original behaviour - every row with Execution=Y.
+//
+// Environment (NEW):
+//   -Denvironment=SIT  or  BISS_ENVIRONMENT=SIT  overrides the Environment column for every selected row.
+//
+// Excel write-back:
+//   -Dexecution.control.writeback=false  or  BISS_EXECUTION_CONTROL_WRITEBACK=false  skips the Status write
+//   (useful when the xlsx is baked into a read-only image layer).
 //
 // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-// Date Created  : 15-09-2026
+// Date Created  : 10-03-2026
+// Updated       : 29-03-2026 - Integrated CucumberStepListener + ReportManager.beginTestCase()
+// Updated       : 15-09-2026 - testcase.ids / environment override / optional write-back for Docker execution
+// Updated       : 16-09-2026 - Feature files found in any sub-folder depth, case-insensitive fallback (Selenium rule restored)
 // ===================================================================================================================================
 
-package commonFunctions;
+package runner;
 
-import com.microsoft.playwright.Download;
-import com.microsoft.playwright.FrameLocator;
-import com.microsoft.playwright.Locator;
-import com.microsoft.playwright.Page;
-import com.microsoft.playwright.TimeoutError;
-import com.microsoft.playwright.options.WaitForSelectorState;
+import io.cucumber.core.cli.Main;
+import org.junit.jupiter.api.Test;
+import reporting.HtmlReportGenerator;
+import reporting.JUnitXmlGenerator;
+import reporting.ReportManager;
 import utilities.ConfigManager;
-import utilities.ObjReader;
+import utilities.ExcelUtilities;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-public final class UiHelpers
+public class TestRunner
 {
-    private static final Logger log = Logger.getLogger(UiHelpers.class.getName());
+    private static final Logger log = Logger.getLogger(TestRunner.class.getName());
 
-    private UiHelpers() {}
+    public static final String iExecutionControlFilePath  = ConfigManager.getOrDefault("execution.control.path",  "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
+    public static final String iExecutionControlSheetName = ConfigManager.getOrDefault("execution.control.sheet", "Sheet1");
+    public static final String iFeatureDirectoryPath      = ConfigManager.getOrDefault("feature.directory.path",  "src/test/resources/Test_Cases/");
+    public static final String iStepDefinitionsGlue       = ConfigManager.getOrDefault("glue.package",            "stepdefinitions");
 
-    public static Page page()
+    private static final String iHtmlReportPath     = "target/cucumber-reports/";
+    private static final String iJsonReportPath     = "target/cucumber-json/";
+    private static final String iStepListenerPlugin = "reporting.CucumberStepListener";
+
+    @Test
+    public void executeSelectedTestCases()
     {
-        Page iPage = CommonFunctions.getPage();
-        if (iPage == null) { throw new RuntimeException("No active Playwright page on this thread."); }
-        return iPage;
+        runFrameworkExecution();
+    }
+
+    public static void main(String[] pArgs)
+    {
+        runFrameworkExecution();
+    }
+
+    private static Set<String> requestedTestCaseIds()
+    {
+        String iRaw = ConfigManager.getOrDefault("testcase.ids", "");
+        return Arrays.stream(iRaw.split("[,;\\s]+"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.toUpperCase(Locale.ROOT))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private static void runFrameworkExecution()
+    {
+        ExcelUtilities iExcel      = new ExcelUtilities(iExecutionControlFilePath);
+        int            iRowCount   = iExcel.getRowCount(iExecutionControlSheetName);
+        Set<String>    iRequested  = requestedTestCaseIds();
+        Set<String>    iMatched    = new LinkedHashSet<>();
+        String         iEnvOverride = ConfigManager.getOrDefault("environment", "");
+        boolean        iWriteBack  = ConfigManager.getBool("execution.control.writeback", true);
+        boolean        iAnyRun     = false;
+        int            iPassCount  = 0;
+        int            iFailCount  = 0;
+
+        if (!iRequested.isEmpty())
+        {
+            log.info("[RUNNER] testcase.ids supplied - Execution flag ignored. Requested: " + iRequested);
+        }
+
+        String iSuiteBrowser = ConfigManager.getOrDefault("browser", "CHROME");
+        ReportManager.startSuite(iEnvOverride, iSuiteBrowser);
+
+        for (int iRowNumber = 1; iRowNumber <= iRowCount; iRowNumber++)
+        {
+            String iTestCaseID   = "";
+            String iEnvironment  = "";
+            String iBrowser      = "";
+            String iDescription  = "";
+            String iTags         = "";
+            String iErrorMessage;
+            String iScreenshot;
+            long   iStartTime    = 0L;
+
+            try
+            {
+                iTestCaseID = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "TestCase_ID").trim();
+
+                if (iRequested.isEmpty())
+                {
+                    String iExecFlag = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Execution").trim();
+                    if (!iExecFlag.equalsIgnoreCase("Y"))
+                    {
+                        log.info("[RUNNER] Row " + iRowNumber + " skipped (Execution=" + iExecFlag + ")");
+                        continue;
+                    }
+                }
+                else if (!iRequested.contains(iTestCaseID.toUpperCase(Locale.ROOT)))
+                {
+                    continue;
+                }
+
+                iMatched.add(iTestCaseID.toUpperCase(Locale.ROOT));
+                iAnyRun = true;
+
+                iEnvironment = iEnvOverride.isEmpty()
+                        ? iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Environment").trim()
+                        : iEnvOverride;
+                iDescription = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Description").trim();
+
+                if (iTestCaseID.isEmpty())
+                {
+                    throw new RuntimeException("TestCase_ID is blank at row " + iRowNumber);
+                }
+
+                if (iEnvironment.isEmpty())
+                {
+                    throw new RuntimeException("Environment is blank for TestCase_ID : " + iTestCaseID);
+                }
+
+                iBrowser = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Browser", iSuiteBrowser);
+                iTags    = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Tags", "");
+
+                // -Dbrowser.force=true makes -Dbrowser win over the Excel column (containers only ship Chromium/Firefox/WebKit)
+                if (ConfigManager.getBool("browser.force", false))
+                {
+                    iBrowser = iSuiteBrowser;
+                }
+
+                String iFeaturePath = locateFeatureFile(iTestCaseID);
+
+                System.setProperty("testcase",    iTestCaseID);
+                System.setProperty("environment", iEnvironment);
+                System.setProperty("browser",     iBrowser);
+
+                printExecutionHeader(iTestCaseID, iEnvironment, iBrowser, iFeaturePath);
+                new File(iHtmlReportPath).mkdirs();
+                new File(iJsonReportPath).mkdirs();
+
+                ReportManager.beginTestCase(iTestCaseID, iDescription, iTags);
+
+                iStartTime = System.currentTimeMillis();
+
+                byte iExitCode = Main.run(
+                        new String[]{
+                                iFeaturePath,
+                                "--glue",   iStepDefinitionsGlue,
+                                "--plugin", "pretty",
+                                "--plugin", "summary",
+                                "--plugin", iStepListenerPlugin,
+                                "--plugin", "html:" + iHtmlReportPath + iTestCaseID + ".html",
+                                "--plugin", "json:" + iJsonReportPath + iTestCaseID + ".json"
+                        },
+                        Thread.currentThread().getContextClassLoader()
+                );
+
+                long iDuration = System.currentTimeMillis() - iStartTime;
+
+                if (iExitCode == 0)
+                {
+                    writeStatus(iExcel, iWriteBack, iRowNumber, "PASS");
+                    log.info("[RUNNER] PASS : " + iTestCaseID + "  (" + formatDuration(iDuration) + ")");
+                    iPassCount++;
+
+                    ReportManager.recordResult(iTestCaseID, iDescription, "PASS",
+                            iDuration, "", "", iTags, iEnvironment, iBrowser);
+                }
+                else
+                {
+                    iErrorMessage = System.getProperty("lastFailureReason." + iTestCaseID, "");
+                    iScreenshot   = System.getProperty("lastScreenshotPath." + iTestCaseID, "");
+                    String iTrace = System.getProperty("lastTracePath." + iTestCaseID, "");
+                    if (!iTrace.isEmpty())
+                    {
+                        iErrorMessage = iErrorMessage + (iErrorMessage.isEmpty() ? "" : " | ") + "Trace: " + iTrace;
+                    }
+
+                    writeStatus(iExcel, iWriteBack, iRowNumber, "FAIL");
+                    log.severe("[RUNNER] FAIL : " + iTestCaseID + "  (" + formatDuration(iDuration) + ")");
+                    iFailCount++;
+
+                    ReportManager.recordResult(iTestCaseID, iDescription, "FAIL",
+                            iDuration, iErrorMessage, iScreenshot, iTags, iEnvironment, iBrowser);
+                }
+            }
+            catch (Exception iException)
+            {
+                long iDuration = iStartTime > 0 ? System.currentTimeMillis() - iStartTime : 0L;
+
+                try
+                {
+                    if (!iTestCaseID.isEmpty())
+                    {
+                        writeStatus(iExcel, iWriteBack, iRowNumber, "FAIL");
+                    }
+                }
+                catch (Exception ignored) {}
+
+                log.severe("[RUNNER] ERROR - Row=" + iRowNumber + "  TestCase_ID=" + iTestCaseID
+                        + "\n           Reason: " + iException.getMessage());
+
+                iFailCount++;
+
+                ReportManager.recordResult(iTestCaseID, iDescription, "ERROR",
+                        iDuration, iException.getMessage(), "", iTags, iEnvironment, iBrowser);
+            }
+        }
+
+        ReportManager.endSuite();
+        printExecutionSummary(iPassCount, iFailCount);
+
+        try   { HtmlReportGenerator.generate(); }
+        catch (Exception e) { log.severe("[RUNNER] HTML report failed : " + e.getMessage()); }
+
+        try   { JUnitXmlGenerator.generate(); }
+        catch (Exception e) { log.severe("[RUNNER] JUnit XML failed : " + e.getMessage()); }
+
+        if (!iRequested.isEmpty())
+        {
+            Set<String> iMissing = new LinkedHashSet<>(iRequested);
+            iMissing.removeAll(iMatched);
+            if (!iMissing.isEmpty())
+            {
+                throw new RuntimeException("testcase.ids not found in ExecutionControl.xlsx: " + iMissing);
+            }
+        }
+
+        if (!iAnyRun)
+        {
+            throw new RuntimeException("No test cases selected. Set Execution=Y in ExecutionControl.xlsx or pass -Dtestcase.ids=...");
+        }
+
+        if (iFailCount > 0)
+        {
+            throw new RuntimeException("Suite completed with " + iFailCount + " failure(s). "
+                    + "Check Test_Report/html, Test_Report/docs and Test_Report/traces.");
+        }
+    }
+
+    private static void writeStatus(ExcelUtilities pExcel, boolean pWriteBack, int pRow, String pStatus)
+    {
+        if (!pWriteBack) { return; }
+        pExcel.setCellValue(iExecutionControlSheetName, pRow, "Status", pStatus);
     }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : byKey
-    // Description   : Builds a Locator from an Object Repository key. Optional String.format arguments fill %s placeholders.
-    //                 Keys with {index}/{value}/${INDEX} placeholders: call ObjReader.getLocator(key).replace(...) and use byXpath().
-    // Parameters    : pKey  (String)   - ObjectRepository.properties key
-    //                 pArgs (Object[]) - optional values for %s placeholders
+    // Function Name : locateFeatureFile
+    // Description   : Finds <TestCase_ID>.feature anywhere under the feature folder (same rule as the Selenium TestRunner).
+    //                   1. Test_Cases/<ID>.feature
+    //                   2. Any sub-folder, any depth, exact file name (shallowest match wins)
+    //                   3. Any sub-folder, any depth, ignoring upper/lower case (a warning is logged, because the
+    //                      Linux Docker container is case-sensitive and would not find that file with a different case)
+    //                 When nothing is found, the error lists the folder searched and how many feature files it holds.
+    // Parameters    : pTestCaseID (String) - TestCase_ID from ExecutionControl.xlsx
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
+    // Date Created  : 10-03-2026 | Updated: 16-09-2026 (recursive, case-insensitive fallback, clearer error)
     // ***************************************************************************************************************************************************************************************
-    public static Locator byKey(String pKey, Object... pArgs)
+    private static String locateFeatureFile(String pTestCaseID)
     {
-        String iRaw = ObjReader.getLocator(pKey);
-        String iValue = (pArgs == null || pArgs.length == 0) ? iRaw : String.format(iRaw, pArgs);
-        return page().locator(CommonFunctions.toSelector(ObjReader.getLocatorType(pKey), iValue));
+        final String iFeatureName = pTestCaseID + ".feature";
+        File iRoot = new File(iFeatureDirectoryPath);
+
+        File iDirect = new File(iRoot, iFeatureName);
+        if (iDirect.isFile())
+        {
+            return iDirect.getPath();
+        }
+
+        if (!iRoot.isDirectory())
+        {
+            throw new RuntimeException("Feature folder does not exist : " + iRoot.getAbsolutePath()
+                    + " | Copy the Test_Cases folder into src/test/resources/ or set -Dfeature.directory.path");
+        }
+
+        List<Path> iAllFeatures;
+        try (Stream<Path> iWalk = Files.walk(iRoot.toPath()))
+        {
+            iAllFeatures = iWalk.filter(Files::isRegularFile)
+                                .filter(iPath -> iPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".feature"))
+                                .sorted(Comparator.comparingInt(Path::getNameCount).thenComparing(Path::toString))
+                                .collect(Collectors.toList());
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("Failed searching for feature file " + iFeatureName + " under "
+                    + iRoot.getAbsolutePath() + " : " + iException.getMessage(), iException);
+        }
+
+        for (Path iPath : iAllFeatures)
+        {
+            if (iPath.getFileName().toString().equals(iFeatureName))
+            {
+                return iPath.toString();
+            }
+        }
+
+        for (Path iPath : iAllFeatures)
+        {
+            if (iPath.getFileName().toString().equalsIgnoreCase(iFeatureName))
+            {
+                log.warning("[RUNNER] Feature file name differs in case : expected '" + iFeatureName + "', found '"
+                        + iPath.getFileName() + "'. This works on Windows but fails in the Linux Docker container - rename the file.");
+                return iPath.toString();
+            }
+        }
+
+        throw new RuntimeException("Feature file not found : " + iFeatureName + " | Searched " + iRoot.getAbsolutePath()
+                + " and all sub-folders | Feature files found there : " + iAllFeatures.size()
+                + " | TestCase_ID in ExecutionControl.xlsx must match the .feature file name");
     }
 
-    public static Locator byXpath(String pXpath)
-    {
-        return page().locator(CommonFunctions.toSelector("XPATH", pXpath));
-    }
-
-    public static boolean isVisible(String pKey, int pTimeoutSeconds)
-    {
-        return isVisible(byKey(pKey).first(), pTimeoutSeconds);
-    }
-
-    public static boolean isVisible(Locator pLocator, int pTimeoutSeconds)
+    private static String safeGetCell(ExcelUtilities pExcel, String pSheet, int pRow, String pColumnName, String pDefault)
     {
         try
         {
-            pLocator.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(pTimeoutSeconds * 1000d));
-            return true;
+            String iValue = pExcel.getCellValue(pSheet, pRow, pColumnName).trim();
+            return iValue.isEmpty() ? pDefault : iValue;
         }
-        catch (TimeoutError iTimeout)
+        catch (Exception iException)
         {
-            return false;
+            return pDefault;
         }
     }
 
-    public static void waitHidden(Locator pLocator, int pTimeoutSeconds)
+    private static void printExecutionHeader(String pID, String pEnv, String pBrowser, String pPath)
     {
-        pLocator.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.HIDDEN).setTimeout(pTimeoutSeconds * 1000d));
+        System.out.println("\n==================================================================");
+        System.out.println("  STARTING   : " + pID);
+        System.out.println("  Environment: " + pEnv);
+        System.out.println("  Browser    : " + pBrowser);
+        System.out.println("  Feature    : " + pPath);
+        System.out.println("==================================================================");
     }
 
-    // Snapshot of all current matches - same semantics as driver.findElements() (no waiting, may be empty)
-    public static List<Locator> findAll(String pKey)
+    private static void printExecutionSummary(int pPass, int pFail)
     {
-        return byKey(pKey).all();
+        System.out.println("\n==================================================================");
+        System.out.println("  EXECUTION SUMMARY");
+        System.out.println("  Total : " + (pPass + pFail));
+        System.out.println("  PASS  : " + pPass);
+        System.out.println("  FAIL  : " + pFail);
+        System.out.println("  HTML  : Test_Report/html/");
+        System.out.println("  XML   : target/surefire-reports/BISS_Execution_Results.xml");
+        System.out.println("  TRACE : Test_Report/traces/ (failed test cases only)");
+        System.out.println("==================================================================");
     }
 
-    public static List<Locator> findAll(Locator pLocator)
+    private static String formatDuration(long pMs)
     {
-        return pLocator.all();
-    }
-
-    public static void jsClick(Locator pLocator)
-    {
-        CommonFunctions.jsClick(pLocator);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : setValueByJs
-    // Description   : Sets a value on an input that Angular keeps disabled/readonly (mat-datepicker) and fires the
-    //                 events Angular listens to. Replacement for the removeAttribute + executeScript blocks in TC_13_ENTS.
-    // Parameters    : pLocator (Locator) - the input
-    //                 pValue   (String)  - value to set, e.g. 01/06/2024
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void setValueByJs(Locator pLocator, String pValue)
-    {
-        pLocator.evaluate(
-                "(element, value) => {"
-              + " element.removeAttribute('disabled'); element.removeAttribute('readonly');"
-              + " element.focus(); element.value = value;"
-              + " element.dispatchEvent(new Event('input', { bubbles: true }));"
-              + " element.dispatchEvent(new Event('change', { bubbles: true }));"
-              + " element.dispatchEvent(new Event('blur', { bubbles: true })); }",
-                pValue);
-    }
-
-    public static String getAttribute(Locator pLocator, String pName)
-    {
-        return pLocator.getAttribute(pName);
-    }
-
-    public static String inputValue(Locator pLocator)
-    {
-        return pLocator.inputValue();
-    }
-
-    public static void uploadFile(String pKey, String pFilePath)
-    {
-        byKey(pKey).first().setInputFiles(CommonFunctions.resolveFilePath(pFilePath));
-    }
-
-    public static void navigateTo(String pUrl)
-    {
-        page().navigate(pUrl);
-    }
-
-    public static void navigateBack()
-    {
-        page().goBack();
-    }
-
-    public static void clearCookies()
-    {
-        CommonFunctions.getContext().clearCookies();
-    }
-
-    public static void pressKey(String pKey)
-    {
-        page().keyboard().press(pKey);
-    }
-
-    public static FrameLocator frame(String pSelector)
-    {
-        return page().frameLocator(pSelector);
-    }
-
-    // The framework handles every pop-up dialog itself (see PlaywrightFactory). These set what happens to the NEXT
-    // alert / confirm / prompt only; afterwards dialog.default.action applies again.
-    public static void acceptNextDialog()
-    {
-        PlaywrightFactory.setNextDialogAction("accept", null);
-    }
-
-    public static void acceptNextDialog(String pPromptText)
-    {
-        PlaywrightFactory.setNextDialogAction("accept", pPromptText);
-    }
-
-    public static void dismissNextDialog()
-    {
-        PlaywrightFactory.setNextDialogAction("dismiss", null);
-    }
-
-    // Text of the last dialog shown - replacement for driver.switchTo().alert().getText()
-    public static String lastDialogText()
-    {
-        return PlaywrightFactory.getLastDialogText();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clickAndSwitchToNewTab
-    // Description   : Clicks an element that opens a new tab/window, waits for it, and makes it the active page for iAction().
-    // Parameters    : pKey (String) - Object Repository key of the element that opens the tab
-    // Returns       : Page - the new page (keep the old one if you need to switch back via PlaywrightFactory.switchToPage)
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Page clickAndSwitchToNewTab(String pKey)
-    {
-        Page iNewPage = CommonFunctions.getContext().waitForPage(() -> byKey(pKey).first().click());
-        iNewPage.waitForLoadState();
-        PlaywrightFactory.switchToPage(iNewPage);
-        return iNewPage;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : downloadByClicking
-    // Description   : Clicks an element that triggers a download and saves the file under report.downloads.path.
-    //                 Works identically on Windows and in the Linux container (no dependency on ~/Downloads).
-    // Parameters    : pKey (String) - Object Repository key of the download button/link
-    // Returns       : Path - saved file
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Path downloadByClicking(String pKey)
-    {
-        Download iDownload = page().waitForDownload(() -> byKey(pKey).first().click());
-
-        File iDir = new File(ConfigManager.getOrDefault("report.downloads.path", "Test_Report/downloads"));
-        if (!iDir.exists()) { iDir.mkdirs(); }
-
-        Path iTarget = Paths.get(iDir.getAbsolutePath(), iDownload.suggestedFilename());
-        iDownload.saveAs(iTarget);
-        log.info("[UiHelpers] Download saved : " + iTarget);
-        return iTarget;
+        long iSecs = (pMs / 1000) % 60;
+        long iMins = pMs / (1000 * 60);
+        return iMins > 0 ? iMins + "m " + iSecs + "s" : iSecs + "s";
     }
 }
