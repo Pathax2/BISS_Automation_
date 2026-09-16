@@ -1,397 +1,443 @@
 // ===================================================================================================================================
-// File          : ScreenshotManager.java
-// Package       : utilities
-// Description   : Central visual evidence manager for the BISS automation framework (Playwright edition).
+// File          : TestRunner.java
+// Package       : runner
+// Description   : Entry point for the BISS BDD Cucumber automation framework.
+//                 Reads ExecutionControl.xlsx, iterates rows marked Y, sets JVM system properties
+//                 per test case, invokes Cucumber CLI for each feature file, writes PASS/FAIL back,
+//                 and drives the full reporting pipeline:
+//                   ReportManager → HtmlReportGenerator → JUnitXmlGenerator
 //
-//                 Owns ALL screenshot capture and Word document image embedding.
-//                   CAPTURE  - viewport, full-page (native in Playwright), element
-//                   EMBED    - captureAndEmbed()    on-demand step screenshot into Word doc
-//                              captureForFailure()  failure screenshot into Word doc
-//                   DIVIDER  - appendScenarioDivider()  green/red scenario header in Word doc (unchanged)
-//                   CLEANUP  - auto-delete screenshots older than retention period (unchanged)
-//                   BYTES    - captureBytes() for Cucumber scenario.attach() (shows inline in Cucumber HTML report)
+// Bamboo Integration:
+//   • JUnit XML written to target/surefire-reports/BISS_Execution_Results.xml
+//     → Configure "JUnit Parser" task in Bamboo pointing to target/surefire-reports/*.xml
+//   • HTML report written to Test_Report/html/
+//     → Add as a Bamboo Artifact definition so it appears as a downloadable link per build
 //
-//                 Selenium -> Playwright changes:
-//                   WebDriver parameter           -> Page
-//                   TakesScreenshot.getScreenshotAs -> page.screenshot()
-//                   window resize for full page   -> ScreenshotOptions.setFullPage(true)
-//                   manual crop for element       -> locator.screenshot()
+// ═══════════════════════════════════════════════════════════════════════════════
+//  HOW TO TRIGGER TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Step 1 : Open ExecutionControl.xlsx
+//           Set Execution = Y  on every row you want to run
+//           Set Execution = N  on every row you want to skip
+//           Save the file
+//
+//  Step 2 : Right-click TestRunner.java in IntelliJ → Run 'executeSelectedTestCases'
+//           OR: mvn test
+//
+//  ⚠  NEVER right-click a .feature file and run it directly.
+//     The feature file has no way to pass system properties to Hooks.
+//     TestRunner is the ONLY correct entry point.
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ExecutionControl.xlsx — REQUIRED COLUMNS
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Execution   │ Y = run │ N = skip
+//  TestCase_ID │ Must match .feature filename  e.g. TC_Login_01 → TC_Login_01.feature
+//  Description │ Used in reports
+//  Environment │ Must match Env column in TestData.xlsx Config sheet  e.g. QA
+//  Status      │ Written back by framework: PASS or FAIL
+//
+//  OPTIONAL columns (safe to add later — framework defaults gracefully if absent):
+//  Browser     │ CHROME / FIREFOX / EDGE — defaults to CHROME if column not present
+//  Tags        │ Cucumber tags for filtering — used in HTML report only
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TestData.xlsx — HOW TEST DATA IS LOADED
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TestRunner sets System.setProperty("testcase", "TC_Login_01")
+//  Hooks.beforeAllExecution() reads that property
+//  Hooks calls: ExcelUtilities.loadCurrentTestDataRow("Data", "TC_Login_01")
+//  ExcelUtilities finds the row where TestCase_ID = TC_Login_01 in sheet Data
+//  All columns from that row are loaded into memory for this test case
+//  Step definitions call iAction(..., "TD:Username") → resolves to "aga6029"
+//  Step definitions call iAction(..., "TD:Password") → resolves to "@c3ntst678!!"
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STEP-LEVEL REPORTING (HTML Dashboard)
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CucumberStepListener is registered as a Cucumber plugin in the CLI args.
+//  It auto-captures every Gherkin step (Given/When/Then/And/But) via Cucumber's
+//  event bus and feeds them into ReportManager.recordStep().
+//  This populates the step-level drill-down in the HTML execution report.
+//
+//  Flow:
+//    TestRunner calls ReportManager.beginTestCase() before Cucumber runs
+//    → CucumberStepListener.onTestStepFinished() calls ReportManager.recordStep()
+//    → TestRunner calls ReportManager.recordResult() after Cucumber exits
+//    → HtmlReportGenerator.generate() reads all steps from ReportManager
 //
 // Author        : Aniket Pathare | aniket.pathare@goverment.ie
 // Date Created  : 10-03-2026
-// Updated       : 26-03-2026 - Phase 1 Word report embedding moved here from CommonFunctions
-// Updated       : 15-09-2026 - Playwright Page / Locator
+// Updated       : 29-03-2026 — Integrated CucumberStepListener + ReportManager.beginTestCase()
 // ===================================================================================================================================
 
-package utilities;
+package runner;
 
-import com.microsoft.playwright.Locator;
-import com.microsoft.playwright.Page;
-import org.apache.poi.util.Units;
-import org.apache.poi.xwpf.usermodel.Document;
-import org.apache.poi.xwpf.usermodel.ParagraphAlignment;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.apache.poi.xwpf.usermodel.XWPFParagraph;
-import org.apache.poi.xwpf.usermodel.XWPFRun;
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
+import io.cucumber.core.cli.Main;
+import org.junit.jupiter.api.Test;
+import reporting.HtmlReportGenerator;
+import reporting.JUnitXmlGenerator;
+import reporting.ReportManager;
+import utilities.ExcelUtilities;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import java.io.File;
 import java.util.logging.Logger;
 
-public class ScreenshotManager
+public class TestRunner
 {
-    private static final Logger log = Logger.getLogger(ScreenshotManager.class.getName());
+    private static final Logger log = Logger.getLogger(TestRunner.class.getName());
 
-    private static final String iScreenshotsDirectory = ConfigManager.getOrDefault("report.screenshots.path", "Test_Report/screenshots");
-    private static final int    iRetentionDays        = ConfigManager.getInt("screenshot.retention.days", 30);
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Framework paths — all overridable via -D JVM system properties for Bamboo plan configuration
+    // -------------------------------------------------------------------------------------------------------------------------------
+    public static final String iExecutionControlFilePath  = System.getProperty(
+            "execution.control.path",  "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
 
-    private static final DateTimeFormatter iTimestampFormatter = DateTimeFormatter.ofPattern("dd_MM_yyyy_HH_mm_ss_SSS");
-    private static final DateTimeFormatter iDisplayFormatter   = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss.SSS");
+    public static final String iExecutionControlSheetName = System.getProperty(
+            "execution.control.sheet", "Sheet1");
 
-    static
-    {
-        cleanupOldScreenshots();
-    }
+    public static final String iFeatureDirectoryPath = System.getProperty(
+            "feature.directory.path",  "src/test/resources/Test_Cases/");
 
-    private ScreenshotManager() {}
+    public static final String iStepDefinitionsGlue = System.getProperty(
+            "glue.package", "stepdefinitions");
 
+    private static final String iHtmlReportPath = "target/cucumber-reports/";
+    private static final String iJsonReportPath = "target/cucumber-json/";
 
-    // ===============================================================================================================================
-    // SECTION 1 : CAPTURE
-    // ===============================================================================================================================
-
-    public static String captureViewport(Page pPage, String pStepName)
-    {
-        try
-        {
-            if (pPage == null)
-            {
-                throw new RuntimeException("Page is null. Cannot capture viewport screenshot.");
-            }
-
-            ensureDirectoryExists();
-            String iFilePath = buildFilePath(pStepName, "viewport");
-            pPage.screenshot(new Page.ScreenshotOptions().setPath(Paths.get(iFilePath)));
-
-            log.info("[ScreenshotManager] Viewport screenshot : " + iFilePath);
-            return iFilePath;
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("[ScreenshotManager] Viewport capture failed : " + iException.getMessage(), iException);
-        }
-    }
-
-    public static String captureFullPage(Page pPage, String pStepName)
-    {
-        try
-        {
-            if (pPage == null)
-            {
-                throw new RuntimeException("Page is null. Cannot capture full-page screenshot.");
-            }
-
-            ensureDirectoryExists();
-            String iFilePath = buildFilePath(pStepName, "fullpage");
-            pPage.screenshot(new Page.ScreenshotOptions().setPath(Paths.get(iFilePath)).setFullPage(true));
-
-            log.info("[ScreenshotManager] Full-page screenshot : " + iFilePath);
-            return iFilePath;
-        }
-        catch (Exception iException)
-        {
-            log.warning("[ScreenshotManager] Full-page capture failed, falling back to viewport : " + iException.getMessage());
-            return captureViewport(pPage, pStepName);
-        }
-    }
-
-    public static String captureElement(Page pPage, Locator pElement, String pStepName)
-    {
-        try
-        {
-            if (pPage == null || pElement == null)
-            {
-                throw new RuntimeException("Page or element is null. Cannot capture element screenshot.");
-            }
-
-            ensureDirectoryExists();
-            String iFilePath = buildFilePath(pStepName, "element");
-            pElement.screenshot(new Locator.ScreenshotOptions().setPath(Paths.get(iFilePath)));
-
-            log.info("[ScreenshotManager] Element screenshot : " + iFilePath);
-            return iFilePath;
-        }
-        catch (Exception iException)
-        {
-            log.warning("[ScreenshotManager] Element capture failed, falling back to viewport : " + iException.getMessage());
-            return captureViewport(pPage, pStepName);
-        }
-    }
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Cucumber Step Listener — fully qualified class name registered as a Cucumber plugin
+    // Captures every Gherkin step and feeds it into ReportManager for the HTML report
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final String iStepListenerPlugin = "reporting.CucumberStepListener";
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : captureBytes
-    // Description   : Returns a PNG screenshot as bytes (no file). Used by Hooks to attach evidence to the Cucumber
-    //                 scenario so it appears inside the Cucumber HTML / JSON report. Returns null on failure.
-    // Parameters    : pPage (Page) - active page on current thread
+    // Function Name : executeSelectedTestCases
+    // Description   : JUnit 5 entry point — triggered by Maven Surefire or right-clicking in IntelliJ
+    // Parameters    : None
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
+    // Date Created  : 10-03-2026
     // ***************************************************************************************************************************************************************************************
-    public static byte[] captureBytes(Page pPage)
+    @Test
+    public void executeSelectedTestCases()
+    {
+        runFrameworkExecution();
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : main
+    // Description   : Direct execution entry point — no JUnit required
+    // Parameters    : pArgs (String[]) - unused; all config via system properties or Excel
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void main(String[] pArgs)
+    {
+        runFrameworkExecution();
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : runFrameworkExecution
+    // Description   : Core execution loop.
+    //
+    //                 For each row in ExecutionControl.xlsx where Execution = Y:
+    //                   1. Reads TestCase_ID and Environment (required columns)
+    //                   2. Reads Browser and Tags safely — defaults if columns not present in Excel
+    //                   3. Confirms matching .feature file exists on disk
+    //                   4. Sets system properties so Hooks.beforeAllExecution() can read them
+    //                   5. Calls ReportManager.beginTestCase() to initialise step-level tracking
+    //                   6. Hooks fires → finds matching row in TestData.xlsx by TestCase_ID
+    //                                 → loads all test data columns into memory (Username, Password etc.)
+    //                                 → reads URL from Config sheet for the given Environment
+    //                                 → launches browser and navigates to URL
+    //                   7. Cucumber runs all scenarios in the feature file
+    //                      CucumberStepListener auto-captures each Gherkin step into ReportManager
+    //                   8. PASS or FAIL written back to Status column in ExecutionControl.xlsx
+    //                   9. ReportManager.recordResult() finalises the test case with accumulated steps
+    //                  10. Moves to next Y row — does NOT abort the suite on a single test failure
+    //
+    //                 After the loop:
+    //                   - HTML management report generated → Test_Report/html/
+    //                   - JUnit XML generated → target/surefire-reports/ (Bamboo dashboard)
+    //
+    // Parameters    : None
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026
+    // Updated       : 29-03-2026 — Added beginTestCase() + CucumberStepListener plugin
+    // ***************************************************************************************************************************************************************************************
+    private static void runFrameworkExecution()
+    {
+        ExcelUtilities iExcel     = new ExcelUtilities(iExecutionControlFilePath);
+        int            iRowCount  = iExcel.getRowCount(iExecutionControlSheetName);
+        boolean        iAnyRun    = false;
+        int            iPassCount = 0;
+        int            iFailCount = 0;
+
+        // Suite-level defaults for ReportManager
+        String iSuiteBrowser     = System.getProperty("browser",     "CHROME");
+        String iSuiteEnvironment = System.getProperty("environment", "");
+        ReportManager.startSuite(iSuiteEnvironment, iSuiteBrowser);
+
+        for (int iRowNumber = 1; iRowNumber <= iRowCount; iRowNumber++)
+        {
+            String iTestCaseID   = "";
+            String iEnvironment  = "";
+            String iBrowser      = "";
+            String iDescription  = "";
+            String iTags         = "";
+            String iErrorMessage = "";
+            String iScreenshot   = "";
+            long   iStartTime    = 0L;
+
+            try
+            {
+                // ── Check Execution flag ─────────────────────────────────────────────────────────
+                String iExecFlag = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Execution").trim();
+
+                if (!iExecFlag.equalsIgnoreCase("Y"))
+                {
+                    log.info("[RUNNER] Row " + iRowNumber + " skipped (Execution=" + iExecFlag + ")");
+                    continue;
+                }
+
+                iAnyRun = true;
+
+                // ── Read required columns ────────────────────────────────────────────────────────
+                iTestCaseID  = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "TestCase_ID").trim();
+                iEnvironment = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Environment").trim();
+                iDescription = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Description").trim();
+
+                if (iTestCaseID.isEmpty())
+                {
+                    throw new RuntimeException("TestCase_ID is blank at row " + iRowNumber);
+                }
+
+                if (iEnvironment.isEmpty())
+                {
+                    throw new RuntimeException("Environment is blank for TestCase_ID : " + iTestCaseID);
+                }
+
+                // ── Read optional columns — safe fallback when column does not exist in Excel ────
+                //
+                //    FIX: The original code used getCellValue() directly for Browser and Tags.
+                //    If those columns don't exist in ExecutionControl.xlsx it throws an exception
+                //    and the entire suite crashes before a single test runs.
+                //    safeGetCell() catches that exception and returns the supplied default instead.
+                //
+                //    Browser → defaults to CHROME  (or -Dbrowser=FIREFOX if set via Maven/Bamboo)
+                //    Tags    → defaults to ""       (tags column is used in HTML report only)
+                //
+                iBrowser = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Browser", System.getProperty("browser", "CHROME"));
+                iTags = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Tags", "");
+
+                // ── Locate the feature file ──────────────────────────────────────────────────────
+                //    TestCase_ID in Excel MUST exactly match the .feature filename:
+                //    TC_Login_01  →  src/test/resources/Test_Cases/TC_Login_01.feature
+                String iFeaturePath = iFeatureDirectoryPath + iTestCaseID + ".feature";
+
+                if (!new File(iFeaturePath).exists())
+                {
+                    try
+                    {
+                        final String iFeatureName = iTestCaseID + ".feature";
+
+                        java.nio.file.Path iFoundFeature =
+                                java.nio.file.Files.walk(
+                                                java.nio.file.Paths.get(iFeatureDirectoryPath))
+                                        .filter(java.nio.file.Files::isRegularFile)
+                                        .filter(p -> p.getFileName().toString()
+                                                .equalsIgnoreCase(iFeatureName))
+                                        .findFirst()
+                                        .orElse(null);
+
+                        if (iFoundFeature != null)
+                        {
+                            iFeaturePath = iFoundFeature.toString();
+                        }
+                        else
+                        {
+                            throw new RuntimeException(
+                                    "Feature file not found: " + iFeatureName);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        throw new RuntimeException(
+                                "Failed searching for feature file: "
+                                        + iTestCaseID,
+                                e);
+                    }
+                }
+                // ── Push values to Hooks via system properties ───────────────────────────────────
+                //    Hooks.beforeAllExecution() reads exactly these three properties.
+                //    It then uses "testcase" value to load the matching row from TestData.xlsx.
+                System.setProperty("testcase",    iTestCaseID);
+                System.setProperty("environment", iEnvironment);
+                System.setProperty("browser",     iBrowser);
+
+                printExecutionHeader(iTestCaseID, iEnvironment, iBrowser, iFeaturePath);
+                new File(iHtmlReportPath).mkdirs();
+                new File(iJsonReportPath).mkdirs();
+
+                // ── Initialise step-level tracking in ReportManager ──────────────────────────────
+                //    Must be called BEFORE Cucumber runs so that CucumberStepListener's
+                //    onTestStepFinished() events have an active test case to attach steps to.
+                //    If Hooks.@Before also calls beginTestCase(), the listener's call will
+                //    simply overwrite with the same data — no harm, no duplication.
+                ReportManager.beginTestCase(iTestCaseID, iDescription, iTags);
+
+                // ── Run Cucumber for this feature file ───────────────────────────────────────────
+                iStartTime = System.currentTimeMillis();
+
+                byte iExitCode = Main.run(
+                        new String[]{
+                                iFeaturePath,
+                                "--glue",   iStepDefinitionsGlue,
+                                "--plugin", "pretty",
+                                "--plugin", "summary",
+                                "--plugin", iStepListenerPlugin,
+                                "--plugin", "html:" + iHtmlReportPath + iTestCaseID + ".html",
+                                "--plugin", "json:" + iJsonReportPath + iTestCaseID + ".json"
+                        },
+                        Thread.currentThread().getContextClassLoader()
+                );
+
+                long iDuration = System.currentTimeMillis() - iStartTime;
+
+                // ── Write result back to ExecutionControl.xlsx ───────────────────────────────────
+                if (iExitCode == 0)
+                {
+                    iExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "PASS");
+                    log.info("[RUNNER] ✓ PASS : " + iTestCaseID + "  (" + formatDuration(iDuration) + ")");
+                    iPassCount++;
+
+                    ReportManager.recordResult(iTestCaseID, iDescription, "PASS",
+                            iDuration, "", "", iTags, iEnvironment, iBrowser);
+                }
+                else
+                {
+                    // Hooks.afterAllExecution() publishes these via System.setProperty after Cucumber exits
+                    iErrorMessage = System.getProperty("lastFailureReason." + iTestCaseID, "");
+                    iScreenshot   = System.getProperty("lastScreenshotPath." + iTestCaseID, "");
+
+                    iExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "FAIL");
+                    log.severe("[RUNNER] ✗ FAIL : " + iTestCaseID + "  (" + formatDuration(iDuration) + ")");
+                    iFailCount++;
+
+                    ReportManager.recordResult(iTestCaseID, iDescription, "FAIL",
+                            iDuration, iErrorMessage, iScreenshot, iTags, iEnvironment, iBrowser);
+                }
+            }
+            catch (Exception iException)
+            {
+                // Row-level error — log it, mark FAIL, continue to next row
+                long iDuration = iStartTime > 0 ? System.currentTimeMillis() - iStartTime : 0L;
+
+                try
+                {
+                    if (!iTestCaseID.isEmpty())
+                    {
+                        iExcel.setCellValue(iExecutionControlSheetName, iRowNumber, "Status", "FAIL");
+                    }
+                }
+                catch (Exception ignored) {}
+
+                log.severe("[RUNNER] ERROR — Row=" + iRowNumber
+                        + "  TestCase_ID=" + iTestCaseID
+                        + "\n           Reason: " + iException.getMessage());
+
+                iFailCount++;
+
+                ReportManager.recordResult(iTestCaseID, iDescription, "ERROR",
+                        iDuration, iException.getMessage(), "", iTags, iEnvironment, iBrowser);
+            }
+        }
+
+        // ── Reporting pipeline — always runs regardless of pass/fail count ───────────────────────
+        ReportManager.endSuite();
+        printExecutionSummary(iPassCount, iFailCount);
+
+        try   { HtmlReportGenerator.generate(); }
+        catch (Exception e) { log.severe("[RUNNER] HTML report failed : " + e.getMessage()); }
+
+        try   { JUnitXmlGenerator.generate(); }
+        catch (Exception e) { log.severe("[RUNNER] JUnit XML failed : " + e.getMessage()); }
+
+        // ── Suite outcome ────────────────────────────────────────────────────────────────────────
+        if (!iAnyRun)
+        {
+            throw new RuntimeException(
+                    "No rows with Execution=Y found in ExecutionControl.xlsx.\n"
+                            + "Set at least one row to Y, save the file, and re-run.");
+        }
+
+        if (iFailCount > 0)
+        {
+            throw new RuntimeException(
+                    "Suite completed with " + iFailCount + " failure(s). "
+                            + "Check Status column in ExecutionControl.xlsx and HTML report in Test_Report/html/");
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : safeGetCell
+    // Description   : Reads a cell by column name. Returns pDefault if the column does not exist
+    //                 in the Excel file or if the cell is blank. Never throws.
+    //                 Used for optional columns (Browser, Tags) so the framework works correctly
+    //                 even when those columns are not present in ExecutionControl.xlsx.
+    // Parameters    : pExcel      (ExcelUtilities) - open workbook instance
+    //                 pSheet      (String)         - sheet name
+    //                 pRow        (int)            - 1-based row number
+    //                 pColumnName (String)         - column header to read
+    //                 pDefault    (String)         - value returned if column absent or blank
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 11-03-2026
+    // ***************************************************************************************************************************************************************************************
+    private static String safeGetCell(ExcelUtilities pExcel, String pSheet, int pRow, String pColumnName, String pDefault)
     {
         try
         {
-            return pPage == null ? null : pPage.screenshot();
+            String iValue = pExcel.getCellValue(pSheet, pRow, pColumnName).trim();
+            return iValue.isEmpty() ? pDefault : iValue;
         }
         catch (Exception iException)
         {
-            log.warning("[ScreenshotManager] captureBytes failed : " + iException.getMessage());
-            return null;
+            // Column does not exist in this Excel file — return the default silently
+            return pDefault;
         }
     }
 
-
-    // ===============================================================================================================================
-    // SECTION 2 : EMBED
-    // ===============================================================================================================================
-
-    public static void captureAndEmbed(Page pPage, XWPFDocument pDocument, String pStepLabel)
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Console output helpers
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static void printExecutionHeader(String pID, String pEnv, String pBrowser, String pPath)
     {
-        try
-        {
-            if (pPage == null)
-            {
-                log.warning("[ScreenshotManager] captureAndEmbed - page is null, skipping. Label: " + pStepLabel);
-                return;
-            }
-
-            if (pDocument == null)
-            {
-                log.warning("[ScreenshotManager] captureAndEmbed - document is null, skipping. Label: " + pStepLabel);
-                return;
-            }
-
-            String iSafeLabel   = sanitize(pStepLabel == null || pStepLabel.isBlank() ? "Step" : pStepLabel);
-            String iTimestamp   = LocalDateTime.now().format(iTimestampFormatter);
-            String iDisplayTime = LocalDateTime.now().format(iDisplayFormatter);
-            String iPngFileName = iSafeLabel + "_step_" + iTimestamp + ".png";
-            String iPngPath     = buildAbsolutePath(iPngFileName);
-
-            ensureDirectoryExists();
-            pPage.screenshot(new Page.ScreenshotOptions().setPath(Paths.get(iPngPath)));
-            log.info("[ScreenshotManager] Step screenshot saved : " + iPngPath);
-
-            XWPFParagraph iCaptionParagraph = pDocument.createParagraph();
-            XWPFRun       iCaptionRun       = iCaptionParagraph.createRun();
-            iCaptionRun.setBold(true);
-            iCaptionRun.setFontSize(9);
-            iCaptionRun.setFontFamily("Calibri");
-            iCaptionRun.setColor("1F4E79");
-            iCaptionRun.setText("  STEP CAPTURE: " + pStepLabel + "   |   " + iDisplayTime);
-            iCaptionRun.addBreak();
-
-            embedImage(pDocument, iPngPath, iPngFileName);
-            pDocument.createParagraph().createRun().addBreak();
-
-            log.info("[ScreenshotManager] Step screenshot embedded. Label: " + pStepLabel);
-        }
-        catch (Exception iException)
-        {
-            log.warning("[ScreenshotManager] captureAndEmbed failed for [" + pStepLabel + "] : " + iException.getMessage());
-        }
+        System.out.println("\n╔══════════════════════════════════════════════════════════════════╗");
+        System.out.println("║  STARTING   : " + pID);
+        System.out.println("║  Environment: " + pEnv);
+        System.out.println("║  Browser    : " + pBrowser);
+        System.out.println("║  Feature    : " + pPath);
+        System.out.println("╚══════════════════════════════════════════════════════════════════╝");
     }
 
-    public static String captureForFailure(Page pPage, XWPFDocument pDocument, String pTestCaseID)
+    private static void printExecutionSummary(int pPass, int pFail)
     {
-        String iPngPath = "";
-
-        try
-        {
-            if (pPage == null)
-            {
-                log.warning("[ScreenshotManager] captureForFailure - page is null, skipping.");
-                return iPngPath;
-            }
-
-            ensureDirectoryExists();
-
-            String iTimestamp   = LocalDateTime.now().format(iTimestampFormatter);
-            String iDisplayTime = LocalDateTime.now().format(iDisplayFormatter);
-            String iPngFileName = sanitize(pTestCaseID) + "_FAIL_" + iTimestamp + ".png";
-            iPngPath            = buildAbsolutePath(iPngFileName);
-
-            // Full page on failure - shows content below the fold that the viewport would miss
-            pPage.screenshot(new Page.ScreenshotOptions().setPath(Paths.get(iPngPath)).setFullPage(true));
-            log.info("[ScreenshotManager] Failure screenshot saved : " + iPngPath);
-
-            if (pDocument != null)
-            {
-                XWPFParagraph iCaptionParagraph = pDocument.createParagraph();
-                XWPFRun       iCaptionRun       = iCaptionParagraph.createRun();
-                iCaptionRun.setBold(true);
-                iCaptionRun.setFontSize(9);
-                iCaptionRun.setFontFamily("Calibri");
-                iCaptionRun.setColor("C00000");
-                iCaptionRun.setText("  FAILURE: " + pTestCaseID + "   |   " + iDisplayTime);
-                iCaptionRun.addBreak();
-
-                embedImage(pDocument, iPngPath, iPngFileName);
-                pDocument.createParagraph().createRun().addBreak();
-
-                log.info("[ScreenshotManager] Failure screenshot embedded in Word report.");
-            }
-        }
-        catch (Exception iException)
-        {
-            log.severe("[ScreenshotManager] captureForFailure failed : " + iException.getMessage());
-        }
-
-        return iPngPath;
+        System.out.println("\n╔══════════════════════════════════════════════════════════════════╗");
+        System.out.println("║  EXECUTION SUMMARY");
+        System.out.println("║  Total : " + (pPass + pFail));
+        System.out.println("║  PASS  : " + pPass);
+        System.out.println("║  FAIL  : " + pFail);
+        System.out.println("║  HTML  : Test_Report/html/");
+        System.out.println("║  XML   : target/surefire-reports/BISS_Execution_Results.xml");
+        System.out.println("╚══════════════════════════════════════════════════════════════════╝");
     }
 
-
-    // ===============================================================================================================================
-    // SECTION 3 : WORD DOC STRUCTURE - scenario divider (unchanged)
-    // ===============================================================================================================================
-
-    public static void appendScenarioDivider(XWPFDocument pDocument, String pScenarioName,
-                                             boolean pPassed, long pDurationMs)
+    private static String formatDuration(long pMs)
     {
-        try
-        {
-            if (pDocument == null) { return; }
-
-            String iStatus      = pPassed ? "PASSED" : "FAILED";
-            String iFillColor   = pPassed ? "70AD47" : "FF0000";
-            String iTextColor   = "FFFFFF";
-            long   iSecs        = (pDurationMs / 1000) % 60;
-            long   iMins        = pDurationMs / (1000 * 60);
-            String iDuration    = iMins > 0 ? iMins + "m " + iSecs + "s" : iSecs + "s";
-            String iDisplayTime = LocalDateTime.now().format(iDisplayFormatter);
-
-            pDocument.createParagraph().createRun().addBreak();
-
-            XWPFParagraph iDivParagraph = pDocument.createParagraph();
-            iDivParagraph.setAlignment(ParagraphAlignment.LEFT);
-
-            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr iPPr = iDivParagraph.getCTP().addNewPPr();
-            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTShd iShd = iPPr.addNewShd();
-            iShd.setVal(org.openxmlformats.schemas.wordprocessingml.x2006.main.STShd.CLEAR);
-            iShd.setColor("auto");
-            iShd.setFill(iFillColor);
-
-            XWPFRun iDivRun = iDivParagraph.createRun();
-            iDivRun.setBold(true);
-            iDivRun.setFontSize(11);
-            iDivRun.setFontFamily("Calibri");
-            iDivRun.setColor(iTextColor);
-            iDivRun.setText("  " + iStatus
-                    + "  |  " + pScenarioName
-                    + "  |  Duration: " + iDuration
-                    + "  |  " + iDisplayTime);
-
-            pDocument.createParagraph().createRun().addBreak();
-
-            log.info("[ScreenshotManager] Scenario divider added : " + pScenarioName + " [" + iStatus + "]");
-        }
-        catch (Exception iException)
-        {
-            log.warning("[ScreenshotManager] appendScenarioDivider failed : " + iException.getMessage());
-        }
-    }
-
-
-    // ===============================================================================================================================
-    // SECTION 4 : CLEANUP (unchanged)
-    // ===============================================================================================================================
-
-    public static void cleanupOldScreenshots()
-    {
-        if (iRetentionDays <= 0)
-        {
-            log.info("[ScreenshotManager] Screenshot cleanup disabled (retention.days=0).");
-            return;
-        }
-
-        try
-        {
-            File iDir = new File(iScreenshotsDirectory);
-            if (!iDir.exists() || !iDir.isDirectory()) { return; }
-
-            LocalDate iCutoff  = LocalDate.now().minusDays(iRetentionDays);
-            File[]    iFiles   = iDir.listFiles((dir, name) -> name.endsWith(".png"));
-            int       iDeleted = 0;
-
-            if (iFiles == null) { return; }
-
-            for (File iFile : iFiles)
-            {
-                LocalDate iFileDate = new java.util.Date(iFile.lastModified())
-                        .toInstant()
-                        .atZone(java.time.ZoneId.systemDefault())
-                        .toLocalDate();
-
-                if (iFileDate.isBefore(iCutoff) && iFile.delete()) { iDeleted++; }
-            }
-
-            if (iDeleted > 0)
-            {
-                log.info("[ScreenshotManager] Cleaned up " + iDeleted + " screenshot(s) older than " + iRetentionDays + " days.");
-            }
-        }
-        catch (Exception iException)
-        {
-            log.warning("[ScreenshotManager] Cleanup failed : " + iException.getMessage());
-        }
-    }
-
-
-    // ===============================================================================================================================
-    // SECTION 5 : PRIVATE HELPERS (unchanged)
-    // ===============================================================================================================================
-
-    private static void embedImage(XWPFDocument pDocument, String pPngPath, String pPngFileName) throws Exception
-    {
-        XWPFParagraph iImageParagraph = pDocument.createParagraph();
-        XWPFRun       iImageRun       = iImageParagraph.createRun();
-
-        try (InputStream iInputStream = new FileInputStream(pPngPath))
-        {
-            iImageRun.addPicture(
-                    iInputStream,
-                    Document.PICTURE_TYPE_PNG,
-                    pPngFileName,
-                    Units.toEMU(450),
-                    Units.toEMU(300)
-            );
-        }
-    }
-
-    private static String buildFilePath(String pStepName, String pType)
-    {
-        String iSafeName  = sanitize(pStepName);
-        String iTimestamp = LocalDateTime.now().format(iTimestampFormatter);
-        return iScreenshotsDirectory + File.separator + iSafeName + "_" + pType + "_" + iTimestamp + ".png";
-    }
-
-    private static String buildAbsolutePath(String pFileName)
-    {
-        return iScreenshotsDirectory + File.separator + pFileName;
-    }
-
-    private static String sanitize(String pInput)
-    {
-        if (pInput == null || pInput.trim().isEmpty()) { return "Unnamed"; }
-        return pInput.trim().replaceAll("[\\\\/:*?\"<>|\\s]+", "_");
-    }
-
-    private static void ensureDirectoryExists()
-    {
-        File iDir = new File(iScreenshotsDirectory);
-        if (!iDir.exists()) { iDir.mkdirs(); }
+        long iSecs = (pMs / 1000) % 60;
+        long iMins = pMs / (1000 * 60);
+        return iMins > 0 ? iMins + "m " + iSecs + "s" : iSecs + "s";
     }
 }
