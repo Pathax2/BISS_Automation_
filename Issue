@@ -1,56 +1,75 @@
 # ===================================================================================================================================
-# File          : application-dev.properties
-# Description   : DEV / local laptop overrides for the BISS Playwright framework.
-#                 Only keys that differ from application.properties need to be listed here.
+# File          : application-docker.properties
+# Description   : Container execution overrides for the BISS Playwright framework.
+#                 Activated by -Denv=docker (the Maven "docker" profile sets it) or BISS_ENV=docker.
+#                 Any key can still be overridden at run time with -Dkey=value or a BISS_ environment variable,
+#                 e.g. BISS_EXPLICIT_WAIT_SECONDS=45, BISS_APP_URL=https://..., BISS_TRACE_MODE=on
 #
-# Folder        : src/test/resources/config/application-dev.properties
-# Activation    : -Denv=dev  (default profile - the Maven "dev" profile is active by default)
-#
+# Folder        : src/test/resources/config/application-docker.properties
 # Author        : Aniket Pathare | aniket.pathare@goverment.ie
-# Date Created  : 10-03-2026
-# Updated       : 15-09-2026 - Playwright keys for the department laptop (installed Chrome, no browser download)
-# Updated       : 16-09-2026 - Page zoom 67% and JavaScript click fallback
+# Date Created  : 15-09-2026
 # ===================================================================================================================================
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Existing keys (unchanged from the Selenium project)
-# -----------------------------------------------------------------------------------------------------------------------------------
-app.url=
-headless=false
-explicit.wait.seconds=20
-notify.email.enabled=false
-db.url=jdbc:oracle:thin:@dev-db-server:1521:BISSDEV
-db.username=biss_dev_user
-
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Playwright - local laptop behind the department web gateway
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Use the Google Chrome installed on the laptop (Playwright cannot download its own Chromium through the gateway)
-browser.channel=chrome
-playwright.skip.browser.download=true
-
-# Full-screen visible window and red outline on each element - handy while watching a run
-browser.maximize=true
-highlight.enabled=true
-
-# Page zoom, same as Ctrl+minus in Chrome (67 = the Selenium framework setting; try 70 or 80 if a page looks cramped)
-browser.zoom.percent=67
-
-# auto = normal click, JavaScript click when blocked | js = always JavaScript click | native = no JavaScript click
-click.strategy=auto
-click.attempt.timeout.ms=5000
-
-# Slow motion in milliseconds between actions (0 = full speed, 300-500 is good for demos)
+# Browser - bundled Chromium from the Playwright image, always headless, fixed viewport
+browser=CHROME
+browser.channel=
+headless=true
+browser.maximize=false
+viewport.width=1920
+viewport.height=1080
+browser.locale=en-IE
+browser.timezone=Europe/Dublin
+highlight.enabled=false
 playwright.slowmo.ms=0
 
-# SIT uses internal certificates
+# Internal SIT/UAT certificates are usually not trusted inside a fresh Linux image.
+# Prefer adding the corporate CA to the image (see docker/certs/README.txt) and set this back to false.
 ignore.https.errors=true
 
-# Keep a Playwright trace zip for failed test cases (open it at https://trace.playwright.dev)
-trace.mode=retain-on-failure
+# Outbound proxy for the browser (leave blank when the container has direct access)
+browser.proxy.server=
+browser.proxy.bypass=
 
-# Playwright exception names for the retry analyser (the Selenium names no longer apply)
+# Timeouts
+explicit.wait.seconds=30
+page.load.timeout.seconds=60
+click.strategy=auto
+click.attempt.timeout.ms=5000
+browser.https.upgrades=true
+dialog.default.action=accept
+log.browser.events=true
+# Application console errors are noisy in CI logs - page, request and dialog events are enough there
+log.browser.console.errors=false
+wait.visible.seconds=30
+verify.element.timeout.seconds=20
+list.option.timeout.seconds=30
+wait.polling.interval.ms=250
+
+# Page zoom - same 67% as local runs so layouts and locators behave identically in the container
+browser.zoom.percent=67
+# Extra CSS body zoom (old per-action 84% hack). Keep 100 (off).
+ui.zoom.percent=100
+
+# Locator behaviour - false = first match (Selenium parity), true = Playwright strict mode
+locator.strict=false
+
+# Playwright trace: off | on | retain-on-failure
+trace.mode=retain-on-failure
+report.traces.path=Test_Report/traces
+report.downloads.path=Test_Report/downloads
+
+# Screenshots - retention cleanup is pointless in an ephemeral container
+screenshot.retention.days=0
+
+# Retry analyser - Playwright exception names replace Selenium ones
 retry.on.exceptions=TimeoutError,PlaywrightException
 
-# Oracle herd/agent bootstrap - true = same behaviour as the Selenium framework
+# Excel write-back - results are published through reports, not by mutating files in the image
+execution.control.writeback=false
+testdata.writeback.enabled=false
+
+# Runtime herd bootstrap from Oracle (set false when the container cannot reach the DB)
 db.bootstrap=true
+
+# Logging
+log.output.path=target/logs/
