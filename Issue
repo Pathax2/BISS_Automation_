@@ -23,8 +23,16 @@
 //                 file in ~/Downloads                                     ->  UiHelpers.downloadByClicking("iKey")
 //                 Thread.sleep(n)                                         ->  delete it; use waitVisible / waitHidden
 //
+//                 FIRST-MATCH RULE
+//                   Selenium findElement() quietly used the first match. Playwright refuses to act on a locator that matches
+//                   more than one element ("strict mode violation ... resolved to 4 elements"). Every helper below that
+//                   works on ONE element therefore uses .first(), so a locator that matches several rows behaves exactly
+//                   as it did in Selenium. findAll() is the only helper that works on all matches.
+//
 // Author        : Aniket Pathare | aniket.pathare@goverment.ie
 // Date Created  : 15-09-2026
+// Updated       : 17-09-2026 - isVisible / waitHidden / single-element helpers use the first match (Eco AP toggle rows
+//                              failed with a strict mode violation); comment block for every method
 // ===================================================================================================================================
 
 package commonFunctions;
@@ -50,6 +58,14 @@ public final class UiHelpers
 
     private UiHelpers() {}
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : page
+    // Description   : Returns the Playwright Page of the current thread (replacement for getDriver()).
+    //                 Fails with a clear message when no browser has been started on this thread.
+    // Returns       : Page - the active page
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static Page page()
     {
         Page iPage = CommonFunctions.getPage();
@@ -61,8 +77,10 @@ public final class UiHelpers
     // Function Name : byKey
     // Description   : Builds a Locator from an Object Repository key. Optional String.format arguments fill %s placeholders.
     //                 Keys with {index}/{value}/${INDEX} placeholders: call ObjReader.getLocator(key).replace(...) and use byXpath().
+    //                 The Locator may match several elements - use .first() or findAll() as needed.
     // Parameters    : pKey  (String)   - ObjectRepository.properties key
     //                 pArgs (Object[]) - optional values for %s placeholders
+    // Returns       : Locator
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
     // Date Created  : 15-09-2026
     // ***************************************************************************************************************************************************************************************
@@ -73,21 +91,51 @@ public final class UiHelpers
         return page().locator(CommonFunctions.toSelector(ObjReader.getLocatorType(pKey), iValue));
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : byXpath
+    // Description   : Builds a Locator from a raw XPath (dynamic XPaths built in step definitions).
+    //                 The Locator may match several elements - use .first() or findAll() as needed.
+    // Parameters    : pXpath (String) - XPath expression, e.g. //button[normalize-space()='Next']
+    // Returns       : Locator
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static Locator byXpath(String pXpath)
     {
         return page().locator(CommonFunctions.toSelector("XPATH", pXpath));
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isVisible
+    // Description   : true when the FIRST element for the Object Repository key becomes visible within the timeout.
+    //                 Never throws on timeout - replacement for the private isVisible(By, int) copies in the Selenium steps.
+    // Parameters    : pKey            (String) - ObjectRepository.properties key
+    //                 pTimeoutSeconds (int)    - how long to wait
+    // Returns       : boolean - true = visible, false = not visible in time
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static boolean isVisible(String pKey, int pTimeoutSeconds)
     {
-        return isVisible(byKey(pKey).first(), pTimeoutSeconds);
+        return isVisible(byKey(pKey), pTimeoutSeconds);
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isVisible
+    // Description   : true when the FIRST element of the Locator becomes visible within the timeout. Never throws on timeout.
+    //                 .first() - Selenium checked the first match only; without it a locator matching several elements
+    //                 (e.g. the Eco AP rows with a toggle) fails with a strict mode violation instead of returning true.
+    // Parameters    : pLocator        (Locator) - element(s) to check
+    //                 pTimeoutSeconds (int)     - how long to wait
+    // Returns       : boolean - true = visible, false = not visible in time
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
     public static boolean isVisible(Locator pLocator, int pTimeoutSeconds)
     {
         try
         {
-            pLocator.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(pTimeoutSeconds * 1000d));
+            pLocator.first().waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(pTimeoutSeconds * 1000d));
             return true;
         }
         catch (TimeoutError iTimeout)
@@ -96,39 +144,74 @@ public final class UiHelpers
         }
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : waitHidden
+    // Description   : Waits until the FIRST element of the Locator is hidden or removed (spinners, overlays, closing dialogs).
+    //                 Throws a TimeoutError when it is still visible after the timeout.
+    // Parameters    : pLocator        (Locator) - element(s) to wait for
+    //                 pTimeoutSeconds (int)     - how long to wait
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
     public static void waitHidden(Locator pLocator, int pTimeoutSeconds)
     {
-        pLocator.waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.HIDDEN).setTimeout(pTimeoutSeconds * 1000d));
+        pLocator.first().waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.HIDDEN).setTimeout(pTimeoutSeconds * 1000d));
     }
 
-    // Snapshot of all current matches - same semantics as driver.findElements() (no waiting, may be empty)
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : findAll
+    // Description   : Snapshot of all current matches for an Object Repository key - same as driver.findElements().
+    //                 No waiting; the list may be empty.
+    // Parameters    : pKey (String) - ObjectRepository.properties key
+    // Returns       : List<Locator> - one Locator per matching element
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static List<Locator> findAll(String pKey)
     {
         return byKey(pKey).all();
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : findAll
+    // Description   : Snapshot of all current matches for a Locator - same as driver.findElements(). No waiting; may be empty.
+    // Parameters    : pLocator (Locator) - element(s) to list
+    // Returns       : List<Locator> - one Locator per matching element
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static List<Locator> findAll(Locator pLocator)
     {
         return pLocator.all();
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : jsClick
+    // Description   : JavaScript click on the FIRST element of the Locator - replacement for
+    //                 ((JavascriptExecutor) driver).executeScript("arguments[0].click();", element).
+    //                 Works when an overlay covers the element. Same as iAction("JSCLICK", ...) without a step-log row.
+    // Parameters    : pLocator (Locator) - element to click
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
     public static void jsClick(Locator pLocator)
     {
-        CommonFunctions.jsClick(pLocator);
+        CommonFunctions.jsClick(pLocator.first());
     }
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : setValueByJs
     // Description   : Sets a value on an input that Angular keeps disabled/readonly (mat-datepicker) and fires the
     //                 events Angular listens to. Replacement for the removeAttribute + executeScript blocks in TC_13_ENTS.
+    //                 Works on the FIRST element of the Locator.
     // Parameters    : pLocator (Locator) - the input
     //                 pValue   (String)  - value to set, e.g. 01/06/2024
     // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
     // ***************************************************************************************************************************************************************************************
     public static void setValueByJs(Locator pLocator, String pValue)
     {
-        pLocator.evaluate(
+        pLocator.first().evaluate(
                 "(element, value) => {"
                         + " element.removeAttribute('disabled'); element.removeAttribute('readonly');"
                         + " element.focus(); element.value = value;"
@@ -138,64 +221,155 @@ public final class UiHelpers
                 pValue);
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getAttribute
+    // Description   : Reads an attribute of the FIRST element - replacement for WebElement.getAttribute(name).
+    //                 Waits for the element to exist (explicit wait); returns null when the attribute is absent.
+    // Parameters    : pLocator (Locator) - element to read
+    //                 pName    (String)  - attribute name, e.g. aria-checked, disabled, class
+    // Returns       : String - attribute value or null
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
     public static String getAttribute(Locator pLocator, String pName)
     {
-        return pLocator.getAttribute(pName);
+        return pLocator.first().getAttribute(pName);
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : inputValue
+    // Description   : Reads the current value of the FIRST input / textarea / select - replacement for
+    //                 WebElement.getAttribute("value").
+    // Parameters    : pLocator (Locator) - input element
+    // Returns       : String - current value
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
     public static String inputValue(Locator pLocator)
     {
-        return pLocator.inputValue();
+        return pLocator.first().inputValue();
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : uploadFile
+    // Description   : Gives a file to an <input type="file"> - works on hidden inputs, so the Selenium JavaScript that
+    //                 un-hid the input is not needed and no OS file picker opens.
+    //                 Relative paths are resolved from the project root; a missing file fails with the full path.
+    // Parameters    : pKey      (String) - ObjectRepository.properties key of the file input
+    //                 pFilePath (String) - absolute or project-relative path
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static void uploadFile(String pKey, String pFilePath)
     {
         byKey(pKey).first().setInputFiles(CommonFunctions.resolveFilePath(pFilePath));
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : navigateTo
+    // Description   : Opens a URL in the current tab - replacement for getDriver().navigate().to(url) / getDriver().get(url).
+    // Parameters    : pUrl (String) - full URL
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static void navigateTo(String pUrl)
     {
         page().navigate(pUrl);
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : navigateBack
+    // Description   : Browser Back - replacement for getDriver().navigate().back().
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static void navigateBack()
     {
         page().goBack();
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : clearCookies
+    // Description   : Deletes all cookies of the browser context - replacement for getDriver().manage().deleteAllCookies().
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static void clearCookies()
     {
         CommonFunctions.getContext().clearCookies();
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : pressKey
+    // Description   : Presses a key on the page (whatever element has focus) - replacement for Actions.sendKeys(Keys.X).
+    // Parameters    : pKey (String) - Playwright key name, e.g. Escape, Enter, Tab, ControlOrMeta+A
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static void pressKey(String pKey)
     {
         page().keyboard().press(pKey);
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : frame
+    // Description   : Locator scope inside an iframe - replacement for switchTo().frame(...). No switching back is needed:
+    //                 UiHelpers.frame("css=iframe#map").locator("xpath=//button").click();
+    // Parameters    : pSelector (String) - selector of the iframe, e.g. css=iframe#map
+    // Returns       : FrameLocator
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static FrameLocator frame(String pSelector)
     {
         return page().frameLocator(pSelector);
     }
 
-    // The framework handles every pop-up dialog itself (see PlaywrightFactory). These set what happens to the NEXT
-    // alert / confirm / prompt only; afterwards dialog.default.action applies again.
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : acceptNextDialog
+    // Description   : The framework handles every pop-up dialog itself (see PlaywrightFactory). Call this BEFORE the click
+    //                 that opens an alert / confirm so the NEXT dialog is accepted; afterwards dialog.default.action applies again.
+    //                 Replacement for switchTo().alert().accept().
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static void acceptNextDialog()
     {
         PlaywrightFactory.setNextDialogAction("accept", null);
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : acceptNextDialog
+    // Description   : Same as acceptNextDialog(), and types the text into the NEXT prompt() dialog before accepting it.
+    //                 Replacement for switchTo().alert().sendKeys(text) + accept().
+    // Parameters    : pPromptText (String) - text for the prompt
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static void acceptNextDialog(String pPromptText)
     {
         PlaywrightFactory.setNextDialogAction("accept", pPromptText);
     }
 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : dismissNextDialog
+    // Description   : Call BEFORE the click that opens the dialog - the NEXT alert / confirm / prompt is dismissed (Cancel).
+    //                 Replacement for switchTo().alert().dismiss().
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static void dismissNextDialog()
     {
         PlaywrightFactory.setNextDialogAction("dismiss", null);
     }
 
-    // Text of the last dialog shown - replacement for driver.switchTo().alert().getText()
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : lastDialogText
+    // Description   : Text of the last pop-up dialog shown - replacement for driver.switchTo().alert().getText().
+    // Returns       : String - dialog message, or empty when no dialog has been shown
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
     public static String lastDialogText()
     {
         return PlaywrightFactory.getLastDialogText();
