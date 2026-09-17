@@ -23,6 +23,8 @@
 //                              step-by-step search (full text, then the name before " - ", then the code, then no filter)
 // Updated       : 16-09-2026 - LIST/mat-select: waits run inside the browser (faster); fixed false failure after a successful
 //                              selection (panel was read after it closed); readable Playwright error messages in the step log
+// Updated       : 17-09-2026 - Browser arguments converted to types Playwright for Java accepts (a Long timeout made every
+//                              LIST fail); a dropdown that is already open is never clicked again
 // ===================================================================================================================================
 
 package commonFunctions;
@@ -755,7 +757,7 @@ public class CommonFunctions
                     }
                     else
                     {
-                        iArgs.add(iArg);
+                        iArgs.add(toJsArg(iArg));
                     }
                 }
             }
@@ -1016,7 +1018,7 @@ public class CommonFunctions
         openMatSelect(iSelect, iName, iState);
 
         // STEP 2 : PANEL (read everything we need now, while it is open)
-        Map<String, Object> iPanelInfo = asMap(iSelect.evaluate(JS_RESOLVE_PANEL, mapOf("token", iToken, "ms", (long) iActionTimeoutMs)));
+        Map<String, Object> iPanelInfo = asMap(iSelect.evaluate(JS_RESOLVE_PANEL, mapOf("token", iToken, "ms", (int) iActionTimeoutMs)));
         if (iPanelInfo == null || str(iPanelInfo.get("id")).isEmpty())
         {
             log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | No panel found for " + iName
@@ -1174,7 +1176,7 @@ public class CommonFunctions
                                                   int pSettleMs, int pNoMatchMs, boolean pAllowEmpty, double pTimeoutMs)
     {
         Map<String, Object> iArgs = mapOf("panelId", pPanelId, "text", pText, "index", pIndex, "token", pToken,
-                "settleMs", pSettleMs, "noMatchMs", pNoMatchMs, "allowEmpty", pAllowEmpty, "ms", (long) pTimeoutMs);
+                "settleMs", pSettleMs, "noMatchMs", pNoMatchMs, "allowEmpty", pAllowEmpty, "ms", (int) pTimeoutMs);
         return asMap(pPage.evaluate(JS_PICK_OPTION, iArgs));
     }
 
@@ -1218,7 +1220,8 @@ public class CommonFunctions
         }
         if (waitSelect(pSelect, "open", 1500)) { return; }
 
-        // 2. JavaScript click on the trigger div
+        // 2. JavaScript click on the trigger div (checked again first - a click on an open dropdown closes it)
+        if (Boolean.TRUE.equals(selectState(pSelect).get("open"))) { return; }
         log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | " + pName + " did not open - retrying with JavaScript click on the trigger.");
         try
         {
@@ -1231,6 +1234,7 @@ public class CommonFunctions
         if (waitSelect(pSelect, "open", 1500)) { return; }
 
         // 3. Keyboard
+        if (Boolean.TRUE.equals(selectState(pSelect).get("open"))) { return; }
         log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | " + pName + " still closed - trying the Enter key.");
         try
         {
@@ -1286,17 +1290,10 @@ public class CommonFunctions
     }
 
     // Polls inside the browser every 50 ms (one round trip). pWant = "open" | "enabled"
+    // A failing check is NOT treated as "closed": that would send a JavaScript click that closes an open dropdown.
     private static boolean waitSelect(Locator pSelect, String pWant, long pTimeoutMs)
     {
-        try
-        {
-            return Boolean.TRUE.equals(pSelect.evaluate(JS_WAIT_SELECT, mapOf("want", pWant, "ms", pTimeoutMs)));
-        }
-        catch (PlaywrightException iError)
-        {
-            log.warning("[" + getCurrentTimestamp() + "] MAT-SELECT | State check failed : " + firstLine(iError.getMessage()));
-            return false;
-        }
+        return Boolean.TRUE.equals(pSelect.evaluate(JS_WAIT_SELECT, mapOf("want", pWant, "ms", (int) pTimeoutMs)));
     }
 
     private static void waitPanelClosed(Locator pPanel)
@@ -1327,9 +1324,47 @@ public class CommonFunctions
         Map<String, Object> iMap = new java.util.LinkedHashMap<>();
         for (int i = 0; i + 1 < pKeyValues.length; i += 2)
         {
-            iMap.put(String.valueOf(pKeyValues[i]), pKeyValues[i + 1]);
+            iMap.put(String.valueOf(pKeyValues[i]), toJsArg(pKeyValues[i + 1]));
         }
         return iMap;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : toJsArg
+    // Description   : Playwright for Java only sends Integer, Double, Boolean, String, Date, List, Map, arrays and element
+    //                 handles to the browser. Any other type (Long, Float, Short, Character ...) fails with
+    //                 "Unsupported type of argument". This converts them: whole numbers -> Integer (Double if too big),
+    //                 other numbers -> Double, Character -> String; lists and maps are converted value by value.
+    // Date Created  : 17-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Object toJsArg(Object pValue)
+    {
+        if (pValue instanceof Long || pValue instanceof Short || pValue instanceof Byte || pValue instanceof java.util.concurrent.atomic.AtomicInteger)
+        {
+            long iLong = ((Number) pValue).longValue();
+            return (iLong >= Integer.MIN_VALUE && iLong <= Integer.MAX_VALUE) ? (Object) (int) iLong : (Object) (double) iLong;
+        }
+        if (pValue instanceof Float || pValue instanceof java.math.BigDecimal)
+        {
+            return ((Number) pValue).doubleValue();
+        }
+        if (pValue instanceof Character)
+        {
+            return String.valueOf(pValue);
+        }
+        if (pValue instanceof List)
+        {
+            List<Object> iList = new ArrayList<>();
+            for (Object iItem : (List<?>) pValue) { iList.add(toJsArg(iItem)); }
+            return iList;
+        }
+        if (pValue instanceof Map)
+        {
+            Map<String, Object> iMap = new java.util.LinkedHashMap<>();
+            for (Map.Entry<?, ?> iEntry : ((Map<?, ?>) pValue).entrySet()) { iMap.put(String.valueOf(iEntry.getKey()), toJsArg(iEntry.getValue())); }
+            return iMap;
+        }
+        return pValue;
     }
 
     private static void performNativeSelect(Locator pLocator, String pListValue)
