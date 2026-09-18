@@ -82,19 +82,14 @@ public class TC_08
 
         for (String col : iColumns)
         {
+            iAction("CLICK", "XPATH", "//div[contains(@class,'mat-sort-header-container') and .//div[normalize-space()='" + col + "']]", "");
             iAction("MOUSEHOVER", "XPATH", "//div[contains(@class,'mat-sort-header-container') and .//div[normalize-space()='" + col + "']]", "");
             String iSortableHeader = String.format(ObjReader.getLocator("iTableHeaderSortable"), col.trim());
             String iArrow = String.format(ObjReader.getLocator("iSortArrowForColumn"), col.trim());
-
             List<WebElement> sortHeader = getDriver().findElements(By.xpath(iSortableHeader));
-
             List<WebElement> arrow = getDriver().findElements(By.xpath(iArrow));
-
-
             Assertions.assertFalse(sortHeader.isEmpty(), "Sortable header not found for column: " + col);
-
             Assertions.assertFalse(arrow.isEmpty(), "Sort arrow missing for sortable column: " + col);
-
             log.info("  ✓ " + col + " — sortable and arrow present");
         }
 
