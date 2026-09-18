@@ -46,6 +46,7 @@
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 17-04-2026 | Updated : 20-04-2026
 // Updated       : 18-09-2026 - Migrated to Playwright (no Selenium API left; same steps, same locators, same flow)
+// Updated       : 18-09-2026 - The My Clients breadcrumb is probed briefly instead of waiting the full action timeout
 // ===================================================================================================================================
 
 package stepdefinitions;
@@ -72,6 +73,9 @@ import static commonFunctions.CommonFunctions.iAction;
 public class TC_18
 {
     private static final Logger log = Logger.getLogger(TC_18.class.getName());
+
+    // How long an optional element is looked for before it is treated as absent (probe.timeout.seconds, default 3)
+    private static final int PROBE_SECONDS = utilities.ConfigManager.getInt("probe.timeout.seconds", 3);
 
 
     // -- "Herd expired" span inside the expired column cell of a data row ------------------------------------------
@@ -194,13 +198,15 @@ public class TC_18
                 log.warning("[PRELIM-RETRY] FAILURE 3 | herd=" + iCurrentHerd + " Preliminary Checks tab has no records.");
 
                 // Navigate back to My Clients before recovery
-                // (we are inside a farmer dashboard so the breadcrumb is available)
-                try
+                // (we are inside a farmer dashboard so the breadcrumb is available).
+                // The breadcrumb is looked for briefly first - without that, a missing breadcrumb costs the full
+                // action timeout before the left menu is tried.
+                if (isVisible(MY_CLIENTS_BACK_XPATH, PROBE_SECONDS))
                 {
                     iAction("CLICK", "XPATH", MY_CLIENTS_BACK_XPATH, null);
                     pause(1000);
                 }
-                catch (Exception e)
+                else
                 {
                     log.warning("[PRELIM-RETRY] Breadcrumb not found - using left menu.");
                     iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
