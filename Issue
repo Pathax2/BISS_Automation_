@@ -1,1132 +1,241 @@
-// ===================================================================================================================================
-// File          : PlaywrightFactory.java
-// Package       : commonFunctions
-// Description   : Owns the Playwright object graph for the BISS automation framework.
-//                   Playwright  ->  Browser  ->  BrowserContext  ->  Page
-//                 One graph per thread (ThreadLocal) because Playwright objects are NOT thread-safe.
-//                 Replaces the Selenium WebDriver / WebDriverWait ThreadLocals that lived in CommonFunctions.
-//
-//                 Container-first design:
-//                   - headless by default under the docker profile, fixed 1920x1080 viewport
-//                   - no driver binaries, no chromedriver.exe
-//                   - leftover browser processes stopped before launch on the laptop only (BrowserProcessCleaner)
-//                   - browsers come from the image (PLAYWRIGHT_BROWSERS_PATH), never downloaded at run time
-//                   - every BrowserContext is already isolated (equivalent of Chrome --incognito + temp profile)
-//                   - Playwright trace (.zip) recorded per test case and kept on failure for offline debugging
-//
-// Config keys (application*.properties, -D or BISS_ env var):
-//   headless                       true | false
-//   browser.channel                blank (bundled Chromium) | chrome | msedge  (set = no browser download)
-//   playwright.skip.browser.download   true = never download browsers (laptops behind the web gateway)
-//   viewport.width / viewport.height   default 1920 / 1080
-//   browser.maximize               true = headed window uses full screen size (local runs only)
-//   browser.zoom.percent           page zoom, same as Ctrl+minus in Chrome (default 100; e.g. 67, 70, 80)
-//   explicit.wait.seconds          default action timeout
-//   page.load.timeout.seconds      default navigation timeout
-//   playwright.slowmo.ms           slow motion for demos (default 0)
-//   ignore.https.errors            accept self-signed / internal CA certificates
-//   browser.proxy.server           e.g. http://proxy.agriculture.gov.ie:8080 (blank = none)
-//   browser.proxy.bypass           e.g. *.agriculture.gov.ie
-//   browser.locale / browser.timezone   default en-IE / Europe/Dublin
-//   trace.mode                     off | on | retain-on-failure
-//   trace.screenshots              false (default) = no screencast in the trace, much faster; true = full filmstrip
-//   trace.snapshots                true (default) = DOM snapshot per action (what the trace viewer replays)
-//   log.browser.events             true = log page changes, new tabs, pop-up dialogs, failed requests and HTTP errors
-//   log.browser.console.errors     true = also log JavaScript console errors from the application
-//   browser.https.upgrades         true = http:// links are opened over https:// first, like normal Chrome (default true)
-//   browser.https.upgrade.hosts    optional list of hosts always sent from http:// to https:// (e.g. agfood.icentest.agriculture.gov.ie)
-//   dialog.default.action          accept | dismiss - what to do with alert / confirm / prompt pop-ups (default accept)
-//                                  'Leave site?' (beforeunload) pop-ups are always accepted, as Selenium does
-//   browser.reuse                  true (default) = keep one browser for the whole run, clean session per test case
-//   browser.reuse.max.testcases    0 (default) = never restart on purpose; N = start a fresh browser every N test cases
-//   browser.cleanup.before.start   none | automation | all - browser processes stopped before launch (BrowserProcessCleaner)
-//   browser.cleanup.temp.folders   true = delete old Playwright temp folders once per run
-//   report.traces.path             default Test_Report/traces
-//   report.downloads.path          every downloaded file is saved here (default Test_Report/downloads)
-//   report.downloads.path          default Test_Report/downloads
-//
-// Page zoom (browser.zoom.percent):
-//   Chrome / Chromium / Edge : the zoom is written into a fresh temporary browser profile as Chrome's own
-//                              default zoom preference, exactly what the Selenium framework did with
-//                              profile.default_zoom_level = -2.196545 (67%). The page gets the wider layout,
-//                              clicks and screenshots keep working, and the profile is deleted afterwards.
-//                              Headless runs without browser.channel use channel 'chromium' (full browser in new
-//                              headless mode), because the default headless shell ignores the zoom preference.
-//   Firefox / WebKit         : no such preference, so a CSS zoom on the page root is used instead.
-//
-// Author        : Aniket Pathare | aniket.pathare@goverment.ie
-// Date Created  : 15-09-2026
-// Updated       : 16-09-2026 - browser.zoom.percent (real Chrome page zoom through the profile preference)
-// Updated       : 16-09-2026 - Browser event log (page changes, new tabs, dialogs, failed requests) and dialog handling
-// Updated       : 16-09-2026 - Chrome HTTPS-Upgrades switched back on (Exit link to http://agfood... timed out on port 80)
-// Updated       : 17-09-2026 - browser.chromium.sandbox (removes the --no-sandbox banner on the laptop)
-// Updated       : 17-09-2026 - Leftover Chrome / driver processes and temp folders cleaned before launch (browser.cleanup.*)
-// Updated       : 18-09-2026 - browser.reuse: one browser for the whole run. Each test case gets a clean session
-//                              (new tab, cookies and web storage cleared) instead of a new Chrome (saves 20-35 s per
-//                              test case). shutdown() closes it after the last test case, and a JVM shutdown hook
-//                              closes it if the run is stopped.
-// Updated       : 18-09-2026 - trace.screenshots / trace.snapshots (a trace filmstrip slowed every action down)
-// Updated       : 18-09-2026 - Every file the application downloads is saved under report.downloads.path and listed
-//                              by getDownloads() (the browser in a container has no Windows Downloads folder)
-// ===================================================================================================================================
-
-package commonFunctions;
-
-import com.microsoft.playwright.Browser;
-import com.microsoft.playwright.BrowserContext;
-import com.microsoft.playwright.BrowserType;
-import com.microsoft.playwright.Dialog;
-import com.microsoft.playwright.Request;
-import com.microsoft.playwright.Route;
-import com.microsoft.playwright.Page;
-import com.microsoft.playwright.Playwright;
-import com.microsoft.playwright.Tracing;
-import com.microsoft.playwright.options.Proxy;
-import utilities.ConfigManager;
-
-import java.io.File;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.Comparator;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-import java.util.logging.Logger;
-
-public final class PlaywrightFactory
-{
-    private static final Logger log = Logger.getLogger(PlaywrightFactory.class.getName());
-
-    private static final ThreadLocal<Playwright>     iPlaywrightHolder = new ThreadLocal<>();
-    private static final ThreadLocal<Browser>        iBrowserHolder    = new ThreadLocal<>();
-    private static final ThreadLocal<BrowserContext> iContextHolder    = new ThreadLocal<>();
-    private static final ThreadLocal<Page>           iPageHolder       = new ThreadLocal<>();
-    private static final ThreadLocal<Boolean>        iTracingHolder    = ThreadLocal.withInitial(() -> Boolean.FALSE);
-    private static final ThreadLocal<Path>           iProfileHolder    = new ThreadLocal<>();
-    private static final ThreadLocal<String>         iVersionHolder    = new ThreadLocal<>();
-    private static final ThreadLocal<String>         iNextDialogAction = new ThreadLocal<>();
-    private static final ThreadLocal<String>         iNextPromptText   = new ThreadLocal<>();
-    private static final ThreadLocal<String>         iLastDialogText   = ThreadLocal.withInitial(() -> "");
-    private static final ThreadLocal<Boolean>        iOpeningMainPage  = ThreadLocal.withInitial(() -> Boolean.FALSE);
-    private static final ThreadLocal<List<Path>>     iDownloadsHolder  = ThreadLocal.withInitial(ArrayList::new);
-    private static final ThreadLocal<String>         iStartedTypeHolder = new ThreadLocal<>();
-    private static final ThreadLocal<Boolean>        iChunkOpenHolder   = ThreadLocal.withInitial(() -> Boolean.FALSE);
-    private static final ThreadLocal<Boolean>        iReusedHolder      = ThreadLocal.withInitial(() -> Boolean.FALSE);
-
-    // Set while the run is ending, so stop() really closes instead of keeping the browser for the next test case
-    private static volatile boolean iShuttingDown = false;
-    private static final ThreadLocal<Integer> iReuseCountHolder = ThreadLocal.withInitial(() -> 0);
-    private static final java.util.concurrent.atomic.AtomicBoolean iShutdownHookAdded =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
-
-    private static final DateTimeFormatter iFileTimestamp = DateTimeFormatter.ofPattern("dd_MM_yyyy_HH_mm_ss");
-
-    private PlaywrightFactory() {}
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : start
-    // Description   : Creates Playwright, launches the requested browser, opens an isolated context and a page.
-    //                 Any graph already bound to this thread is closed first (safe re-entry per test case).
-    // Parameters    : pBrowserType (String) - CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Page start(String pBrowserType)
-    {
-        String  iBrowserType = pBrowserType == null ? "CHROME" : pBrowserType.trim().toUpperCase(Locale.ROOT);
-
-        // The whole run is one JVM, so the browser from the previous test case is still here. Reusing it saves the
-        // 8-30 s Chrome start and the 10-14 s close; the test case still begins with a clean session (see resetSession).
-        if (ConfigManager.getBool("browser.reuse", true) && canReuse(iBrowserType))
-        {
-            Page iReusedPage = resetSession();
-            if (iReusedPage != null)
-            {
-                return iReusedPage;
-            }
-            log.warning("[PlaywrightFactory] The open browser could not be reused - starting a new one.");
-        }
-
-        if (iPageHolder.get() != null)
-        {
-            log.warning("[PlaywrightFactory] A browser is already open on this thread. Closing it before starting a new one.");
-            boolean iWasShuttingDown = iShuttingDown;
-            iShuttingDown = true;              // force a real close, not a keep-alive
-            stop(false, "stale");
-            iShuttingDown = iWasShuttingDown;
-        }
-
-        addShutdownHookOnce();
-        boolean iHeadless    = ConfigManager.getBool("headless", false);
-        boolean iMaximize    = !iHeadless && ConfigManager.getBool("browser.maximize", false);
-        String  iChannel     = ConfigManager.getOrDefault("browser.channel", "");
-        double  iSlowMo      = ConfigManager.getInt("playwright.slowmo.ms", 0);
-        // Playwright starts Chromium with --no-sandbox unless told otherwise; installed Chrome then shows the
-        // "unsupported command-line flag" banner. true on the laptop, false in Docker (the container runs as root).
-        boolean iSandbox     = ConfigManager.getBool("browser.chromium.sandbox", false);
-
-        // Clean start: stop leftover automation (or all) browser processes and old Playwright temp folders.
-        // Replaces the Selenium killProcessByName("chrome") call. See utilities.BrowserProcessCleaner.
-        utilities.BrowserProcessCleaner.cleanBeforeLaunch(iBrowserType, iChannel);
-
-        // Installed Chrome/Edge (browser.channel) or an explicit flag means Playwright must not download its own
-        // Chromium. The department web gateway blocks cdn.playwright.dev (HTTP 407), so this avoids a hard failure.
-        java.util.Map<String, String> iDriverEnv = new java.util.HashMap<>(System.getenv());
-        if (!iChannel.isEmpty() || "EDGE".equals(iBrowserType)
-                || ConfigManager.getBool("playwright.skip.browser.download", false))
-        {
-            iDriverEnv.put("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
-        }
-
-        Playwright iPlaywright = Playwright.create(new Playwright.CreateOptions().setEnv(iDriverEnv));
-        iPlaywrightHolder.set(iPlaywright);
-
-        BrowserType.LaunchOptions iLaunch = new BrowserType.LaunchOptions()
-                .setHeadless(iHeadless)
-                .setSlowMo(iSlowMo)
-                .setChromiumSandbox(iSandbox);
-
-        String iProxyServer = ConfigManager.getOrDefault("browser.proxy.server", "");
-        if (!iProxyServer.isEmpty())
-        {
-            iLaunch.setProxy(buildProxy(iProxyServer));
-        }
-
-        BrowserType iType;
-        List<String> iArgs = new ArrayList<>();
-
-        switch (iBrowserType)
-        {
-            case "CHROME":
-            case "CHROMIUM":
-                iType = iPlaywright.chromium();
-                if (!iChannel.isEmpty()) { iLaunch.setChannel(iChannel); }
-                // Containers often ship a tiny /dev/shm - this keeps Chromium stable even without --ipc=host
-                iArgs.add("--disable-dev-shm-usage");
-                if (iMaximize) { iArgs.add("--start-maximized"); }
-                break;
-
-            case "EDGE":
-                // Edge is NOT inside the official Playwright image. Use locally or build a custom image.
-                iType = iPlaywright.chromium();
-                iLaunch.setChannel("msedge");
-                if (iMaximize) { iArgs.add("--start-maximized"); }
-                break;
-
-            case "FIREFOX":
-                iType = iPlaywright.firefox();
-                break;
-
-            case "WEBKIT":
-            case "SAFARI":
-                iType = iPlaywright.webkit();
-                break;
-
-            default:
-                closeQuietly();
-                throw new RuntimeException("Unsupported browser type : '" + pBrowserType
-                        + "'. Supported values: CHROME, CHROMIUM, EDGE, FIREFOX, WEBKIT.");
-        }
-
-        // Chrome normally opens http:// links over https:// first (HTTPS-Upgrades). Playwright switches that off, so a
-        // plain http:// link (the BISS Exit link) goes to port 80, which the department network blocks -> timeout.
-        // Re-declaring Playwright's own --disable-features list without HttpsUpgrades restores normal Chrome behaviour
-        // (Chrome uses the last --disable-features it is given).
-        boolean iHttpsUpgrades = "chromium".equals(iType.name()) && ConfigManager.getBool("browser.https.upgrades", true);
-        List<String> iIgnoredDefaults = new ArrayList<>();
-        if (iHttpsUpgrades)
-        {
-            iIgnoredDefaults.add("--disable-features=" + String.join(",", PLAYWRIGHT_DISABLED_FEATURES));
-            iArgs.add("--disable-features=" + String.join(",", withoutHttpsUpgrades()));
-            iLaunch.setIgnoreDefaultArgs(iIgnoredDefaults);
-        }
-
-        if (!iArgs.isEmpty()) { iLaunch.setArgs(iArgs); }
-
-        boolean iIgnoreHttps = ConfigManager.getBool("ignore.https.errors", false);
-        String  iLocale      = ConfigManager.getOrDefault("browser.locale", "en-IE");
-        String  iTimezone    = ConfigManager.getOrDefault("browser.timezone", "Europe/Dublin");
-        int     iWidth       = ConfigManager.getInt("viewport.width", 1920);
-        int     iHeight      = ConfigManager.getInt("viewport.height", 1080);
-        int     iZoomPercent = ConfigManager.getInt("browser.zoom.percent", 100);
-        boolean iChromium    = "chromium".equals(iType.name());
-        boolean iZoomed      = iZoomPercent > 0 && iZoomPercent != 100;
-
-        BrowserContext iContext;
-        String         iZoomMode;
-
-        if (iZoomed && iChromium)
-        {
-            // Chrome page zoom lives in the browser profile, so this path launches a persistent context on a fresh temporary profile
-            Path iProfile = createZoomedProfile(iZoomPercent);
-            iProfileHolder.set(iProfile);
-
-            BrowserType.LaunchPersistentContextOptions iPersistent = new BrowserType.LaunchPersistentContextOptions()
-                    .setHeadless(iHeadless)
-                    .setSlowMo(iSlowMo)
-                    .setChromiumSandbox(iSandbox)
-                    .setIgnoreHTTPSErrors(iIgnoreHttps)
-                    .setAcceptDownloads(true)
-                    .setLocale(iLocale)
-                    .setTimezoneId(iTimezone);
-
-            String iPersistentChannel = "EDGE".equals(iBrowserType) ? "msedge" : iChannel;
-
-            // Headless Chromium normally runs as the stripped-down 'headless shell', which ignores the zoom preference.
-            // Channel 'chromium' runs the full Chromium build in new headless mode instead (it is inside the Docker image).
-            if (iPersistentChannel.isEmpty() && iHeadless)
-            {
-                iPersistentChannel = "chromium";
-            }
-            if (!iPersistentChannel.isEmpty()) { iPersistent.setChannel(iPersistentChannel); }
-            if (!iArgs.isEmpty())              { iPersistent.setArgs(iArgs); }
-            if (!iIgnoredDefaults.isEmpty())   { iPersistent.setIgnoreDefaultArgs(iIgnoredDefaults); }
-            if (!iProxyServer.isEmpty())       { iPersistent.setProxy(buildProxy(iProxyServer)); }
-
-            if (iMaximize) { iPersistent.setViewportSize(null); }
-            else           { iPersistent.setViewportSize(iWidth, iHeight); }
-
-            iContext = iType.launchPersistentContext(iProfile, iPersistent);
-            iBrowserHolder.set(iContext.browser());
-            iZoomMode = iZoomPercent + "% (Chrome zoom preference)";
-        }
-        else
-        {
-            Browser iBrowser = iType.launch(iLaunch);
-            iBrowserHolder.set(iBrowser);
-
-            Browser.NewContextOptions iContextOptions = new Browser.NewContextOptions()
-                    .setIgnoreHTTPSErrors(iIgnoreHttps)
-                    .setAcceptDownloads(true)
-                    .setLocale(iLocale)
-                    .setTimezoneId(iTimezone);
-
-            if (iMaximize) { iContextOptions.setViewportSize(null); }
-            else           { iContextOptions.setViewportSize(iWidth, iHeight); }
-
-            iContext = iBrowser.newContext(iContextOptions);
-
-            if (iZoomed)
-            {
-                // Firefox / WebKit have no zoom preference Playwright can set - scale the page root with CSS instead
-                iContext.addInitScript(String.format(Locale.ROOT, JS_ROOT_ZOOM, iZoomPercent));
-                iZoomMode = iZoomPercent + "% (CSS zoom)";
-            }
-            else
-            {
-                iZoomMode = "100%";
-            }
-        }
-
-        iContext.setDefaultTimeout(ConfigManager.getInt("explicit.wait.seconds", 30) * 1000d);
-        iContext.setDefaultNavigationTimeout(ConfigManager.getInt("page.load.timeout.seconds", 60) * 1000d);
-        iContextHolder.set(iContext);
-
-        startTracingIfEnabled(iContext);
-        attachBrowserListeners(iContext);
-        attachHttpsUpgradeRoutes(iContext);
-
-        // A persistent context opens with one blank tab already - reuse it instead of leaving it behind
-        boolean iReuseFirstTab = !iContext.pages().isEmpty();
-        Page    iPage;
-        if (iReuseFirstTab)
-        {
-            iPage = iContext.pages().get(0);
-            attachPageListeners(iPage, "main");
-        }
-        else
-        {
-            // newPage() raises the context 'page' event - the flag tells that listener this is the main tab, not a pop-up
-            iOpeningMainPage.set(Boolean.TRUE);
-            try     { iPage = iContext.newPage(); }
-            finally { iOpeningMainPage.set(Boolean.FALSE); }
-        }
-        iPageHolder.set(iPage);
-
-        Browser iActiveBrowser = iBrowserHolder.get();
-        String  iEffectiveChannel = "EDGE".equals(iBrowserType) ? "msedge" : iChannel;
-        String  iProductName;
-        switch (iEffectiveChannel.toLowerCase(Locale.ROOT))
-        {
-            case "chrome": case "chrome-beta": case "chrome-dev": case "chrome-canary":
-                iProductName = "Google Chrome (installed)";
-                break;
-            case "msedge": case "msedge-beta": case "msedge-dev": case "msedge-canary":
-                iProductName = "Microsoft Edge (installed)";
-                break;
-            default:
-                // Playwright names the Chrome engine 'chromium' even for Google Chrome, so name the product explicitly
-                iProductName = "chromium".equals(iType.name()) ? "Chromium (Playwright bundled)" : iType.name();
-        }
-        iVersionHolder.set(iProductName + " " + (iActiveBrowser != null ? iActiveBrowser.version() : readUserAgentVersion(iPage)));
-
-        iStartedTypeHolder.set(iBrowserType);
-
-        log.info("[PlaywrightFactory] Started | Browser=" + iBrowserType
-                + (iChannel.isEmpty() ? "" : " | Channel=" + iChannel)
-                + " | Version=" + iVersionHolder.get()
-                + " | Headless=" + iHeadless
-                + " | Zoom=" + iZoomMode
-                + " | HttpsUpgrades=" + (iHttpsUpgrades ? "on" : "off")
-                + " | TraceMode=" + traceMode());
-
-        return iPage;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : attachBrowserListeners
-    // Description   : Registers context-wide listeners:
-    //                   - dialogs  : 'Leave site?' (beforeunload) is accepted like Selenium; alert / confirm / prompt follow
-    //                                dialog.default.action unless UiHelpers.acceptNextDialog / dismissNextDialog said otherwise.
-    //                                Every dialog is logged with its text.
-    //                   - log.browser.events=true : new tabs, main-page changes, failed page/API requests and HTTP 4xx/5xx
-    //                     responses are written to the run log with the [BROWSER] prefix. This shows why a page did not
-    //                     load (blocked request, certificate, proxy, server error, a link that opened a new tab ...).
-    // Parameters    : pContext (BrowserContext) - the context just created
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 16-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void attachBrowserListeners(BrowserContext pContext)
-    {
-        pContext.onDialog(PlaywrightFactory::handleDialog);
-
-        // Downloads are always captured, whatever log.browser.events says - the file itself is the test evidence
-        pContext.onPage(iNewPage ->
-        {
-            attachPageListeners(iNewPage, Boolean.TRUE.equals(iOpeningMainPage.get()) ? "main" : "tab");
-
-            if (ConfigManager.getBool("log.browser.events", true) && !Boolean.TRUE.equals(iOpeningMainPage.get()))
-            {
-                log.warning("[BROWSER] New tab/window opened : " + safeUrl(iNewPage)
-                        + " | The test keeps working on the current tab - use UiHelpers.clickAndSwitchToNewTab(...) to follow it.");
-            }
-        });
-
-        if (!ConfigManager.getBool("log.browser.events", true))
-        {
-            return;
-        }
-
-        pContext.onRequestFailed(iRequest ->
-        {
-            String iType    = iRequest.resourceType();
-            String iFailure = iRequest.failure() == null ? "unknown error" : iRequest.failure();
-            boolean iPage   = "document".equals(iType);
-            boolean iApi    = "xhr".equals(iType) || "fetch".equals(iType);
-
-            // Aborted API calls are normal while a page is being left - only aborted page loads matter
-            if (iPage || (iApi && !iFailure.contains("ERR_ABORTED")))
-            {
-                log.warning("[BROWSER] " + (iPage ? "Page load" : "API call") + " failed : " + describe(iRequest) + " | " + iFailure);
-            }
-        });
-
-        pContext.onResponse(iResponse ->
-        {
-            if (iResponse.status() < 400) { return; }
-            String iType = iResponse.request().resourceType();
-            if ("document".equals(iType) || "xhr".equals(iType) || "fetch".equals(iType))
-            {
-                log.warning("[BROWSER] HTTP " + iResponse.status() + " : " + describe(iResponse.request()));
-            }
-        });
-
-        if (ConfigManager.getBool("log.browser.console.errors", true))
-        {
-            pContext.onConsoleMessage(iMessage ->
-            {
-                // 'Failed to load resource' repeats what the request / HTTP listeners above already log
-                if ("error".equals(iMessage.type()) && !String.valueOf(iMessage.text()).startsWith("Failed to load resource"))
-                {
-                    log.warning("[BROWSER] Console error : " + shorten(iMessage.text(), 300));
-                }
-            });
-        }
-    }
-
-    private static void attachPageListeners(Page pPage, String pLabel)
-    {
-        // Every file this page downloads is copied into report.downloads.path (see saveDownload)
-        pPage.onDownload(PlaywrightFactory::saveDownload);
-
-        if (!ConfigManager.getBool("log.browser.events", true)) { return; }
-
-        pPage.onFrameNavigated(iFrame ->
-        {
-            if (iFrame.parentFrame() == null)
-            {
-                log.info("[BROWSER] Page changed (" + pLabel + ") : " + shorten(iFrame.url(), 200));
-            }
-        });
-    }
-
-    private static void handleDialog(Dialog pDialog)
-    {
-        String iType    = pDialog.type();
-        String iMessage = pDialog.message() == null ? "" : pDialog.message();
-        iLastDialogText.set(iMessage);
-
-        String iAction = "beforeunload".equals(iType)
-                ? "accept"
-                : (iNextDialogAction.get() != null ? iNextDialogAction.get()
-                                                   : ConfigManager.getOrDefault("dialog.default.action", "accept").trim().toLowerCase(Locale.ROOT));
-        String iPromptText = iNextPromptText.get();
-        iNextDialogAction.remove();
-        iNextPromptText.remove();
-
-        log.info("[BROWSER] Dialog (" + iType + ") '" + shorten(iMessage, 200) + "' -> " + iAction);
-
-        try
-        {
-            if ("dismiss".equals(iAction))       { pDialog.dismiss(); }
-            else if (iPromptText != null)        { pDialog.accept(iPromptText); }
-            else                                 { pDialog.accept(); }
-        }
-        catch (Exception iException)
-        {
-            log.warning("[BROWSER] Dialog could not be handled : " + iException.getMessage());
-        }
-    }
-
-    // Used by UiHelpers.acceptNextDialog / dismissNextDialog - applies to the next alert / confirm / prompt only
-    static void setNextDialogAction(String pAction, String pPromptText)
-    {
-        iNextDialogAction.set(pAction);
-        if (pPromptText == null) { iNextPromptText.remove(); } else { iNextPromptText.set(pPromptText); }
-    }
-
-    public static String getLastDialogText()
-    {
-        return iLastDialogText.get();
-    }
-
-    private static String describe(Request pRequest)
-    {
-        return pRequest.method() + " " + shorten(pRequest.url(), 200);
-    }
-
-    private static String safeUrl(Page pPage)
-    {
-        try { return shorten(pPage.url(), 200); } catch (Exception iException) { return "(loading)"; }
-    }
-
-    private static String shorten(String pText, int pMax)
-    {
-        if (pText == null) { return ""; }
-        String iOneLine = pText.replaceAll("\\s+", " ").trim();
-        return iOneLine.length() <= pMax ? iOneLine : iOneLine.substring(0, pMax) + "...";
-    }
-
-    // Playwright 1.61 default '--disable-features' list (coreBundle.js chromiumSwitches). Only HttpsUpgrades is removed
-    // from it here; the rest is kept so the browser behaves exactly as Playwright expects.
-    private static final List<String> PLAYWRIGHT_DISABLED_FEATURES = java.util.Arrays.asList(
-            "AvoidUnnecessaryBeforeUnloadCheckSync", "BoundaryEventDispatchTracksNodeRemoval", "DestroyProfileOnBrowserClose",
-            "DialMediaRouteProvider", "GlobalMediaControls", "HttpsUpgrades", "LensOverlay", "MediaRouter", "PaintHolding",
-            "ThirdPartyStoragePartitioning", "Translate", "AutoDeElevate", "RenderDocument", "OptimizationHints",
-            "msForceBrowserSignIn", "msEdgeUpdateLaunchServicesPreferredVersion");
-
-    private static List<String> withoutHttpsUpgrades()
-    {
-        List<String> iFeatures = new ArrayList<>(PLAYWRIGHT_DISABLED_FEATURES);
-        iFeatures.remove("HttpsUpgrades");
-        return iFeatures;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : attachHttpsUpgradeRoutes
-    // Description   : Optional, host-specific safety net: every http:// request to a host in browser.https.upgrade.hosts
-    //                 is answered with a 307 redirect to the same address on https://. Use it only if a host still
-    //                 times out on http:// with browser.https.upgrades=true. Entries may start with *. for sub-domains.
-    //                 Note: while any route is active Playwright turns the browser HTTP cache off for this context.
-    // Parameters    : pContext (BrowserContext)
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 16-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void attachHttpsUpgradeRoutes(BrowserContext pContext)
-    {
-        String iHostList = ConfigManager.getOrDefault("browser.https.upgrade.hosts", "").trim();
-        if (iHostList.isEmpty()) { return; }
-
-        List<String> iHosts = new ArrayList<>();
-        for (String iHost : iHostList.split(","))
-        {
-            if (!iHost.isBlank()) { iHosts.add(iHost.trim().toLowerCase(Locale.ROOT)); }
-        }
-
-        pContext.route(iUrl -> isUpgradeHost(iUrl, iHosts), iRoute ->
-        {
-            String iFrom = iRoute.request().url();
-            String iTo   = "https" + iFrom.substring(iFrom.indexOf(':'));
-            log.info("[BROWSER] http -> https : " + shorten(iFrom, 200));
-            iRoute.fulfill(new Route.FulfillOptions()
-                    .setStatus(307)
-                    .setHeaders(java.util.Collections.singletonMap("Location", iTo)));
-        });
-        log.info("[PlaywrightFactory] http:// is redirected to https:// for : " + iHosts);
-    }
-
-    private static boolean isUpgradeHost(String pUrl, List<String> pHosts)
-    {
-        if (pUrl == null || !pUrl.regionMatches(true, 0, "http://", 0, 7)) { return false; }
-        try
-        {
-            String iHost = java.net.URI.create(pUrl).getHost();
-            if (iHost == null) { return false; }
-            iHost = iHost.toLowerCase(Locale.ROOT);
-            for (String iRule : pHosts)
-            {
-                if (iRule.startsWith("*.") ? iHost.endsWith(iRule.substring(1)) : iHost.equals(iRule)) { return true; }
-            }
-        }
-        catch (Exception iIgnored)
-        {
-            // Not a parseable URL - leave the request alone
-        }
-        return false;
-    }
-
-    // Page root zoom used only for Firefox / WebKit. %d is replaced with the zoom percentage.
-    private static final String JS_ROOT_ZOOM =
-            "(() => { const apply = () => { document.documentElement.style.zoom = '%d%%'; };"
-          + " if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', apply); } else { apply(); } })()";
-
-    private static Proxy buildProxy(String pServer)
-    {
-        Proxy  iProxy  = new Proxy(pServer);
-        String iBypass = ConfigManager.getOrDefault("browser.proxy.bypass", "");
-        if (!iBypass.isEmpty()) { iProxy.setBypass(iBypass); }
-        return iProxy;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : createZoomedProfile
-    // Description   : Creates a temporary Chrome profile whose default page zoom is pZoomPercent.
-    //                 Chrome stores zoom as a level where percent = 100 x 1.2^level (67% = -2.1965, 80% = -1.2239).
-    //                 This is the same preference the Selenium framework set through ChromeOptions.
-    // Parameters    : pZoomPercent (int) - e.g. 67, 70, 80
-    // Returns       : Path - the profile folder (deleted again in stop())
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 16-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static Path createZoomedProfile(int pZoomPercent)
-    {
-        try
-        {
-            double iLevel   = Math.log(pZoomPercent / 100.0) / Math.log(1.2);
-            Path   iProfile = Files.createTempDirectory("biss-pw-profile-");
-            Path   iDefault = Files.createDirectories(iProfile.resolve("Default"));
-            String iPrefs   = String.format(Locale.ROOT,
-                    "{\"partition\":{\"default_zoom_level\":{\"x\":%.6f}},"
-                  + "\"profile\":{\"default_content_setting_values\":{\"notifications\":2}}}", iLevel);
-            Files.write(iDefault.resolve("Preferences"), iPrefs.getBytes(StandardCharsets.UTF_8));
-            return iProfile;
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Could not create the temporary browser profile for page zoom : " + iException.getMessage(), iException);
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : saveDownload
-    // Description   : Saves every file the application downloads (Export to Excel, PDF letters ...) under
-    //                 report.downloads.path and remembers it for getDownloads().
-    //                 Playwright keeps a download in a temporary folder and deletes it when the browser closes, and a
-    //                 container has no Windows Downloads folder - so the file is copied out here, once, for both.
-    //                 A name that already exists gets _1, _2 ... so nothing is overwritten.
-    // Parameters    : pDownload (Download) - the download reported by the browser context
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void saveDownload(com.microsoft.playwright.Download pDownload)
-    {
-        try
-        {
-            File iDir = new File(ConfigManager.getOrDefault("report.downloads.path", "Test_Report/downloads"));
-            if (!iDir.exists()) { iDir.mkdirs(); }
-
-            String iName = pDownload.suggestedFilename();
-            if (iName == null || iName.isBlank()) { iName = "download_" + LocalDateTime.now().format(iFileTimestamp); }
-
-            Path iTarget = Paths.get(iDir.getAbsolutePath(), iName);
-            int  iCopy   = 1;
-            while (Files.exists(iTarget))
-            {
-                int    iDot  = iName.lastIndexOf('.');
-                String iStem = iDot > 0 ? iName.substring(0, iDot) : iName;
-                String iExt  = iDot > 0 ? iName.substring(iDot)    : "";
-                iTarget = Paths.get(iDir.getAbsolutePath(), iStem + "_" + iCopy + iExt);
-                iCopy++;
-            }
-
-            pDownload.saveAs(iTarget);
-            iDownloadsHolder.get().add(iTarget);
-            log.info("[BROWSER] Download saved : " + iTarget);
-        }
-        catch (Exception iException)
-        {
-            log.warning("[BROWSER] Download could not be saved : " + iException.getMessage());
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getDownloads
-    // Description   : Files downloaded by the browser since the test case started, in the order they arrived.
-    // Returns       : List<Path> - saved files (empty when nothing was downloaded)
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static List<Path> getDownloads()
-    {
-        return new ArrayList<>(iDownloadsHolder.get());
-    }
-
-    private static String readUserAgentVersion(Page pPage)
-    {
-        try
-        {
-            String iAgent = String.valueOf(pPage.evaluate("() => navigator.userAgent"));
-            java.util.regex.Matcher iMatch = java.util.regex.Pattern.compile("(?:Chrome|Edg|Firefox|Version)/([0-9.]+)").matcher(iAgent);
-            return iMatch.find() ? iMatch.group(1) : "-";
-        }
-        catch (Exception iException)
-        {
-            return "-";
-        }
-    }
-
-    private static void deleteProfileQuietly()
-    {
-        Path iProfile = iProfileHolder.get();
-        if (iProfile == null) { return; }
-
-        try (java.util.stream.Stream<Path> iWalk = Files.walk(iProfile))
-        {
-            iWalk.sorted(Comparator.reverseOrder()).forEach(iPath -> iPath.toFile().delete());
-        }
-        catch (Exception iIgnored)
-        {
-            // Chrome can hold a file for a moment after closing on Windows - the OS temp cleaner removes the rest
-        }
-    }
-
-    private static String traceMode()
-    {
-        return ConfigManager.getOrDefault("trace.mode", "retain-on-failure").trim().toLowerCase(Locale.ROOT);
-    }
-
-    private static void startTracingIfEnabled(BrowserContext pContext)
-    {
-        if ("off".equals(traceMode()))
-        {
-            iTracingHolder.set(Boolean.FALSE);
-            return;
-        }
-
-        try
-        {
-            // Screenshots inside a trace record a screencast of the whole run, which costs real time on every action.
-            // Snapshots (the DOM before/after each action) are what makes a trace useful and are far cheaper.
-            boolean iTraceShots = ConfigManager.getBool("trace.screenshots", false);
-
-            pContext.tracing().start(new Tracing.StartOptions()
-                    .setScreenshots(iTraceShots)
-                    .setSnapshots(ConfigManager.getBool("trace.snapshots", true))
-                    .setSources(false));
-            iTracingHolder.set(Boolean.TRUE);
-
-            // One chunk per test case: with browser.reuse the context lives for the whole run, but each test case
-            // still gets its own trace zip
-            pContext.tracing().startChunk();
-            iChunkOpenHolder.set(Boolean.TRUE);
-        }
-        catch (Exception iException)
-        {
-            iTracingHolder.set(Boolean.FALSE);
-            log.warning("[PlaywrightFactory] Tracing could not start : " + iException.getMessage());
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : stop
-    // Description   : Stops tracing (saving the zip when required), then closes page, context, browser and Playwright.
-    //                 Never throws - a teardown problem must not hide the real test result.
-    // Parameters    : pTestFailed (boolean) - true keeps the trace when trace.mode=retain-on-failure
-    //                 pTraceName  (String)  - logical name used in the trace file name (usually the test case ID)
-    // Returns       : String - absolute path of the saved trace zip, or empty string when no trace was kept
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static String stop(boolean pTestFailed, String pTraceName)
-    {
-        String  iTracePath = saveTraceChunk(pTestFailed, pTraceName);
-        boolean iKeepOpen  = !iShuttingDown
-                && ConfigManager.getBool("browser.reuse", true)
-                && canReuse(iStartedTypeHolder.get());
-
-        if (iKeepOpen)
-        {
-            // The next test case calls start() again and gets this browser back with a clean session
-            log.info("[PlaywrightFactory] Browser kept open for the next test case (browser.reuse=true).");
-            return iTracePath;
-        }
-
-        try
-        {
-            BrowserContext iContext = iContextHolder.get();
-            if (iContext != null && Boolean.TRUE.equals(iTracingHolder.get()))
-            {
-                iContext.tracing().stop();
-            }
-        }
-        catch (Exception iException)
-        {
-            log.warning("[PlaywrightFactory] Trace stop failed : " + iException.getMessage());
-        }
-
-        closeQuietly();
-        return iTracePath;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : shutdown
-    // Description   : Closes the browser for good at the end of the run (TestRunner calls it after the last test case,
-    //                 and a JVM shutdown hook calls it when a run is stopped in IntelliJ).
-    //                 With browser.reuse=false this has nothing left to do - stop() already closed everything.
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void shutdown()
-    {
-        if (iPageHolder.get() == null && iContextHolder.get() == null && iPlaywrightHolder.get() == null)
-        {
-            return;
-        }
-
-        iShuttingDown = true;
-        try
-        {
-            BrowserContext iContext = iContextHolder.get();
-            if (iContext != null && Boolean.TRUE.equals(iTracingHolder.get()))
-            {
-                iContext.tracing().stop();
-            }
-        }
-        catch (Exception iIgnored) { }
-
-        closeQuietly();
-        iShuttingDown = false;
-        log.info("[PlaywrightFactory] Browser closed at the end of the run.");
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : saveTraceChunk
-    // Description   : Ends this test case's trace chunk, saving it as a zip when the test case failed
-    //                 (trace.mode=retain-on-failure) or always (trace.mode=on).
-    // Parameters    : pTestFailed (boolean), pTraceName (String) - usually the TestCase_ID
-    // Returns       : String - saved zip path, or empty
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static String saveTraceChunk(boolean pTestFailed, String pTraceName)
-    {
-        BrowserContext iContext = iContextHolder.get();
-
-        if (iContext == null || !Boolean.TRUE.equals(iTracingHolder.get()) || !Boolean.TRUE.equals(iChunkOpenHolder.get()))
-        {
-            return "";
-        }
-
-        try
-        {
-            String  iMode = traceMode();
-            boolean iKeep = "on".equals(iMode) || ("retain-on-failure".equals(iMode) && pTestFailed);
-
-            if (iKeep)
-            {
-                File iDir = new File(ConfigManager.getOrDefault("report.traces.path", "Test_Report/traces"));
-                if (!iDir.exists()) { iDir.mkdirs(); }
-
-                String iSafeName = (pTraceName == null || pTraceName.isBlank() ? "trace" : pTraceName)
-                        .trim().replaceAll("[^A-Za-z0-9_-]+", "_");
-                Path iPath = Paths.get(iDir.getAbsolutePath(),
-                        iSafeName + "_" + LocalDateTime.now().format(iFileTimestamp) + ".zip");
-
-                iContext.tracing().stopChunk(new Tracing.StopChunkOptions().setPath(iPath));
-                iChunkOpenHolder.set(Boolean.FALSE);
-
-                log.info("[PlaywrightFactory] Trace saved : " + iPath
-                        + "  (drag the zip onto https://trace.playwright.dev to replay it)");
-                return iPath.toString();
-            }
-
-            iContext.tracing().stopChunk();
-            iChunkOpenHolder.set(Boolean.FALSE);
-        }
-        catch (Exception iException)
-        {
-            iChunkOpenHolder.set(Boolean.FALSE);
-            log.warning("[PlaywrightFactory] Trace stop failed : " + iException.getMessage());
-        }
-
-        return "";
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : canReuse
-    // Description   : true when the browser from the previous test case is still alive and usable for this one.
-    //                 A different browser type, a closed page or a browser that crashed all mean: start a new one.
-    // Parameters    : pBrowserType (String) - browser the next test case asks for
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static boolean canReuse(String pBrowserType)
-    {
-        Page           iPage    = iPageHolder.get();
-        BrowserContext iContext = iContextHolder.get();
-        Browser        iBrowser = iBrowserHolder.get();
-        String         iStarted = iStartedTypeHolder.get();
-
-        if (iPage == null || iContext == null || iStarted == null)          { return false; }
-        if (pBrowserType != null && !iStarted.equals(pBrowserType))         { return false; }
-        if (iBrowser != null && !iBrowser.isConnected())                    { return false; }
-
-        // Safety valve for long suites: browser.reuse.max.testcases=0 (default) means never restart on purpose
-        int iMax = ConfigManager.getInt("browser.reuse.max.testcases", 0);
-        if (iMax > 0 && iReuseCountHolder.get() >= iMax)
-        {
-            log.info("[PlaywrightFactory] Browser reused " + iReuseCountHolder.get()
-                    + " times (browser.reuse.max.testcases=" + iMax + ") - starting a fresh one.");
-            return false;
-        }
-
-        try
-        {
-            return !iPage.isClosed();
-        }
-        catch (Exception iException)
-        {
-            return false;
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : resetSession
-    // Description   : Gives the next test case a clean session in the browser that is already open:
-    //                   1. every extra tab is closed
-    //                   2. a new tab replaces the old one (a new tab starts with empty sessionStorage)
-    //                   3. cookies are cleared - this is what ends the SSO session, so the next test case logs in again
-    //                   4. a new trace chunk starts and the download list is emptied
-    //                 localStorage belongs to a web address, so it is cleared right after the first page is opened -
-    //                 CommonFunctions.launchBrowser calls clearSiteStorageIfReused for that.
-    // Returns       : Page - the clean page, or null when the browser could not be reset (the caller then starts a new browser)
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static Page resetSession()
-    {
-        long iStart = System.currentTimeMillis();
-
-        try
-        {
-            BrowserContext iContext = iContextHolder.get();
-            Page           iOldPage = iPageHolder.get();
-
-            // A new tab, so nothing is left in sessionStorage or in the page itself
-            iOpeningMainPage.set(Boolean.TRUE);
-            Page iFreshPage;
-            try     { iFreshPage = iContext.newPage(); }
-            finally { iOpeningMainPage.set(Boolean.FALSE); }
-
-            for (Page iOther : iContext.pages())
-            {
-                if (iOther != iFreshPage)
-                {
-                    try { iOther.close(); } catch (Exception iIgnored) { }
-                }
-            }
-
-            iPageHolder.set(iFreshPage);
-
-            // Ends the SSO session: the next test case goes through the real login again
-            iContext.clearCookies();
-
-            iDownloadsHolder.get().clear();
-            iReusedHolder.set(Boolean.TRUE);
-            iReuseCountHolder.set(iReuseCountHolder.get() + 1);
-
-            if (Boolean.TRUE.equals(iTracingHolder.get()) && !Boolean.TRUE.equals(iChunkOpenHolder.get()))
-            {
-                iContext.tracing().startChunk();
-                iChunkOpenHolder.set(Boolean.TRUE);
-            }
-
-            log.info("[PlaywrightFactory] Reusing the open browser (browser.reuse=true) | Session cleared in "
-                    + (System.currentTimeMillis() - iStart) + " ms | " + iVersionHolder.get());
-
-            return iFreshPage;
-        }
-        catch (Exception iException)
-        {
-            log.warning("[PlaywrightFactory] Could not reset the open browser : " + iException.getMessage());
-            iReusedHolder.set(Boolean.FALSE);
-            try { closeQuietly(); } catch (Exception iIgnored) { }
-            return null;
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clearSiteStorageIfReused
-    // Description   : Wipes localStorage, sessionStorage, IndexedDB and service workers for the application address
-    //                 BEFORE the page is opened, so a reused browser cannot carry a token from the previous test case
-    //                 and silently log in as the previous agent.
-    //                 Chrome and Edge: one DevTools call (Storage.clearDataForOrigin) - nothing is loaded yet.
-    //                 Firefox and WebKit: the page is opened first, storage is cleared and the page reloaded.
-    //                 Does nothing on a browser that was just started.
-    // Parameters    : pPage (Page)   - the page about to open the application
-    //                 pUrl  (String) - the application URL, used for its web address (scheme://host:port)
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void clearSiteStorageIfReused(Page pPage, String pUrl)
-    {
-        if (!Boolean.TRUE.equals(iReusedHolder.get()) || pPage == null)
-        {
-            return;
-        }
-
-        iReusedHolder.set(Boolean.FALSE);
-
-        String iOrigin = originOf(pUrl);
-        if (iOrigin.isEmpty())
-        {
-            return;
-        }
-
-        // -- Chromium: clear before anything loads ------------------------------------------------------------------
-        try
-        {
-            com.google.gson.JsonObject iParams = new com.google.gson.JsonObject();
-            iParams.addProperty("origin", iOrigin);
-            iParams.addProperty("storageTypes", "local_storage,indexeddb,websql,service_workers,cache_storage");
-
-            iContextHolder.get().newCDPSession(pPage).send("Storage.clearDataForOrigin", iParams);
-            log.info("[PlaywrightFactory] Site storage cleared for " + iOrigin + " (reused browser).");
-            return;
-        }
-        catch (Exception iNotChromium)
-        {
-            log.fine("[PlaywrightFactory] DevTools storage clear not available : " + iNotChromium.getMessage());
-        }
-
-        // -- Firefox / WebKit: open the page, clear, reload ----------------------------------------------------------
-        try
-        {
-            pPage.navigate(iOrigin);
-            pPage.evaluate("() => { try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) { } }");
-        }
-        catch (Exception iException)
-        {
-            log.warning("[PlaywrightFactory] Web storage could not be cleared on the reused browser : " + iException.getMessage());
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : originOf
-    // Description   : scheme://host:port of a URL - what a browser calls the origin, and the unit storage belongs to.
-    // Parameters    : pUrl (String)
-    // Returns       : String - origin, or empty when the URL cannot be read
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static String originOf(String pUrl)
-    {
-        try
-        {
-            java.net.URL iParsed = new java.net.URL(pUrl.trim());
-            return iParsed.getProtocol() + "://" + iParsed.getHost()
-                    + (iParsed.getPort() == -1 ? "" : ":" + iParsed.getPort());
-        }
-        catch (Exception iException)
-        {
-            return "";
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : addShutdownHookOnce
-    // Description   : Closes the browser if the run is stopped (the red square in IntelliJ, Ctrl+C), so browser.reuse
-    //                 never leaves a Chrome behind.
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void addShutdownHookOnce()
-    {
-        if (!iShutdownHookAdded.compareAndSet(false, true))
-        {
-            return;
-        }
-
-        Runtime.getRuntime().addShutdownHook(new Thread(() ->
-        {
-            try   { closeQuietly(); }
-            catch (Exception iIgnored) { }
-        }, "biss-playwright-shutdown"));
-    }
-
-    private static void closeQuietly()
-    {
-        try { if (iContextHolder.get() != null)    { iContextHolder.get().close(); } }    catch (Exception iIgnored) { }
-        try { if (iBrowserHolder.get() != null)    { iBrowserHolder.get().close(); } }    catch (Exception iIgnored) { }
-        try { if (iPlaywrightHolder.get() != null) { iPlaywrightHolder.get().close(); } } catch (Exception iIgnored) { }
-        deleteProfileQuietly();
-
-        iPageHolder.remove();
-        iContextHolder.remove();
-        iBrowserHolder.remove();
-        iPlaywrightHolder.remove();
-        iTracingHolder.remove();
-        iProfileHolder.remove();
-        iVersionHolder.remove();
-        iNextDialogAction.remove();
-        iNextPromptText.remove();
-        iOpeningMainPage.remove();
-        iDownloadsHolder.remove();
-        iStartedTypeHolder.remove();
-        iChunkOpenHolder.remove();
-        iReusedHolder.remove();
-        iReuseCountHolder.remove();
-    }
-
-    // -------------------------------------------------------------------------------------------------------------------------------
-    // Accessors
-    // -------------------------------------------------------------------------------------------------------------------------------
-    public static Page getPage()                { return iPageHolder.get(); }
-    public static BrowserContext getContext()   { return iContextHolder.get(); }
-    public static Browser getBrowser()          { return iBrowserHolder.get(); }
-
-    public static String getBrowserVersion()
-    {
-        String iVersion = iVersionHolder.get();
-        return iVersion == null ? "-" : iVersion;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : switchToPage
-    // Description   : Makes another tab/popup of the current context the active page for iAction().
-    //                 Replacement for driver.switchTo().window(handle).
-    // Parameters    : pPage (Page) - page returned by context.waitForPage(...) or page.waitForPopup(...)
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void switchToPage(Page pPage)
-    {
-        if (pPage == null) { throw new RuntimeException("switchToPage: page cannot be null."); }
-        pPage.bringToFront();
-        iPageHolder.set(pPage);
-    }
-}
+# ===================================================================================================================================
+# File          : application.properties
+# Description   : Base configuration defaults for the BISS automation framework (Playwright edition).
+#                 These values apply to ALL environments unless overridden by a profile file.
+#                 Profile files (application-dev.properties, application-docker.properties, etc.)
+#                 overlay and override these values for specific environments.
+#
+# Folder        : src/test/resources/config/application.properties
+#
+# Resolution    : -Dkey=value  >  BISS_KEY environment variable  >  application-<env>.properties  >  this file
+# Activation    : This file is always loaded. Profile overlay activated via -Denv=<profile> (default dev)
+#
+# Author        : Aniket Pathare | aniket.pathare@goverment.ie
+# Date Created  : 10-03-2026
+# Updated       : 16-09-2026 - Playwright keys added, Selenium-only keys removed
+#                 16-09-2026 - browser.zoom.percent (67), click.strategy, click.attempt.timeout.ms 5000
+#                 16-09-2026 - browser.https.upgrades, dialog handling, [BROWSER] event log
+#                 17-09-2026 - browser.cleanup.before.start, browser.cleanup.temp.folders, execution.fail.fast
+#                 18-09-2026 - browser.cleanup.scope, trace.screenshots, trace.snapshots (suite run speed)
+#                 18-09-2026 - browser.reuse: one browser for the whole run, clean session per test case
+# ===================================================================================================================================
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Browser Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Supported values: CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
+browser=CHROME
+
+# Installed browser to drive instead of Playwright's bundled Chromium: blank | chrome | msedge
+# (a value here also stops Playwright from trying to download browsers)
+browser.channel=
+
+# false = Playwright default (--no-sandbox, needed when Chrome runs as root, e.g. in Docker). The dev profile sets true.
+browser.chromium.sandbox=false
+
+# true = ONE browser for the whole run. Each test case still starts clean: new tab, cookies cleared and the site's
+# storage wiped, so every test case logs in again. Saves the 8-30 s Chrome start and the 10-14 s close per test case.
+# false = a new browser per test case (the behaviour up to 17-09).
+browser.reuse=true
+
+# 0 = keep the same browser for the whole run. Set e.g. 10 to start a fresh browser every 10 test cases.
+browser.reuse.max.testcases=0
+
+# Browser processes stopped before each test case starts (replaces the Selenium killProcessByName("chrome")):
+#   none       = nothing stopped
+#   automation = only browsers started by Playwright or Selenium (your own Chrome windows stay open)
+#   all        = every chrome.exe (msedge.exe for Edge), like the Selenium framework - your own Chrome windows close too
+# chromedriver.exe left over from Selenium runs is stopped by automation and all.
+browser.cleanup.before.start=automation
+
+# true = on the first test case of a run, delete old Playwright temp folders (profiles, driver copies) from %TEMP%
+browser.cleanup.temp.folders=true
+
+# automation mode only: run = scan process command lines once per run (fast), testcase = before every test case (slow)
+browser.cleanup.scope=run
+
+# true = never download browsers (laptops behind the department web gateway)
+playwright.skip.browser.download=false
+
+# Run browser in headless mode (no visible window) - set true for CI/Bamboo agents and Docker
+headless=false
+
+# Window / viewport
+browser.maximize=false
+viewport.width=1920
+viewport.height=1080
+
+# Locale and timezone used by every browser context
+browser.locale=en-IE
+browser.timezone=Europe/Dublin
+
+# Accept internal / self-signed certificates
+ignore.https.errors=false
+
+# Open http:// links over https:// first, exactly like normal Chrome (Chrome 'HTTPS-Upgrades').
+# Playwright turns this off by default; without it the BISS Exit link (http://agfood.icentest...) times out on port 80.
+browser.https.upgrades=true
+
+# Safety net: hosts that are always redirected from http:// to https:// (comma-separated, *.domain allowed).
+# Leave blank unless a host still times out with browser.https.upgrades=true. Example:
+# browser.https.upgrade.hosts=agfood.icentest.agriculture.gov.ie
+browser.https.upgrade.hosts=
+
+# Browser proxy (blank = use the operating system settings)
+browser.proxy.server=
+browser.proxy.bypass=
+
+# Visual aids for local runs
+highlight.enabled=false
+playwright.slowmo.ms=0
+
+# Page zoom, same as Ctrl+minus in Chrome (100 = normal). 67 matches the Selenium framework
+# (ChromeOptions profile.default_zoom_level = -2.196545). Other examples: 70, 75, 80, 90
+browser.zoom.percent=67
+
+# Extra CSS zoom on the page body only (the old per-action document.body.style.zoom='84%').
+# 100 = off. Normally leave this at 100 and use browser.zoom.percent instead.
+ui.zoom.percent=100
+
+# false = first matching element (Selenium behaviour), true = Playwright strict mode
+locator.strict=false
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Wait Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Maximum seconds for any element action (click, fill, visible ...)
+explicit.wait.seconds=20
+
+# Maximum seconds for page navigation
+page.load.timeout.seconds=30
+
+# Polling interval for custom waits (milliseconds)
+wait.polling.interval.ms=250
+
+# Click strategy for CLICK, RADIOBUTTON, CHECKBOX, LIST ...
+#   auto   = normal click; JavaScript click if the normal click is blocked (Selenium ElementClickIntercepted behaviour)
+#   js     = always JavaScript click (arguments[0].click())
+#   native = normal click only, no JavaScript fallback
+# The JSCLICK action always uses a JavaScript click, whatever this is set to.
+click.strategy=auto
+
+# How long a normal click may be blocked (overlay, spinner) before the JavaScript click is used (milliseconds)
+click.attempt.timeout.ms=5000
+
+# Browser pop-up dialogs (alert / confirm / prompt): accept = click OK, dismiss = click Cancel.
+# 'Leave site?' pop-ups are always accepted. UiHelpers.acceptNextDialog() / dismissNextDialog() override one dialog.
+dialog.default.action=accept
+
+# [BROWSER] lines in the run log: page changes, new tabs, dialogs, failed requests, HTTP 4xx/5xx, console errors
+log.browser.events=true
+log.browser.console.errors=true
+
+# How long an "if present" / "if applicable" step looks for an optional element before deciding it is absent.
+# This wait is paid every time such an element is NOT there, so keep it small (the action timeout above is not used).
+probe.timeout.seconds=3
+
+# WAITVISIBLE / VERIFYELEMENT / LIST option timeouts (seconds)
+wait.visible.seconds=30
+verify.element.timeout.seconds=20
+list.option.timeout.seconds=30
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Retry Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Number of times to retry a failed test case (0 = no retry)
+retry.count=1
+
+# Exception types that trigger a retry (comma-separated simple class names) - Playwright names
+retry.on.exceptions=TimeoutError,PlaywrightException
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Test Data
+# -----------------------------------------------------------------------------------------------------------------------------------
+test.data.file.path=src/test/resources/Test_Data/TestData.xlsx
+test.data.sheet.name=Data
+
+# Write the runtime HerdNumber / Username back into TestData.xlsx
+testdata.writeback.enabled=true
+
+# Oracle herd/agent bootstrap before each test case (false = use the sheet values)
+db.bootstrap=true
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Execution Control
+# -----------------------------------------------------------------------------------------------------------------------------------
+execution.control.path=src/test/resources/Execution_Control_File/ExecutionControl.xlsx
+execution.control.sheet=Sheet1
+
+# Write PASS / FAIL back into the Status column
+execution.control.writeback=true
+
+# Comma-separated IDs to run regardless of the Execution flag (blank = Execution=Y rows)
+testcase.ids=
+
+# true  = when a scenario fails, the remaining scenarios of that test case are skipped and the runner moves on to the
+#         next test case in ExecutionControl.xlsx (a failed step already stops its own scenario)
+# false = every scenario of the test case still runs
+execution.fail.fast=true
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Object Repository
+# -----------------------------------------------------------------------------------------------------------------------------------
+object.repository.path=src/test/resources/Object_Repository/ObjectRepository.properties
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Feature Files
+# -----------------------------------------------------------------------------------------------------------------------------------
+feature.directory.path=src/test/resources/Test_Cases/
+glue.package=stepdefinitions
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Reporting
+# -----------------------------------------------------------------------------------------------------------------------------------
+report.docs.path=Test_Report/docs
+report.screenshots.path=Test_Report/screenshots
+report.html.path=Test_Report/html/
+report.traces.path=Test_Report/traces
+report.downloads.path=Test_Report/downloads
+junit.xml.path=target/surefire-reports/
+
+# Playwright trace: off | on | retain-on-failure
+trace.mode=retain-on-failure
+
+# Screencast inside the trace: false keeps every action fast, true records a filmstrip of the run
+trace.screenshots=false
+# DOM snapshot per action - this is what the trace viewer replays. Keep true.
+trace.snapshots=true
+
+# Screenshot on PASS as well (true = capture every step, false = failure only)
+screenshot.on.pass=false
+
+# Auto-delete screenshots older than N days (0 = never delete)
+screenshot.retention.days=30
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Email Notification
+# -----------------------------------------------------------------------------------------------------------------------------------
+notify.email.enabled=false
+notify.email.smtp.host=smtp.office365.com
+notify.email.smtp.port=587
+notify.email.smtp.starttls=true
+notify.email.from=automation@biss.ie
+notify.email.to=qa-team@biss.ie
+# notify.email.password - set via Bamboo plan variable or BISS_NOTIFY_EMAIL_PASSWORD, never store here
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Database (optional - leave blank if not used)
+# -----------------------------------------------------------------------------------------------------------------------------------
+db.enabled=false
+db.driver=oracle.jdbc.OracleDriver
+db.url=
+db.username=
+# db.password - set via Bamboo plan variable or BISS_DB_PASSWORD, never store here
+db.connection.pool.size=5
+db.query.timeout.seconds=30
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------------------------------------------------------------
+log.level=INFO
+log.output.path=target/logs/
