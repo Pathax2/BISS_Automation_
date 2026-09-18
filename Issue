@@ -1,219 +1,472 @@
-# ===================================================================================================================================
-# File          : application.properties
-# Description   : Base configuration defaults for the BISS automation framework (Playwright edition).
-#                 These values apply to ALL environments unless overridden by a profile file.
-#                 Profile files (application-dev.properties, application-docker.properties, etc.)
-#                 overlay and override these values for specific environments.
-#
-# Folder        : src/test/resources/config/application.properties
-#
-# Resolution    : -Dkey=value  >  BISS_KEY environment variable  >  application-<env>.properties  >  this file
-# Activation    : This file is always loaded. Profile overlay activated via -Denv=<profile> (default dev)
-#
-# Author        : Aniket Pathare | aniket.pathare@goverment.ie
-# Date Created  : 10-03-2026
-# Updated       : 16-09-2026 - Playwright keys added, Selenium-only keys removed
-#                 16-09-2026 - browser.zoom.percent (67), click.strategy, click.attempt.timeout.ms 5000
-#                 16-09-2026 - browser.https.upgrades, dialog handling, [BROWSER] event log
-#                 17-09-2026 - browser.cleanup.before.start, browser.cleanup.temp.folders, execution.fail.fast
-# ===================================================================================================================================
+// ===================================================================================================================================
+// File          : UiHelpers.java
+// Package       : commonFunctions
+// Description   : Shared Playwright helpers that replace the ~111 direct getDriver() usages found in step definitions
+//                 (TC_03, TC_18, TC_13_ENTS, TC_03_ENTS, ...). One implementation instead of ten private copies.
+//
+//                 Selenium pattern                                        ->  UiHelpers call
+//                 ---------------------------------------------------------------------------------------------------
+//                 private isVisible(By, int) (10 copies)                  ->  UiHelpers.isVisible("iKey", 5)
+//                 getDriver().findElements(By.xpath(x))                   ->  UiHelpers.findAll("iKey")
+//                 row.findElement(By.xpath(".//td[...]"))                 ->  row.locator("xpath=.//td[...]")
+//                 ((JavascriptExecutor) d).executeScript("arguments[0].click()", e) -> UiHelpers.jsClick(locator)  or  iAction("JSCLICK", ...)
+//                 ((JavascriptExecutor) d).executeScript(anyScript, e, v)     -> CommonFunctions.executeScript(anyScript, locator, v)
+//                 JS removeAttribute('disabled') + value + dispatchEvent  ->  UiHelpers.setValueByJs(locator, "01/01/2026")
+//                 JS un-hide file input + sendKeys(path)                  ->  UiHelpers.uploadFile("iKey", "path")
+//                 getDriver().navigate().to(url) / back()                 ->  UiHelpers.navigateTo(url) / navigateBack()
+//                 getDriver().manage().deleteAllCookies()                 ->  UiHelpers.clearCookies()
+//                 Keys.chord(Keys.CONTROL, "a"), Keys.TAB                 ->  locator.press("ControlOrMeta+A"), press("Tab")
+//                 switchTo().window(handle)                               ->  UiHelpers.clickAndSwitchToNewTab("iKey")
+//                 switchTo().frame(...)                                   ->  UiHelpers.frame("css=iframe#map").locator(...)
+//                 switchTo().alert().accept()                             ->  UiHelpers.acceptNextDialog()   (before the click that opens it)
+//                 switchTo().alert().dismiss() / getText()                ->  UiHelpers.dismissNextDialog() / lastDialogText()
+//                 file in ~/Downloads                                     ->  UiHelpers.downloadByClicking("iKey")
+//                 Thread.sleep(n)                                         ->  delete it; use waitVisible / waitHidden
+//
+//                 FIRST-MATCH RULE
+//                   Selenium findElement() quietly used the first match. Playwright refuses to act on a locator that matches
+//                   more than one element ("strict mode violation ... resolved to 4 elements"). Every helper below that
+//                   works on ONE element therefore uses .first(), so a locator that matches several rows behaves exactly
+//                   as it did in Selenium. findAll() is the only helper that works on all matches.
+//
+// Author        : Aniket Pathare | aniket.pathare@goverment.ie
+// Date Created  : 15-09-2026
+// Updated       : 18-09-2026 - waitForDownloadedFile / downloadedFiles (files the application downloads are saved by
+//                              PlaywrightFactory under report.downloads.path - there is no Windows Downloads folder in Docker)
+// Updated       : 17-09-2026 - isVisible / waitHidden / single-element helpers use the first match (Eco AP toggle rows
+//                              failed with a strict mode violation); comment block for every method
+// ===================================================================================================================================
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Browser Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Supported values: CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
-browser=CHROME
+package commonFunctions;
 
-# Installed browser to drive instead of Playwright's bundled Chromium: blank | chrome | msedge
-# (a value here also stops Playwright from trying to download browsers)
-browser.channel=
+import com.microsoft.playwright.Download;
+import com.microsoft.playwright.FrameLocator;
+import com.microsoft.playwright.Locator;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.TimeoutError;
+import com.microsoft.playwright.options.WaitForSelectorState;
+import utilities.ConfigManager;
+import utilities.ObjReader;
 
-# false = Playwright default (--no-sandbox, needed when Chrome runs as root, e.g. in Docker). The dev profile sets true.
-browser.chromium.sandbox=false
+import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.logging.Logger;
 
-# Browser processes stopped before each test case starts (replaces the Selenium killProcessByName("chrome")):
-#   none       = nothing stopped
-#   automation = only browsers started by Playwright or Selenium (your own Chrome windows stay open)
-#   all        = every chrome.exe (msedge.exe for Edge), like the Selenium framework - your own Chrome windows close too
-# chromedriver.exe left over from Selenium runs is stopped by automation and all.
-browser.cleanup.before.start=automation
+public final class UiHelpers
+{
+    private static final Logger log = Logger.getLogger(UiHelpers.class.getName());
 
-# true = on the first test case of a run, delete old Playwright temp folders (profiles, driver copies) from %TEMP%
-browser.cleanup.temp.folders=true
+    private UiHelpers() {}
 
-# true = never download browsers (laptops behind the department web gateway)
-playwright.skip.browser.download=false
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : page
+    // Description   : Returns the Playwright Page of the current thread (replacement for getDriver()).
+    //                 Fails with a clear message when no browser has been started on this thread.
+    // Returns       : Page - the active page
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Page page()
+    {
+        Page iPage = CommonFunctions.getPage();
+        if (iPage == null) { throw new RuntimeException("No active Playwright page on this thread."); }
+        return iPage;
+    }
 
-# Run browser in headless mode (no visible window) - set true for CI/Bamboo agents and Docker
-headless=false
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : byKey
+    // Description   : Builds a Locator from an Object Repository key. Optional String.format arguments fill %s placeholders.
+    //                 Keys with {index}/{value}/${INDEX} placeholders: call ObjReader.getLocator(key).replace(...) and use byXpath().
+    //                 The Locator may match several elements - use .first() or findAll() as needed.
+    // Parameters    : pKey  (String)   - ObjectRepository.properties key
+    //                 pArgs (Object[]) - optional values for %s placeholders
+    // Returns       : Locator
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Locator byKey(String pKey, Object... pArgs)
+    {
+        String iRaw = ObjReader.getLocator(pKey);
+        String iValue = (pArgs == null || pArgs.length == 0) ? iRaw : String.format(iRaw, pArgs);
+        return page().locator(CommonFunctions.toSelector(ObjReader.getLocatorType(pKey), iValue));
+    }
 
-# Window / viewport
-browser.maximize=false
-viewport.width=1920
-viewport.height=1080
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : byXpath
+    // Description   : Builds a Locator from a raw XPath (dynamic XPaths built in step definitions).
+    //                 The Locator may match several elements - use .first() or findAll() as needed.
+    // Parameters    : pXpath (String) - XPath expression, e.g. //button[normalize-space()='Next']
+    // Returns       : Locator
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Locator byXpath(String pXpath)
+    {
+        return page().locator(CommonFunctions.toSelector("XPATH", pXpath));
+    }
 
-# Locale and timezone used by every browser context
-browser.locale=en-IE
-browser.timezone=Europe/Dublin
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isVisible
+    // Description   : true when the FIRST element for the Object Repository key becomes visible within the timeout.
+    //                 Never throws on timeout - replacement for the private isVisible(By, int) copies in the Selenium steps.
+    // Parameters    : pKey            (String) - ObjectRepository.properties key
+    //                 pTimeoutSeconds (int)    - how long to wait
+    // Returns       : boolean - true = visible, false = not visible in time
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean isVisible(String pKey, int pTimeoutSeconds)
+    {
+        return isVisible(byKey(pKey), pTimeoutSeconds);
+    }
 
-# Accept internal / self-signed certificates
-ignore.https.errors=false
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isVisible
+    // Description   : true when the FIRST element of the Locator becomes visible within the timeout. Never throws on timeout.
+    //                 .first() - Selenium checked the first match only; without it a locator matching several elements
+    //                 (e.g. the Eco AP rows with a toggle) fails with a strict mode violation instead of returning true.
+    // Parameters    : pLocator        (Locator) - element(s) to check
+    //                 pTimeoutSeconds (int)     - how long to wait
+    // Returns       : boolean - true = visible, false = not visible in time
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
+    public static boolean isVisible(Locator pLocator, int pTimeoutSeconds)
+    {
+        try
+        {
+            pLocator.first().waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(pTimeoutSeconds * 1000d));
+            return true;
+        }
+        catch (TimeoutError iTimeout)
+        {
+            return false;
+        }
+    }
 
-# Open http:// links over https:// first, exactly like normal Chrome (Chrome 'HTTPS-Upgrades').
-# Playwright turns this off by default; without it the BISS Exit link (http://agfood.icentest...) times out on port 80.
-browser.https.upgrades=true
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : waitHidden
+    // Description   : Waits until the FIRST element of the Locator is hidden or removed (spinners, overlays, closing dialogs).
+    //                 Throws a TimeoutError when it is still visible after the timeout.
+    // Parameters    : pLocator        (Locator) - element(s) to wait for
+    //                 pTimeoutSeconds (int)     - how long to wait
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
+    public static void waitHidden(Locator pLocator, int pTimeoutSeconds)
+    {
+        pLocator.first().waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.HIDDEN).setTimeout(pTimeoutSeconds * 1000d));
+    }
 
-# Safety net: hosts that are always redirected from http:// to https:// (comma-separated, *.domain allowed).
-# Leave blank unless a host still times out with browser.https.upgrades=true. Example:
-# browser.https.upgrade.hosts=agfood.icentest.agriculture.gov.ie
-browser.https.upgrade.hosts=
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : findAll
+    // Description   : Snapshot of all current matches for an Object Repository key - same as driver.findElements().
+    //                 No waiting; the list may be empty.
+    // Parameters    : pKey (String) - ObjectRepository.properties key
+    // Returns       : List<Locator> - one Locator per matching element
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static List<Locator> findAll(String pKey)
+    {
+        return byKey(pKey).all();
+    }
 
-# Browser proxy (blank = use the operating system settings)
-browser.proxy.server=
-browser.proxy.bypass=
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : findAll
+    // Description   : Snapshot of all current matches for a Locator - same as driver.findElements(). No waiting; may be empty.
+    // Parameters    : pLocator (Locator) - element(s) to list
+    // Returns       : List<Locator> - one Locator per matching element
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static List<Locator> findAll(Locator pLocator)
+    {
+        return pLocator.all();
+    }
 
-# Visual aids for local runs
-highlight.enabled=false
-playwright.slowmo.ms=0
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : jsClick
+    // Description   : JavaScript click on the FIRST element of the Locator - replacement for
+    //                 ((JavascriptExecutor) driver).executeScript("arguments[0].click();", element).
+    //                 Works when an overlay covers the element. Same as iAction("JSCLICK", ...) without a step-log row.
+    // Parameters    : pLocator (Locator) - element to click
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
+    public static void jsClick(Locator pLocator)
+    {
+        CommonFunctions.jsClick(pLocator.first());
+    }
 
-# Page zoom, same as Ctrl+minus in Chrome (100 = normal). 67 matches the Selenium framework
-# (ChromeOptions profile.default_zoom_level = -2.196545). Other examples: 70, 75, 80, 90
-browser.zoom.percent=67
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setValueByJs
+    // Description   : Sets a value on an input that Angular keeps disabled/readonly (mat-datepicker) and fires the
+    //                 events Angular listens to. Replacement for the removeAttribute + executeScript blocks in TC_13_ENTS.
+    //                 Works on the FIRST element of the Locator.
+    // Parameters    : pLocator (Locator) - the input
+    //                 pValue   (String)  - value to set, e.g. 01/06/2024
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
+    public static void setValueByJs(Locator pLocator, String pValue)
+    {
+        pLocator.first().evaluate(
+                "(element, value) => {"
+                        + " element.removeAttribute('disabled'); element.removeAttribute('readonly');"
+                        + " element.focus(); element.value = value;"
+                        + " element.dispatchEvent(new Event('input', { bubbles: true }));"
+                        + " element.dispatchEvent(new Event('change', { bubbles: true }));"
+                        + " element.dispatchEvent(new Event('blur', { bubbles: true })); }",
+                pValue);
+    }
 
-# Extra CSS zoom on the page body only (the old per-action document.body.style.zoom='84%').
-# 100 = off. Normally leave this at 100 and use browser.zoom.percent instead.
-ui.zoom.percent=100
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : getAttribute
+    // Description   : Reads an attribute of the FIRST element - replacement for WebElement.getAttribute(name).
+    //                 Waits for the element to exist (explicit wait); returns null when the attribute is absent.
+    // Parameters    : pLocator (Locator) - element to read
+    //                 pName    (String)  - attribute name, e.g. aria-checked, disabled, class
+    // Returns       : String - attribute value or null
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
+    public static String getAttribute(Locator pLocator, String pName)
+    {
+        return pLocator.first().getAttribute(pName);
+    }
 
-# false = first matching element (Selenium behaviour), true = Playwright strict mode
-locator.strict=false
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : inputValue
+    // Description   : Reads the current value of the FIRST input / textarea / select - replacement for
+    //                 WebElement.getAttribute("value").
+    // Parameters    : pLocator (Locator) - input element
+    // Returns       : String - current value
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
+    // ***************************************************************************************************************************************************************************************
+    public static String inputValue(Locator pLocator)
+    {
+        return pLocator.first().inputValue();
+    }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Wait Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Maximum seconds for any element action (click, fill, visible ...)
-explicit.wait.seconds=20
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : uploadFile
+    // Description   : Gives a file to an <input type="file"> - works on hidden inputs, so the Selenium JavaScript that
+    //                 un-hid the input is not needed and no OS file picker opens.
+    //                 Relative paths are resolved from the project root; a missing file fails with the full path.
+    // Parameters    : pKey      (String) - ObjectRepository.properties key of the file input
+    //                 pFilePath (String) - absolute or project-relative path
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void uploadFile(String pKey, String pFilePath)
+    {
+        byKey(pKey).first().setInputFiles(CommonFunctions.resolveFilePath(pFilePath));
+    }
 
-# Maximum seconds for page navigation
-page.load.timeout.seconds=30
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : navigateTo
+    // Description   : Opens a URL in the current tab - replacement for getDriver().navigate().to(url) / getDriver().get(url).
+    // Parameters    : pUrl (String) - full URL
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void navigateTo(String pUrl)
+    {
+        page().navigate(pUrl);
+    }
 
-# Polling interval for custom waits (milliseconds)
-wait.polling.interval.ms=250
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : navigateBack
+    // Description   : Browser Back - replacement for getDriver().navigate().back().
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void navigateBack()
+    {
+        page().goBack();
+    }
 
-# Click strategy for CLICK, RADIOBUTTON, CHECKBOX, LIST ...
-#   auto   = normal click; JavaScript click if the normal click is blocked (Selenium ElementClickIntercepted behaviour)
-#   js     = always JavaScript click (arguments[0].click())
-#   native = normal click only, no JavaScript fallback
-# The JSCLICK action always uses a JavaScript click, whatever this is set to.
-click.strategy=auto
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : clearCookies
+    // Description   : Deletes all cookies of the browser context - replacement for getDriver().manage().deleteAllCookies().
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void clearCookies()
+    {
+        CommonFunctions.getContext().clearCookies();
+    }
 
-# How long a normal click may be blocked (overlay, spinner) before the JavaScript click is used (milliseconds)
-click.attempt.timeout.ms=5000
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : pressKey
+    // Description   : Presses a key on the page (whatever element has focus) - replacement for Actions.sendKeys(Keys.X).
+    // Parameters    : pKey (String) - Playwright key name, e.g. Escape, Enter, Tab, ControlOrMeta+A
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void pressKey(String pKey)
+    {
+        page().keyboard().press(pKey);
+    }
 
-# Browser pop-up dialogs (alert / confirm / prompt): accept = click OK, dismiss = click Cancel.
-# 'Leave site?' pop-ups are always accepted. UiHelpers.acceptNextDialog() / dismissNextDialog() override one dialog.
-dialog.default.action=accept
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : frame
+    // Description   : Locator scope inside an iframe - replacement for switchTo().frame(...). No switching back is needed:
+    //                 UiHelpers.frame("css=iframe#map").locator("xpath=//button").click();
+    // Parameters    : pSelector (String) - selector of the iframe, e.g. css=iframe#map
+    // Returns       : FrameLocator
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static FrameLocator frame(String pSelector)
+    {
+        return page().frameLocator(pSelector);
+    }
 
-# [BROWSER] lines in the run log: page changes, new tabs, dialogs, failed requests, HTTP 4xx/5xx, console errors
-log.browser.events=true
-log.browser.console.errors=true
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : acceptNextDialog
+    // Description   : The framework handles every pop-up dialog itself (see PlaywrightFactory). Call this BEFORE the click
+    //                 that opens an alert / confirm so the NEXT dialog is accepted; afterwards dialog.default.action applies again.
+    //                 Replacement for switchTo().alert().accept().
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void acceptNextDialog()
+    {
+        PlaywrightFactory.setNextDialogAction("accept", null);
+    }
 
-# WAITVISIBLE / VERIFYELEMENT / LIST option timeouts (seconds)
-wait.visible.seconds=30
-verify.element.timeout.seconds=20
-list.option.timeout.seconds=30
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : acceptNextDialog
+    // Description   : Same as acceptNextDialog(), and types the text into the NEXT prompt() dialog before accepting it.
+    //                 Replacement for switchTo().alert().sendKeys(text) + accept().
+    // Parameters    : pPromptText (String) - text for the prompt
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void acceptNextDialog(String pPromptText)
+    {
+        PlaywrightFactory.setNextDialogAction("accept", pPromptText);
+    }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Retry Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Number of times to retry a failed test case (0 = no retry)
-retry.count=1
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : dismissNextDialog
+    // Description   : Call BEFORE the click that opens the dialog - the NEXT alert / confirm / prompt is dismissed (Cancel).
+    //                 Replacement for switchTo().alert().dismiss().
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void dismissNextDialog()
+    {
+        PlaywrightFactory.setNextDialogAction("dismiss", null);
+    }
 
-# Exception types that trigger a retry (comma-separated simple class names) - Playwright names
-retry.on.exceptions=TimeoutError,PlaywrightException
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : lastDialogText
+    // Description   : Text of the last pop-up dialog shown - replacement for driver.switchTo().alert().getText().
+    // Returns       : String - dialog message, or empty when no dialog has been shown
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 16-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static String lastDialogText()
+    {
+        return PlaywrightFactory.getLastDialogText();
+    }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Test Data
-# -----------------------------------------------------------------------------------------------------------------------------------
-test.data.file.path=src/test/resources/Test_Data/TestData.xlsx
-test.data.sheet.name=Data
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : clickAndSwitchToNewTab
+    // Description   : Clicks an element that opens a new tab/window, waits for it, and makes it the active page for iAction().
+    // Parameters    : pKey (String) - Object Repository key of the element that opens the tab
+    // Returns       : Page - the new page (keep the old one if you need to switch back via PlaywrightFactory.switchToPage)
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Page clickAndSwitchToNewTab(String pKey)
+    {
+        Page iNewPage = CommonFunctions.getContext().waitForPage(() -> byKey(pKey).first().click());
+        iNewPage.waitForLoadState();
+        PlaywrightFactory.switchToPage(iNewPage);
+        return iNewPage;
+    }
 
-# Write the runtime HerdNumber / Username back into TestData.xlsx
-testdata.writeback.enabled=true
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : downloadByClicking
+    // Description   : Clicks an element that triggers a download and saves the file under report.downloads.path.
+    //                 Works identically on Windows and in the Linux container (no dependency on ~/Downloads).
+    // Parameters    : pKey (String) - Object Repository key of the download button/link
+    // Returns       : Path - saved file
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Path downloadByClicking(String pKey)
+    {
+        Download iDownload = page().waitForDownload(() -> byKey(pKey).first().click());
 
-# Oracle herd/agent bootstrap before each test case (false = use the sheet values)
-db.bootstrap=true
+        File iDir = new File(ConfigManager.getOrDefault("report.downloads.path", "Test_Report/downloads"));
+        if (!iDir.exists()) { iDir.mkdirs(); }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Execution Control
-# -----------------------------------------------------------------------------------------------------------------------------------
-execution.control.path=src/test/resources/Execution_Control_File/ExecutionControl.xlsx
-execution.control.sheet=Sheet1
+        Path iTarget = Paths.get(iDir.getAbsolutePath(), iDownload.suggestedFilename());
+        iDownload.saveAs(iTarget);
+        log.info("[UiHelpers] Download saved : " + iTarget);
+        return iTarget;
+    }
 
-# Write PASS / FAIL back into the Status column
-execution.control.writeback=true
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : downloadedFiles
+    // Description   : Every file the application downloaded during this test case, saved under report.downloads.path.
+    //                 Playwright never uses the Windows Downloads folder: the browser keeps a download in a temporary
+    //                 folder and deletes it on close, so PlaywrightFactory copies each one out as it arrives.
+    // Returns       : List<Path> - saved files, oldest first (empty when nothing was downloaded)
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 18-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static List<Path> downloadedFiles()
+    {
+        return PlaywrightFactory.getDownloads();
+    }
 
-# Comma-separated IDs to run regardless of the Execution flag (blank = Execution=Y rows)
-testcase.ids=
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : waitForDownloadedFile
+    // Description   : Waits for a downloaded file whose name ends with one of the given extensions.
+    //                 Use it after the click that starts the download (Export to Excel, Download letter ...):
+    //                   Path iFile = UiHelpers.waitForDownloadedFile(".xlsx,.xls", 30);
+    // Parameters    : pExtensions      (String) - comma-separated list, e.g. ".xlsx,.xls" (blank = any file)
+    //                 pTimeoutSeconds  (int)    - how long to wait for the file to finish downloading
+    // Returns       : Path - the saved file, or null when nothing matching arrived in time
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 18-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Path waitForDownloadedFile(String pExtensions, int pTimeoutSeconds)
+    {
+        String[] iWanted = (pExtensions == null ? "" : pExtensions).split(",");
+        long     iDeadline = System.currentTimeMillis() + (pTimeoutSeconds * 1000L);
 
-# true  = when a scenario fails, the remaining scenarios of that test case are skipped and the runner moves on to the
-#         next test case in ExecutionControl.xlsx (a failed step already stops its own scenario)
-# false = every scenario of the test case still runs
-execution.fail.fast=true
+        while (true)
+        {
+            for (Path iPath : PlaywrightFactory.getDownloads())
+            {
+                String iName = iPath.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+                for (String iExtension : iWanted)
+                {
+                    String iSuffix = iExtension.trim().toLowerCase(java.util.Locale.ROOT);
+                    if (iSuffix.isEmpty() || iName.endsWith(iSuffix))
+                    {
+                        return iPath;
+                    }
+                }
+            }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Object Repository
-# -----------------------------------------------------------------------------------------------------------------------------------
-object.repository.path=src/test/resources/Object_Repository/ObjectRepository.properties
+            if (System.currentTimeMillis() >= iDeadline)
+            {
+                log.warning("[UiHelpers] No downloaded file matching [" + pExtensions + "] after " + pTimeoutSeconds + " s");
+                return null;
+            }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Feature Files
-# -----------------------------------------------------------------------------------------------------------------------------------
-feature.directory.path=src/test/resources/Test_Cases/
-glue.package=stepdefinitions
-
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Reporting
-# -----------------------------------------------------------------------------------------------------------------------------------
-report.docs.path=Test_Report/docs
-report.screenshots.path=Test_Report/screenshots
-report.html.path=Test_Report/html/
-report.traces.path=Test_Report/traces
-report.downloads.path=Test_Report/downloads
-junit.xml.path=target/surefire-reports/
-
-# Playwright trace: off | on | retain-on-failure
-trace.mode=retain-on-failure
-
-# Screenshot on PASS as well (true = capture every step, false = failure only)
-screenshot.on.pass=false
-
-# Auto-delete screenshots older than N days (0 = never delete)
-screenshot.retention.days=30
-
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Email Notification
-# -----------------------------------------------------------------------------------------------------------------------------------
-notify.email.enabled=false
-notify.email.smtp.host=smtp.office365.com
-notify.email.smtp.port=587
-notify.email.smtp.starttls=true
-notify.email.from=automation@biss.ie
-notify.email.to=qa-team@biss.ie
-# notify.email.password - set via Bamboo plan variable or BISS_NOTIFY_EMAIL_PASSWORD, never store here
-
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Database (optional - leave blank if not used)
-# -----------------------------------------------------------------------------------------------------------------------------------
-db.enabled=false
-db.driver=oracle.jdbc.OracleDriver
-db.url=
-db.username=
-# db.password - set via Bamboo plan variable or BISS_DB_PASSWORD, never store here
-db.connection.pool.size=5
-db.query.timeout.seconds=30
-
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------------------------------------------------------------
-log.level=INFO
-log.output.path=target/logs/
+            page().waitForTimeout(250);
+        }
+    }
+}
