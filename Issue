@@ -1,472 +1,688 @@
-// ===================================================================================================================================
-// File          : UiHelpers.java
-// Package       : commonFunctions
-// Description   : Shared Playwright helpers that replace the ~111 direct getDriver() usages found in step definitions
-//                 (TC_03, TC_18, TC_13_ENTS, TC_03_ENTS, ...). One implementation instead of ten private copies.
-//
-//                 Selenium pattern                                        ->  UiHelpers call
-//                 ---------------------------------------------------------------------------------------------------
-//                 private isVisible(By, int) (10 copies)                  ->  UiHelpers.isVisible("iKey", 5)
-//                 getDriver().findElements(By.xpath(x))                   ->  UiHelpers.findAll("iKey")
-//                 row.findElement(By.xpath(".//td[...]"))                 ->  row.locator("xpath=.//td[...]")
-//                 ((JavascriptExecutor) d).executeScript("arguments[0].click()", e) -> UiHelpers.jsClick(locator)  or  iAction("JSCLICK", ...)
-//                 ((JavascriptExecutor) d).executeScript(anyScript, e, v)     -> CommonFunctions.executeScript(anyScript, locator, v)
-//                 JS removeAttribute('disabled') + value + dispatchEvent  ->  UiHelpers.setValueByJs(locator, "01/01/2026")
-//                 JS un-hide file input + sendKeys(path)                  ->  UiHelpers.uploadFile("iKey", "path")
-//                 getDriver().navigate().to(url) / back()                 ->  UiHelpers.navigateTo(url) / navigateBack()
-//                 getDriver().manage().deleteAllCookies()                 ->  UiHelpers.clearCookies()
-//                 Keys.chord(Keys.CONTROL, "a"), Keys.TAB                 ->  locator.press("ControlOrMeta+A"), press("Tab")
-//                 switchTo().window(handle)                               ->  UiHelpers.clickAndSwitchToNewTab("iKey")
-//                 switchTo().frame(...)                                   ->  UiHelpers.frame("css=iframe#map").locator(...)
-//                 switchTo().alert().accept()                             ->  UiHelpers.acceptNextDialog()   (before the click that opens it)
-//                 switchTo().alert().dismiss() / getText()                ->  UiHelpers.dismissNextDialog() / lastDialogText()
-//                 file in ~/Downloads                                     ->  UiHelpers.downloadByClicking("iKey")
-//                 Thread.sleep(n)                                         ->  delete it; use waitVisible / waitHidden
-//
-//                 FIRST-MATCH RULE
-//                   Selenium findElement() quietly used the first match. Playwright refuses to act on a locator that matches
-//                   more than one element ("strict mode violation ... resolved to 4 elements"). Every helper below that
-//                   works on ONE element therefore uses .first(), so a locator that matches several rows behaves exactly
-//                   as it did in Selenium. findAll() is the only helper that works on all matches.
-//
-// Author        : Aniket Pathare | aniket.pathare@goverment.ie
-// Date Created  : 15-09-2026
-// Updated       : 18-09-2026 - waitForDownloadedFile / downloadedFiles (files the application downloads are saved by
-//                              PlaywrightFactory under report.downloads.path - there is no Windows Downloads folder in Docker)
-// Updated       : 17-09-2026 - isVisible / waitHidden / single-element helpers use the first match (Eco AP toggle rows
-//                              failed with a strict mode violation); comment block for every method
-// ===================================================================================================================================
+C:\Users\Aniket.Pathare\.jdks\ms-21.0.12.1\bin\java.exe "-javaagent:C:\Program Files\JetBrains\IntelliJ IDEA 2025.3.3\lib\idea_rt.jar=56427" -Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 -classpath C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\target\test-classes;C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\target\classes;C:\Users\Aniket.Pathare\.m2\repository\com\microsoft\playwright\playwright\1.61.0\playwright-1.61.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\code\gson\gson\2.14.0\gson-2.14.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\google\errorprone\error_prone_annotations\2.48.0\error_prone_annotations-2.48.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\opentest4j\opentest4j\1.3.0\opentest4j-1.3.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\microsoft\playwright\driver\1.61.0\driver-1.61.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\microsoft\playwright\driver-bundle\1.61.0\driver-bundle-1.61.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-java\7.15.0\cucumber-java-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apiguardian\apiguardian-api\1.1.2\apiguardian-api-1.1.2.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-core\7.15.0\cucumber-core-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-gherkin\7.15.0\cucumber-gherkin-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-gherkin-messages\7.15.0\cucumber-gherkin-messages-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\gherkin\26.2.0\gherkin-26.2.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\messages\22.0.0\messages-22.0.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\tag-expressions\6.0.0\tag-expressions-6.0.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-expressions\17.0.1\cucumber-expressions-17.0.1.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\datatable\7.15.0\datatable-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-plugin\7.15.0\cucumber-plugin-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\docstring\7.15.0\docstring-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\html-formatter\20.4.0\html-formatter-20.4.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\junit-xml-formatter\0.2.0\junit-xml-formatter-0.2.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\ci-environment\10.0.0\ci-environment-10.0.0.jar;C:\Users\Aniket.Pathare\.m2\repository\io\cucumber\cucumber-junit-platform-engine\7.15.0\cucumber-junit-platform-engine-7.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-engine\1.10.1\junit-platform-engine-1.10.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\jupiter\junit-jupiter-api\5.10.2\junit-jupiter-api-5.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-commons\1.10.2\junit-platform-commons-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\jupiter\junit-jupiter-engine\5.10.2\junit-jupiter-engine-5.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-suite\1.10.2\junit-platform-suite-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-suite-api\1.10.2\junit-platform-suite-api-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-suite-engine\1.10.2\junit-platform-suite-engine-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-suite-commons\1.10.2\junit-platform-suite-commons-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\junit\platform\junit-platform-launcher\1.10.2\junit-platform-launcher-1.10.2.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\poi\poi-ooxml\5.2.5\poi-ooxml-5.2.5.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\poi\poi\5.2.5\poi-5.2.5.jar;C:\Users\Aniket.Pathare\.m2\repository\commons-codec\commons-codec\1.16.0\commons-codec-1.16.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\commons\commons-math3\3.6.1\commons-math3-3.6.1.jar;C:\Users\Aniket.Pathare\.m2\repository\com\zaxxer\SparseBitSet\1.3\SparseBitSet-1.3.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\poi\poi-ooxml-lite\5.2.5\poi-ooxml-lite-5.2.5.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\xmlbeans\xmlbeans\5.2.0\xmlbeans-5.2.0.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\commons\commons-compress\1.25.0\commons-compress-1.25.0.jar;C:\Users\Aniket.Pathare\.m2\repository\commons-io\commons-io\2.15.0\commons-io-2.15.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\github\virtuald\curvesapi\1.08\curvesapi-1.08.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\commons\commons-collections4\4.4\commons-collections4-4.4.jar;C:\Users\Aniket.Pathare\.m2\repository\com\oracle\database\jdbc\ojdbc11\21.9.0.0\ojdbc11-21.9.0.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\zaxxer\HikariCP\5.1.0\HikariCP-5.1.0.jar;C:\Users\Aniket.Pathare\.m2\repository\com\sun\mail\javax.mail\1.6.2\javax.mail-1.6.2.jar;C:\Users\Aniket.Pathare\.m2\repository\javax\activation\activation\1.1\activation-1.1.jar;C:\Users\Aniket.Pathare\.m2\repository\ch\qos\logback\logback-classic\1.4.14\logback-classic-1.4.14.jar;C:\Users\Aniket.Pathare\.m2\repository\ch\qos\logback\logback-core\1.4.14\logback-core-1.4.14.jar;C:\Users\Aniket.Pathare\.m2\repository\org\slf4j\slf4j-api\2.0.12\slf4j-api-2.0.12.jar;C:\Users\Aniket.Pathare\.m2\repository\org\slf4j\jul-to-slf4j\2.0.12\jul-to-slf4j-2.0.12.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\logging\log4j\log4j-to-slf4j\2.23.1\log4j-to-slf4j-2.23.1.jar;C:\Users\Aniket.Pathare\.m2\repository\org\apache\logging\log4j\log4j-api\2.23.1\log4j-api-2.23.1.jar runner.TestRunner
+Sept 18, 2026 11:27:18 A.M. utilities.ConfigManager loadBaseProperties
+INFO: [ConfigManager] Base config loaded from : src/test/resources/config/application.properties
+Sept 18, 2026 11:27:19 A.M. utilities.ConfigManager loadProfileProperties
+INFO: [ConfigManager] Profile config loaded from : src/test/resources/config/application-dev.properties | Keys overridden=22
+Sept 18, 2026 11:27:19 A.M. utilities.ConfigManager <clinit>
+INFO: [ConfigManager] Loaded | Profile='dev' | Folder='src/test/resources/config/' | Total keys=71
+Sept 18, 2026 11:27:26 A.M. reporting.ReportManager startSuite
+INFO: [ReportManager] Suite started | Environment= | Browser=CHROME
 
-package commonFunctions;
+==================================================================
+  STARTING   : TC_01_Login
+  Environment: QA
+  Browser    : CHROME
+  Feature    : src\test\resources\Test_Cases\BISS\INET\TC_01_Login.feature
+==================================================================
+Sept 18, 2026 11:27:28 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : TC_01_Login
+Sept 18, 2026 11:27:28 A.M. io.cucumber.core.feature.GluePath warnWhenWellKnownProjectSourceDirectory
+WARNING: Consider replacing glue path 'src/test/java/stepdefinitions' with 'stepdefinitions'.
+'
+The current glue path points to a source directory in your project. However cucumber looks for glue (i.e. step definitions) on the classpath. By using a package name you can avoid this ambiguity.
+Sept 18, 2026 11:27:32 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: ========== EXECUTION START : TC_01_Login ==========
+Sept 18, 2026 11:27:32 A.M. commonFunctions.CommonFunctions loadDescriptionCache
+INFO: [2026-09-18 11:27:32.739] ExecutionControl description cache loaded. Total entries: 73
+Sept 18, 2026 11:27:32 A.M. commonFunctions.CommonFunctions clearStepLog
+INFO: [2026-09-18 11:27:32.754] Step log cleared for new test case.
+Sept 18, 2026 11:27:32 A.M. utilities.ExcelUtilities loadCurrentTestDataRow
+INFO: Test data loaded for TestCase_ID : 'TC_01_Login' | Columns loaded : 4
+[2026-09-18 11:27:33] [INFO] [DBRouter] DATA and INET connection properties loaded successfully.
+Sept 18, 2026 11:27:38 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] Attempt 1/3 - trying 25 randomized candidate(s) from DATA (year=2026, limit=25)
+Sept 18, 2026 11:27:38 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] Candidate [1/25] : E1010500
+Sept 18, 2026 11:27:38 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+WARNING: [BOOT] INET: no USERNAME for herd=E1010500 - next candidate...
+Sept 18, 2026 11:27:38 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] Candidate [2/25] : E1210657
+Sept 18, 2026 11:27:39 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+WARNING: [BOOT] INET: no USERNAME for herd=E1210657 - next candidate...
+Sept 18, 2026 11:27:39 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] Candidate [3/25] : E1040921
+Sept 18, 2026 11:27:39 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] SELECTED Herd=E1040921 | Username=aga7674
+Sept 18, 2026 11:27:41 A.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Data' | Column='HerdNumber' | Row=1 | Value='E1040921'
+Sept 18, 2026 11:27:41 A.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Data' | Column='Username' | Row=1 | Value='aga7674'
+Sept 18, 2026 11:27:41 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: [BOOT->Excel] Data updated: HerdNumber=E1040921, Username=aga7674
+Sept 18, 2026 11:27:50 A.M. utilities.BrowserProcessCleaner cleanBeforeLaunch
+INFO: [CLEANUP] Mode=all | Browser processes [chrome.exe] | Processes stopped: 0 | 9072 ms
+Sept 18, 2026 11:28:20 A.M. commonFunctions.PlaywrightFactory start
+INFO: [PlaywrightFactory] Started | Browser=CHROME | Channel=chrome | Version=Google Chrome (installed) 153.0.8010.48 | Headless=false | Zoom=67% (Chrome zoom preference) | HttpsUpgrades=on | TraceMode=retain-on-failure
+Sept 18, 2026 11:28:21 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:28:25 A.M. commonFunctions.CommonFunctions launchBrowser
+INFO: [2026-09-18 11:28:24.996] Browser launched successfully | Browser=CHROME | Google Chrome (installed) 153.0.8010.48 | URL=https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:28:26 A.M. commonFunctions.CommonFunctions startWordReport
+INFO: [2026-09-18 11:28:26.831] Word report created : C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_01_Login_18_09_2026_11_28_25.docx
+Sept 18, 2026 11:28:26 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: BeforeAll complete | URL=https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/ | Report=C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_01_Login_18_09_2026_11_28_25.docx
 
-import com.microsoft.playwright.Download;
-import com.microsoft.playwright.FrameLocator;
-import com.microsoft.playwright.Locator;
-import com.microsoft.playwright.Page;
-import com.microsoft.playwright.TimeoutError;
-import com.microsoft.playwright.options.WaitForSelectorState;
-import utilities.ConfigManager;
-import utilities.ObjReader;
+Scenario: Verify user can login with valid credentials # src/test/resources/Test_Cases/BISS/INET/TC_01_Login.feature:4
+Sept 18, 2026 11:28:27 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : Verify_user_can_login_with_val
+Sept 18, 2026 11:28:27 A.M. utilities.SoftAssertManager reset
+INFO: [SoftAssert] State reset for current thread.
+Sept 18, 2026 11:28:27 A.M. utilities.RetryAnalyser resolveRetryableExceptions
+INFO: [RetryAnalyser] Retryable exceptions : [PlaywrightException, TimeoutError] | Max retries : 1
+Sept 18, 2026 11:28:27 A.M. utilities.RetryAnalyser clearRetryState
+INFO: [RetryAnalyser] Retry state cleared.
+Sept 18, 2026 11:28:27 A.M. stepdefinitions.Hooks beforeScenarioExecution
+INFO: ---------- Scenario START : Verify user can login with valid credentials ----------
+Sept 18, 2026 11:28:27 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : TC_01_Login
+Sept 18, 2026 11:28:27 A.M. stepdefinitions.TC_01_Login launchApplication
+INFO: Application launched via Hooks. Browser is active and URL loaded.
+  Given User Launches the application                  # stepdefinitions.TC_01_Login.launchApplication()
+Sept 18, 2026 11:28:27 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Given User Launches the application | PASS | 20ms
+Sept 18, 2026 11:28:27 A.M. utilities.ObjReader <clinit>
+INFO: Object Repository loaded successfully from : src/test/resources/Object_Repository/ObjectRepository.properties | Total keys : 474
+Sept 18, 2026 11:28:27 A.M. utilities.ObjReader getLocatorType
+WARNING: ObjReader: No locator suffix found for key 'iWelcomeLoginBtn'. Defaulting to XPATH.
+Sept 18, 2026 11:28:27 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/protocol/openid-connect/auth?client_id=biss-ui&redirect_uri=https%3A%2F%2Fbiss-inet-ui-biss-sit.apps.services1.agriculture.go...
+Sept 18, 2026 11:28:32 A.M. stepdefinitions.TC_01_Login clickWelcomeLoginIfPresent
+INFO: BISS welcome page not displayed - already on the Keycloak sign-in page.
+Sept 18, 2026 11:28:32 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:32.959] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='username'] | Value=aga6607
+Sept 18, 2026 11:28:33 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:33.199] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='username'] | Value=aga6607 | Duration=246 ms
+Sept 18, 2026 11:28:33 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:33.217] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value=
+Sept 18, 2026 11:28:33 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?session_code=8TJ7kO18M1RX--LPExqLRz5QxIic2NsE4ngJwv0u5SM&execution=964121f3-d0c5-7996-f705-7f752ef...
+Sept 18, 2026 11:28:33 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?execution=4925fe90-0726-89cc-a32b-20838b95c812&client_id=biss-ui&tab_id=rEbMGIpnJcY&client_data=ey...
+Sept 18, 2026 11:28:33 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:33.953] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value= | Duration=736 ms
+Sept 18, 2026 11:28:33 A.M. stepdefinitions.TC_01_Login enterValidFieldValue
+INFO: Username entered and Continue clicked successfully.
+Sept 18, 2026 11:28:33 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | When user enters valid "Username" | PASS | 6s
+Sept 18, 2026 11:28:33 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:33.958] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=****
+  When user enters valid "Username"                    # stepdefinitions.TC_01_Login.enterValidFieldValue(java.lang.String)
+Sept 18, 2026 11:28:34 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:34.346] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=**** | Duration=388 ms
+Sept 18, 2026 11:28:34 A.M. stepdefinitions.TC_01_Login enterValidFieldValue
+INFO: Password entered successfully.
+Sept 18, 2026 11:28:34 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And user enters valid "Password" | PASS | 397ms
+Sept 18, 2026 11:28:34 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:34.362] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value=
+  And user enters valid "Password"                     # stepdefinitions.TC_01_Login.enterValidFieldValue(java.lang.String)
+Sept 18, 2026 11:28:34 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?session_code=GhC4B2TUzRP5L-DFiH6zRSSVttv9kxRGLfnzBlcyLCY&execution=4925fe90-0726-89cc-a32b-20838b9...
+Sept 18, 2026 11:28:35 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?execution=f778ffe0-3d6e-d1bf-5578-936496c4f7e4&client_id=biss-ui&tab_id=rEbMGIpnJcY&client_data=ey...
+Sept 18, 2026 11:28:35 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:35.462] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value= | Duration=1100 ms
+Sept 18, 2026 11:28:35 A.M. stepdefinitions.TC_01_Login clickLoginButton
+INFO: Login button clicked.
+Sept 18, 2026 11:28:35 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:35.468] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='otp' or @id='sms_code'or @id='totp'] | Value=111111
+Sept 18, 2026 11:28:35 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:35.876] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='otp' or @id='sms_code'or @id='totp'] | Value=111111 | Duration=407 ms
+Sept 18, 2026 11:28:35 A.M. stepdefinitions.TC_01_Login clickLoginButton
+INFO: MFA OTP entered successfully.
+Sept 18, 2026 11:28:35 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:35.882] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value=
+Sept 18, 2026 11:28:36 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/&state=fc4363d6-14b3-4472-8b65-bc33215a5a5d&session_state=b983f429-7f5e-de49-a087-182b112f06d9&iss=https%3A%2F%2Fdafmsso-2p.apps.servi...
+Sept 18, 2026 11:28:36 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:36.513] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value= | Duration=631 ms
+Sept 18, 2026 11:28:36 A.M. stepdefinitions.TC_01_Login clickLoginButton
+INFO: Login button clicked.
+Sept 18, 2026 11:28:36 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And user clicks on Login button | PASS | 2s
+  And user clicks on Login button                      # stepdefinitions.TC_01_Login.clickLoginButton()
+Sept 18, 2026 11:28:36 A.M. utilities.ObjReader getLocatorType
+WARNING: ObjReader: No locator suffix found for key 'iDashboardTitle'. Defaulting to XPATH.
+Sept 18, 2026 11:28:36 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:36.542] STEP START | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=
+Sept 18, 2026 11:28:38 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:28:41 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:28:43 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:43.135] STEP PASS  | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value= | Duration=6593 ms
+Sept 18, 2026 11:28:43 A.M. utilities.ObjReader getLocatorType
+WARNING: ObjReader: No locator suffix found for key 'iBissTitle'. Defaulting to XPATH.
+Sept 18, 2026 11:28:43 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:43.142] STEP START | ActionType=GETTEXT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=
+Sept 18, 2026 11:28:44 A.M. commonFunctions.CommonFunctions performGetText
+INFO: [2026-09-18 11:28:43.999] GETTEXT value captured : 'Basic Income Support for Sustainability'
+Sept 18, 2026 11:28:44 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:44.002] STEP PASS  | ActionType=GETTEXT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value= | Duration=860 ms
+Sept 18, 2026 11:28:47 A.M. utilities.ScreenshotManager captureAndEmbed
+INFO: [ScreenshotManager] Step screenshot saved : Test_Report/screenshots\Dashboard_displayed_after_login_-_Basic_Income_Support_for_Sustainability_step_18_09_2026_11_28_44_176.png
+Sept 18, 2026 11:28:48 A.M. utilities.ScreenshotManager captureAndEmbed
+INFO: [ScreenshotManager] Step screenshot embedded. Label: Dashboard displayed after login - Basic Income Support for Sustainability
+Sept 18, 2026 11:28:48 A.M. stepdefinitions.TC_01_Login verifyLoginSuccessful
+INFO: Login verified successfully. Dashboard title : 'Basic Income Support for Sustainability'
+Sept 18, 2026 11:28:48 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then User should be successfully able to login | PASS | 11s
+Sept 18, 2026 11:28:48 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:48.114] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//a[normalize-space()='Exit' and contains(@class,'exit')] | Value=
+  Then User should be successfully able to login       # stepdefinitions.TC_01_Login.verifyLoginSuccessful()
+Sept 18, 2026 11:28:49 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://agfood.icentest.agriculture.gov.ie/sso-portal-ui/#
+Sept 18, 2026 11:28:49 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:49.307] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//a[normalize-space()='Exit' and contains(@class,'exit')] | Value= | Duration=1193 ms
+Sept 18, 2026 11:28:49 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:28:49.312] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//button[contains(normalize-space(.),'Log out') or contains(normalize-space(.),'Sign Out')] | Value=
+Sept 18, 2026 11:28:50 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://myagfood-client-myagfood-sit.apps.services1.agriculture.gov.ie/
+Sept 18, 2026 11:28:56 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://myagfood-client-myagfood-sit.apps.services1.agriculture.gov.ie/
+Sept 18, 2026 11:28:58 A.M. commonFunctions.PlaywrightFactory lambda$attachBrowserListeners$4
+WARNING: [BROWSER] Page load failed : GET https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/protocol/openid-connect/logout?client_id=myagfood-ui&post_logout_redirect_uri=https%3A%2F%2Fmyagfood-client-myagfood-sit.apps... | net::ERR_ABORTED
+Sept 18, 2026 11:28:59 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://myagfood-client-myagfood-sit.apps.services1.agriculture.gov.ie/
+Sept 18, 2026 11:28:59 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:28:59.511] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//button[contains(normalize-space(.),'Log out') or contains(normalize-space(.),'Sign Out')] | Value= | Duration=10199 ms
+Sept 18, 2026 11:28:59 A.M. stepdefinitions.TC_01_Login LogoutApplication
+INFO: Logout/Signout button clicked.
+Sept 18, 2026 11:28:59 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then A user logging out of an application | PASS | 11s
+  Then A user logging out of an application            # stepdefinitions.TC_01_Login.LogoutApplication()
+Sept 18, 2026 11:28:59 A.M. utilities.SoftAssertManager assertAll
+INFO: [SoftAssert] All soft assertions passed.
+Sept 18, 2026 11:28:59 A.M. utilities.ScreenshotManager appendScenarioDivider
+INFO: [ScreenshotManager] Scenario divider added : Verify user can login with valid credentials [PASSED]
+Sept 18, 2026 11:28:59 A.M. stepdefinitions.Hooks afterScenarioExecution
+INFO: ---------- Scenario PASSED : Verify user can login with valid credentials ----------
+Sept 18, 2026 11:29:00 A.M. commonFunctions.CommonFunctions finalizeWordReport
+INFO: [2026-09-18 11:29:00.378] Word report finalized : C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_01_Login_18_09_2026_11_28_25.docx
+Sept 18, 2026 11:29:00 A.M. commonFunctions.CommonFunctions writeHtmlReportIndex
+INFO: [2026-09-18 11:29:00.450] HTML report index updated: ReportIndex.html | TC=TC 01 Login | Status=PASS
+Sept 18, 2026 11:29:02 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://myagfood-client-myagfood-sit.apps.services1.agriculture.gov.ie/
+Sept 18, 2026 11:29:03 A.M. commonFunctions.PlaywrightFactory lambda$attachBrowserListeners$4
+WARNING: [BROWSER] API call failed : GET https://oc-cdn-public-eur.azureedge.net/livechatwidget/scripts/LiveChatBootstrapper.js | net::ERR_FAILED
+Sept 18, 2026 11:29:11 A.M. commonFunctions.CommonFunctions closeBrowser
+INFO: [2026-09-18 11:29:11.085] Browser closed successfully.
+Sept 18, 2026 11:29:11 A.M. stepdefinitions.Hooks afterAllExecution
+INFO: ========== EXECUTION END : TC_01_Login ==========
 
-import java.io.File;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.List;
-import java.util.logging.Logger;
+1 Scenarios (1 passed)
+6 Steps (6 passed)
+1m39.025s
 
-public final class UiHelpers
-{
-    private static final Logger log = Logger.getLogger(UiHelpers.class.getName());
 
-    private UiHelpers() {}
+Sept 18, 2026 11:29:11 A.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Sheet1' | Column='Status' | Row=1 | Value='PASS'
+Sept 18, 2026 11:29:11 A.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] PASS : TC_01_Login  (1m 43s)
+Sept 18, 2026 11:29:11 A.M. reporting.ReportManager recordResult
+INFO: [ReportManager] Recorded | TC_01_Login | PASS | 1m 43s | Steps=6
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : page
-    // Description   : Returns the Playwright Page of the current thread (replacement for getDriver()).
-    //                 Fails with a clear message when no browser has been started on this thread.
-    // Returns       : Page - the active page
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Page page()
-    {
-        Page iPage = CommonFunctions.getPage();
-        if (iPage == null) { throw new RuntimeException("No active Playwright page on this thread."); }
-        return iPage;
-    }
+==================================================================
+  STARTING   : TC_02_InvalidCredentials_Login
+  Environment: QA
+  Browser    : CHROME
+  Feature    : src\test\resources\Test_Cases\BISS\INET\TC_02_InvalidCredentials_Login.feature
+==================================================================
+Sept 18, 2026 11:29:13 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : TC_02_InvalidCredentials_Login
+Sept 18, 2026 11:29:13 A.M. io.cucumber.core.feature.GluePath warnWhenWellKnownProjectSourceDirectory
+WARNING: Consider replacing glue path 'src/test/java/stepdefinitions' with 'stepdefinitions'.
+'
+The current glue path points to a source directory in your project. However cucumber looks for glue (i.e. step definitions) on the classpath. By using a package name you can avoid this ambiguity.
+Sept 18, 2026 11:29:14 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: ========== EXECUTION START : TC_02_InvalidCredentials_Login ==========
+Sept 18, 2026 11:29:14 A.M. commonFunctions.CommonFunctions clearStepLog
+INFO: [2026-09-18 11:29:14.429] Step log cleared for new test case.
+Sept 18, 2026 11:29:14 A.M. utilities.ExcelUtilities loadCurrentTestDataRow
+INFO: Test data loaded for TestCase_ID : 'TC_02_InvalidCredentials_Login' | Columns loaded : 4
+Sept 18, 2026 11:29:15 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] Attempt 1/3 - trying 25 randomized candidate(s) from DATA (year=2026, limit=25)
+Sept 18, 2026 11:29:15 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] Candidate [1/25] : E1190796
+Sept 18, 2026 11:29:15 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] SELECTED Herd=E1190796 | Username=aga6539
+Sept 18, 2026 11:29:16 A.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Data' | Column='HerdNumber' | Row=2 | Value='E1190796'
+Sept 18, 2026 11:29:16 A.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Data' | Column='Username' | Row=2 | Value='aga6539'
+Sept 18, 2026 11:29:16 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: [BOOT->Excel] Data updated: HerdNumber=E1190796, Username=aga6539
+Sept 18, 2026 11:29:23 A.M. utilities.BrowserProcessCleaner cleanBeforeLaunch
+INFO: [CLEANUP] Mode=all | Browser processes [chrome.exe] | Processes stopped: 0 | 6944 ms
+Sept 18, 2026 11:29:34 A.M. commonFunctions.PlaywrightFactory start
+INFO: [PlaywrightFactory] Started | Browser=CHROME | Channel=chrome | Version=Google Chrome (installed) 153.0.8010.48 | Headless=false | Zoom=67% (Chrome zoom preference) | HttpsUpgrades=on | TraceMode=retain-on-failure
+Sept 18, 2026 11:29:34 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:29:38 A.M. commonFunctions.CommonFunctions launchBrowser
+INFO: [2026-09-18 11:29:38.221] Browser launched successfully | Browser=CHROME | Google Chrome (installed) 153.0.8010.48 | URL=https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:29:38 A.M. commonFunctions.CommonFunctions startWordReport
+INFO: [2026-09-18 11:29:38.608] Word report created : C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_02_InvalidCredentials_Login_18_09_2026_11_29_38.docx
+Sept 18, 2026 11:29:38 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: BeforeAll complete | URL=https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/ | Report=C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_02_InvalidCredentials_Login_18_09_2026_11_29_38.docx
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : byKey
-    // Description   : Builds a Locator from an Object Repository key. Optional String.format arguments fill %s placeholders.
-    //                 Keys with {index}/{value}/${INDEX} placeholders: call ObjReader.getLocator(key).replace(...) and use byXpath().
-    //                 The Locator may match several elements - use .first() or findAll() as needed.
-    // Parameters    : pKey  (String)   - ObjectRepository.properties key
-    //                 pArgs (Object[]) - optional values for %s placeholders
-    // Returns       : Locator
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Locator byKey(String pKey, Object... pArgs)
-    {
-        String iRaw = ObjReader.getLocator(pKey);
-        String iValue = (pArgs == null || pArgs.length == 0) ? iRaw : String.format(iRaw, pArgs);
-        return page().locator(CommonFunctions.toSelector(ObjReader.getLocatorType(pKey), iValue));
-    }
+Scenario: Verify user gets error messages when invalid credentials are entered on login screens # src/test/resources/Test_Cases/BISS/INET/TC_02_InvalidCredentials_Login.feature:4
+  Given User Launches the application                                                           # stepdefinitions.TC_01_Login.launchApplication()
+Sept 18, 2026 11:29:38 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : Verify_user_gets_error_message
+Sept 18, 2026 11:29:38 A.M. utilities.SoftAssertManager reset
+INFO: [SoftAssert] State reset for current thread.
+Sept 18, 2026 11:29:38 A.M. utilities.RetryAnalyser clearRetryState
+INFO: [RetryAnalyser] Retry state cleared.
+Sept 18, 2026 11:29:38 A.M. stepdefinitions.Hooks beforeScenarioExecution
+INFO: ---------- Scenario START : Verify user gets error messages when invalid credentials are entered on login screens ----------
+Sept 18, 2026 11:29:38 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : TC_02_InvalidCredentials_Login
+Sept 18, 2026 11:29:38 A.M. stepdefinitions.TC_01_Login launchApplication
+INFO: Application launched via Hooks. Browser is active and URL loaded.
+Sept 18, 2026 11:29:38 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Given User Launches the application | PASS | 2ms
+Sept 18, 2026 11:29:38 A.M. utilities.ObjReader getLocatorType
+WARNING: ObjReader: No locator suffix found for key 'iWelcomeLoginBtn'. Defaulting to XPATH.
+Sept 18, 2026 11:29:38 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/protocol/openid-connect/auth?client_id=biss-ui&redirect_uri=https%3A%2F%2Fbiss-inet-ui-biss-sit.apps.services1.agriculture.go...
+Sept 18, 2026 11:29:44 A.M. stepdefinitions.TC_01_Login clickWelcomeLoginIfPresent
+INFO: BISS welcome page not displayed - already on the Keycloak sign-in page.
+Sept 18, 2026 11:29:44 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:44.356] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='username'] | Value=aga6494
+Sept 18, 2026 11:29:45 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:45.421] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='username'] | Value=aga6494 | Duration=1065 ms
+Sept 18, 2026 11:29:45 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:45.424] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value=
+Sept 18, 2026 11:29:46 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?session_code=Z-UNRqT39Z0H3YdFFavs92LPfoXEKGWnd81L5AKvZKw&execution=964121f3-d0c5-7996-f705-7f752ef...
+Sept 18, 2026 11:29:46 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?execution=4925fe90-0726-89cc-a32b-20838b95c812&client_id=biss-ui&tab_id=J_0VihlCI2Y&client_data=ey...
+Sept 18, 2026 11:29:48 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:48.494] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value= | Duration=3070 ms
+Sept 18, 2026 11:29:48 A.M. stepdefinitions.TC_01_Login enterInvalidCredentials
+INFO: Username entered and Continue clicked successfully.
+Sept 18, 2026 11:29:48 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:48.507] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=Invalid
+Sept 18, 2026 11:29:49 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:49.058] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=Invalid | Duration=551 ms
+Sept 18, 2026 11:29:49 A.M. stepdefinitions.TC_01_Login enterInvalidCredentials
+INFO: Invalid Password entered successfully.
+Sept 18, 2026 11:29:49 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:49.063] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value=
+Sept 18, 2026 11:29:49 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?session_code=tqRNKoOPwoeTnR532rUC7bE_7bMKbH3MkyQl9CJRGH0&execution=4925fe90-0726-89cc-a32b-20838b9...
+Sept 18, 2026 11:29:49 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?execution=4925fe90-0726-89cc-a32b-20838b95c812&client_id=biss-ui&tab_id=J_0VihlCI2Y&client_data=ey...
+Sept 18, 2026 11:29:50 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:50.379] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value= | Duration=1316 ms
+Sept 18, 2026 11:29:50 A.M. stepdefinitions.TC_01_Login enterInvalidCredentials
+INFO: Login button clicked.
+Sept 18, 2026 11:29:50 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:50.387] STEP START | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//span[@class='kc-feedback-text'] | Value=
+Sept 18, 2026 11:29:51 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:51.006] STEP PASS  | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//span[@class='kc-feedback-text'] | Value= | Duration=619 ms
+Sept 18, 2026 11:29:51 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:51.010] STEP START | ActionType=GETTEXT | IdentifyBy=XPATH | Object=//span[@class='kc-feedback-text'] | Value=
+Sept 18, 2026 11:29:51 A.M. commonFunctions.CommonFunctions performGetText
+INFO: [2026-09-18 11:29:51.531] GETTEXT value captured : 'Invalid username or password.'
+Sept 18, 2026 11:29:51 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:51.535] STEP PASS  | ActionType=GETTEXT | IdentifyBy=XPATH | Object=//span[@class='kc-feedback-text'] | Value= | Duration=524 ms
+Sept 18, 2026 11:29:51 A.M. stepdefinitions.TC_01_Login enterInvalidCredentials
+INFO: Invalid Credentials Error Message Validation Completed : 'Invalid username or password.'
+Sept 18, 2026 11:29:52 A.M. utilities.ScreenshotManager captureAndEmbed
+INFO: [ScreenshotManager] Step screenshot saved : Test_Report/screenshots\Invalid_credentials_error_displayed_-_Invalid_username_or_password._step_18_09_2026_11_29_51_547.png
+Sept 18, 2026 11:29:52 A.M. utilities.ScreenshotManager captureAndEmbed
+INFO: [ScreenshotManager] Step screenshot embedded. Label: Invalid credentials error displayed - Invalid username or password.
+Sept 18, 2026 11:29:52 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:52.645] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=****
+Sept 18, 2026 11:29:53 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:53.056] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=**** | Duration=413 ms
+Sept 18, 2026 11:29:53 A.M. stepdefinitions.TC_01_Login enterInvalidCredentials
+INFO: Password entered successfully.
+Sept 18, 2026 11:29:53 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | When user enters invalid credentials "Password" | PASS | 14s
+Sept 18, 2026 11:29:53 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:53.067] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value=
+  When user enters invalid credentials "Password"                                               # stepdefinitions.TC_01_Login.enterInvalidCredentials(java.lang.String)
+Sept 18, 2026 11:29:53 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?session_code=N7SQ_MdVCPfMFShFGloIF8xj6V70FmD6tcoTxmNRwOw&execution=4925fe90-0726-89cc-a32b-20838b9...
+Sept 18, 2026 11:29:53 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:53.748] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value= | Duration=682 ms
+Sept 18, 2026 11:29:53 A.M. stepdefinitions.TC_01_Login clickLoginButton
+INFO: Login button clicked.
+Sept 18, 2026 11:29:53 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:53.753] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='otp' or @id='sms_code'or @id='totp'] | Value=111111
+Sept 18, 2026 11:29:54 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?execution=f778ffe0-3d6e-d1bf-5578-936496c4f7e4&client_id=biss-ui&tab_id=J_0VihlCI2Y&client_data=ey...
+Sept 18, 2026 11:29:54 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:54.722] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='otp' or @id='sms_code'or @id='totp'] | Value=111111 | Duration=970 ms
+Sept 18, 2026 11:29:54 A.M. stepdefinitions.TC_01_Login clickLoginButton
+INFO: MFA OTP entered successfully.
+Sept 18, 2026 11:29:54 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:54.730] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value=
+Sept 18, 2026 11:29:55 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/&state=ab4757de-486f-4744-9101-6b0881266c15&session_state=af88050b-2ba9-16a5-496e-c67e1d9f6737&iss=https%3A%2F%2Fdafmsso-2p.apps.servi...
+Sept 18, 2026 11:29:55 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:55.303] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value= | Duration=573 ms
+Sept 18, 2026 11:29:55 A.M. stepdefinitions.TC_01_Login clickLoginButton
+INFO: Login button clicked.
+Sept 18, 2026 11:29:55 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And user clicks on Login button | PASS | 2s
+Sept 18, 2026 11:29:55 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:55.315] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//a[normalize-space()='Exit' and contains(@class,'exit')] | Value=
+  And user clicks on Login button                                                               # stepdefinitions.TC_01_Login.clickLoginButton()
+Sept 18, 2026 11:29:56 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:29:57 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:29:59 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://agfood.icentest.agriculture.gov.ie/sso-portal-ui/#
+Sept 18, 2026 11:29:59 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:29:59.638] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//a[normalize-space()='Exit' and contains(@class,'exit')] | Value= | Duration=4323 ms
+Sept 18, 2026 11:29:59 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:29:59.644] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//button[contains(normalize-space(.),'Log out') or contains(normalize-space(.),'Sign Out')] | Value=
+Sept 18, 2026 11:30:02 A.M. commonFunctions.PlaywrightFactory lambda$attachBrowserListeners$4
+WARNING: [BROWSER] Page load failed : GET https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/protocol/openid-connect/3p-cookies/step1.html | net::ERR_ABORTED
+Sept 18, 2026 11:30:02 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://myagfood-client-myagfood-sit.apps.services1.agriculture.gov.ie/
+Sept 18, 2026 11:30:05 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://myagfood-client-myagfood-sit.apps.services1.agriculture.gov.ie/
+Sept 18, 2026 11:30:07 A.M. commonFunctions.PlaywrightFactory lambda$attachBrowserListeners$4
+WARNING: [BROWSER] Page load failed : GET https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/protocol/openid-connect/logout?client_id=myagfood-ui&post_logout_redirect_uri=https%3A%2F%2Fmyagfood-client-myagfood-sit.apps... | net::ERR_ABORTED
+Sept 18, 2026 11:30:09 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://myagfood-client-myagfood-sit.apps.services1.agriculture.gov.ie/
+Sept 18, 2026 11:30:10 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:30:10.020] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//button[contains(normalize-space(.),'Log out') or contains(normalize-space(.),'Sign Out')] | Value= | Duration=10378 ms
+Sept 18, 2026 11:30:10 A.M. stepdefinitions.TC_01_Login LogoutApplication
+INFO: Logout/Signout button clicked.
+Sept 18, 2026 11:30:10 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then A user logging out of an application | PASS | 14s
+Sept 18, 2026 11:30:10 A.M. utilities.SoftAssertManager assertAll
+INFO: [SoftAssert] All soft assertions passed.
+Sept 18, 2026 11:30:10 A.M. utilities.ScreenshotManager appendScenarioDivider
+INFO: [ScreenshotManager] Scenario divider added : Verify user gets error messages when invalid credentials are entered on login screens [PASSED]
+Sept 18, 2026 11:30:10 A.M. stepdefinitions.Hooks afterScenarioExecution
+INFO: ---------- Scenario PASSED : Verify user gets error messages when invalid credentials are entered on login screens ----------
+  Then A user logging out of an application                                                     # stepdefinitions.TC_01_Login.LogoutApplication()
+Sept 18, 2026 11:30:10 A.M. commonFunctions.CommonFunctions finalizeWordReport
+INFO: [2026-09-18 11:30:10.550] Word report finalized : C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_02_InvalidCredentials_Login_18_09_2026_11_29_38.docx
+Sept 18, 2026 11:30:10 A.M. commonFunctions.CommonFunctions writeHtmlReportIndex
+INFO: [2026-09-18 11:30:10.613] HTML report index updated: ReportIndex.html | TC=TC 02 InvalidCredentials Login | Status=PASS
+Sept 18, 2026 11:30:12 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://myagfood-client-myagfood-sit.apps.services1.agriculture.gov.ie/
+Sept 18, 2026 11:30:14 A.M. commonFunctions.PlaywrightFactory lambda$attachBrowserListeners$6
+WARNING: [BROWSER] Console error : Access to fetch at 'https://m-b1d4dceb-9fb7-4994-a7ea-f94da2a2c1c7.eu.omnichannelengagementhub.com/livechatconnector/config/b1d4dceb-9fb7-4994-a7ea-f94da2a2c1c7/368465f8-d5f7-4ba1-b1e2-460a23b5d82a?requestId=6f3d2720-3a3a-4fdf-88e8-5e292488264c&channelId=lcw' from origin 'https://oc-cdn-public-eur.a...
+Sept 18, 2026 11:30:14 A.M. commonFunctions.PlaywrightFactory lambda$attachBrowserListeners$4
+WARNING: [BROWSER] API call failed : GET https://m-b1d4dceb-9fb7-4994-a7ea-f94da2a2c1c7.eu.omnichannelengagementhub.com/livechatconnector/config/b1d4dceb-9fb7-4994-a7ea-f94da2a2c1c7/368465f8-d5f7-4ba1-b1e2-460a23b5d82a?requestId=6f3d2720-3a3... | net::ERR_FAILED
+Sept 18, 2026 11:30:14 A.M. commonFunctions.PlaywrightFactory lambda$attachBrowserListeners$6
+WARNING: [BROWSER] Console error : Access to fetch at 'https://m-b1d4dceb-9fb7-4994-a7ea-f94da2a2c1c7.eu.omnichannelengagementhub.com/livechatconnector/config/b1d4dceb-9fb7-4994-a7ea-f94da2a2c1c7/368465f8-d5f7-4ba1-b1e2-460a23b5d82a?requestId=6f3d2720-3a3a-4fdf-88e8-5e292488264c&channelId=lcw' from origin 'https://oc-cdn-public-eur.a...
+Sept 18, 2026 11:30:14 A.M. commonFunctions.PlaywrightFactory lambda$attachBrowserListeners$4
+WARNING: [BROWSER] API call failed : GET https://m-b1d4dceb-9fb7-4994-a7ea-f94da2a2c1c7.eu.omnichannelengagementhub.com/livechatconnector/config/b1d4dceb-9fb7-4994-a7ea-f94da2a2c1c7/368465f8-d5f7-4ba1-b1e2-460a23b5d82a?requestId=6f3d2720-3a3... | net::ERR_FAILED
+Sept 18, 2026 11:30:24 A.M. commonFunctions.CommonFunctions closeBrowser
+INFO: [2026-09-18 11:30:24.481] Browser closed successfully.
+Sept 18, 2026 11:30:24 A.M. stepdefinitions.Hooks afterAllExecution
+INFO: ========== EXECUTION END : TC_02_InvalidCredentials_Login ==========
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : byXpath
-    // Description   : Builds a Locator from a raw XPath (dynamic XPaths built in step definitions).
-    //                 The Locator may match several elements - use .first() or findAll() as needed.
-    // Parameters    : pXpath (String) - XPath expression, e.g. //button[normalize-space()='Next']
-    // Returns       : Locator
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Locator byXpath(String pXpath)
-    {
-        return page().locator(CommonFunctions.toSelector("XPATH", pXpath));
-    }
+1 Scenarios (1 passed)
+4 Steps (4 passed)
+1m10.142s
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : isVisible
-    // Description   : true when the FIRST element for the Object Repository key becomes visible within the timeout.
-    //                 Never throws on timeout - replacement for the private isVisible(By, int) copies in the Selenium steps.
-    // Parameters    : pKey            (String) - ObjectRepository.properties key
-    //                 pTimeoutSeconds (int)    - how long to wait
-    // Returns       : boolean - true = visible, false = not visible in time
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static boolean isVisible(String pKey, int pTimeoutSeconds)
-    {
-        return isVisible(byKey(pKey), pTimeoutSeconds);
-    }
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : isVisible
-    // Description   : true when the FIRST element of the Locator becomes visible within the timeout. Never throws on timeout.
-    //                 .first() - Selenium checked the first match only; without it a locator matching several elements
-    //                 (e.g. the Eco AP rows with a toggle) fails with a strict mode violation instead of returning true.
-    // Parameters    : pLocator        (Locator) - element(s) to check
-    //                 pTimeoutSeconds (int)     - how long to wait
-    // Returns       : boolean - true = visible, false = not visible in time
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
-    // ***************************************************************************************************************************************************************************************
-    public static boolean isVisible(Locator pLocator, int pTimeoutSeconds)
-    {
-        try
-        {
-            pLocator.first().waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.VISIBLE).setTimeout(pTimeoutSeconds * 1000d));
-            return true;
-        }
-        catch (TimeoutError iTimeout)
-        {
-            return false;
-        }
-    }
+Sept 18, 2026 11:30:24 A.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Sheet1' | Column='Status' | Row=2 | Value='PASS'
+Sept 18, 2026 11:30:24 A.M. runner.TestRunner runFrameworkExecution
+INFO: [RUNNER] PASS : TC_02_InvalidCredentials_Login  (1m 11s)
+Sept 18, 2026 11:30:24 A.M. reporting.ReportManager recordResult
+INFO: [ReportManager] Recorded | TC_02_InvalidCredentials_Login | PASS | 1m 11s | Steps=4
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : waitHidden
-    // Description   : Waits until the FIRST element of the Locator is hidden or removed (spinners, overlays, closing dialogs).
-    //                 Throws a TimeoutError when it is still visible after the timeout.
-    // Parameters    : pLocator        (Locator) - element(s) to wait for
-    //                 pTimeoutSeconds (int)     - how long to wait
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
-    // ***************************************************************************************************************************************************************************************
-    public static void waitHidden(Locator pLocator, int pTimeoutSeconds)
-    {
-        pLocator.first().waitFor(new Locator.WaitForOptions().setState(WaitForSelectorState.HIDDEN).setTimeout(pTimeoutSeconds * 1000d));
-    }
+==================================================================
+  STARTING   : TC_04
+  Environment: QA
+  Browser    : CHROME
+  Feature    : src\test\resources\Test_Cases\BISS\INET\TC_04.feature
+==================================================================
+Sept 18, 2026 11:30:25 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : TC_04
+Sept 18, 2026 11:30:25 A.M. io.cucumber.core.feature.GluePath warnWhenWellKnownProjectSourceDirectory
+WARNING: Consider replacing glue path 'src/test/java/stepdefinitions' with 'stepdefinitions'.
+'
+The current glue path points to a source directory in your project. However cucumber looks for glue (i.e. step definitions) on the classpath. By using a package name you can avoid this ambiguity.
+Sept 18, 2026 11:30:25 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: ========== EXECUTION START : TC_04 ==========
+Sept 18, 2026 11:30:25 A.M. commonFunctions.CommonFunctions clearStepLog
+INFO: [2026-09-18 11:30:25.423] Step log cleared for new test case.
+Sept 18, 2026 11:30:25 A.M. utilities.ExcelUtilities loadCurrentTestDataRow
+INFO: Test data loaded for TestCase_ID : 'TC_04' | Columns loaded : 4
+Sept 18, 2026 11:30:25 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] Attempt 1/3 - trying 25 randomized candidate(s) from DATA (year=2026, limit=25)
+Sept 18, 2026 11:30:25 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] Candidate [1/25] : E1211084
+Sept 18, 2026 11:30:26 A.M. stepdefinitions.Hooks bootstrapRuntimeHerdAndUser
+INFO: [BOOT] SELECTED Herd=E1211084 | Username=aga6539
+Sept 18, 2026 11:30:26 A.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Data' | Column='HerdNumber' | Row=3 | Value='E1211084'
+Sept 18, 2026 11:30:26 A.M. utilities.ExcelUtilities setCellValue
+INFO: Cell updated | Sheet='Data' | Column='Username' | Row=3 | Value='aga6539'
+Sept 18, 2026 11:30:26 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: [BOOT->Excel] Data updated: HerdNumber=E1211084, Username=aga6539
+Sept 18, 2026 11:30:35 A.M. utilities.BrowserProcessCleaner cleanBeforeLaunch
+INFO: [CLEANUP] Mode=all | Browser processes [chrome.exe] | Processes stopped: 16 | 8697 ms
+Sept 18, 2026 11:30:43 A.M. commonFunctions.PlaywrightFactory start
+INFO: [PlaywrightFactory] Started | Browser=CHROME | Channel=chrome | Version=Google Chrome (installed) 153.0.8010.48 | Headless=false | Zoom=67% (Chrome zoom preference) | HttpsUpgrades=on | TraceMode=retain-on-failure
+Sept 18, 2026 11:30:44 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:30:47 A.M. commonFunctions.CommonFunctions launchBrowser
+INFO: [2026-09-18 11:30:47.194] Browser launched successfully | Browser=CHROME | Google Chrome (installed) 153.0.8010.48 | URL=https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:30:47 A.M. commonFunctions.CommonFunctions startWordReport
+INFO: [2026-09-18 11:30:47.348] Word report created : C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_04_18_09_2026_11_30_47.docx
+Sept 18, 2026 11:30:47 A.M. stepdefinitions.Hooks beforeAllExecution
+INFO: BeforeAll complete | URL=https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/ | Report=C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_04_18_09_2026_11_30_47.docx
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : findAll
-    // Description   : Snapshot of all current matches for an Object Repository key - same as driver.findElements().
-    //                 No waiting; the list may be empty.
-    // Parameters    : pKey (String) - ObjectRepository.properties key
-    // Returns       : List<Locator> - one Locator per matching element
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static List<Locator> findAll(String pKey)
-    {
-        return byKey(pKey).all();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : findAll
-    // Description   : Snapshot of all current matches for a Locator - same as driver.findElements(). No waiting; may be empty.
-    // Parameters    : pLocator (Locator) - element(s) to list
-    // Returns       : List<Locator> - one Locator per matching element
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static List<Locator> findAll(Locator pLocator)
-    {
-        return pLocator.all();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : jsClick
-    // Description   : JavaScript click on the FIRST element of the Locator - replacement for
-    //                 ((JavascriptExecutor) driver).executeScript("arguments[0].click();", element).
-    //                 Works when an overlay covers the element. Same as iAction("JSCLICK", ...) without a step-log row.
-    // Parameters    : pLocator (Locator) - element to click
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 16-09-2026 | Updated: 17-09-2026 (first match)
-    // ***************************************************************************************************************************************************************************************
-    public static void jsClick(Locator pLocator)
-    {
-        CommonFunctions.jsClick(pLocator.first());
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : setValueByJs
-    // Description   : Sets a value on an input that Angular keeps disabled/readonly (mat-datepicker) and fires the
-    //                 events Angular listens to. Replacement for the removeAttribute + executeScript blocks in TC_13_ENTS.
-    //                 Works on the FIRST element of the Locator.
-    // Parameters    : pLocator (Locator) - the input
-    //                 pValue   (String)  - value to set, e.g. 01/06/2024
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
-    // ***************************************************************************************************************************************************************************************
-    public static void setValueByJs(Locator pLocator, String pValue)
-    {
-        pLocator.first().evaluate(
-                "(element, value) => {"
-                        + " element.removeAttribute('disabled'); element.removeAttribute('readonly');"
-                        + " element.focus(); element.value = value;"
-                        + " element.dispatchEvent(new Event('input', { bubbles: true }));"
-                        + " element.dispatchEvent(new Event('change', { bubbles: true }));"
-                        + " element.dispatchEvent(new Event('blur', { bubbles: true })); }",
-                pValue);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getAttribute
-    // Description   : Reads an attribute of the FIRST element - replacement for WebElement.getAttribute(name).
-    //                 Waits for the element to exist (explicit wait); returns null when the attribute is absent.
-    // Parameters    : pLocator (Locator) - element to read
-    //                 pName    (String)  - attribute name, e.g. aria-checked, disabled, class
-    // Returns       : String - attribute value or null
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
-    // ***************************************************************************************************************************************************************************************
-    public static String getAttribute(Locator pLocator, String pName)
-    {
-        return pLocator.first().getAttribute(pName);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : inputValue
-    // Description   : Reads the current value of the FIRST input / textarea / select - replacement for
-    //                 WebElement.getAttribute("value").
-    // Parameters    : pLocator (Locator) - input element
-    // Returns       : String - current value
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026 | Updated: 17-09-2026 (first match)
-    // ***************************************************************************************************************************************************************************************
-    public static String inputValue(Locator pLocator)
-    {
-        return pLocator.first().inputValue();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : uploadFile
-    // Description   : Gives a file to an <input type="file"> - works on hidden inputs, so the Selenium JavaScript that
-    //                 un-hid the input is not needed and no OS file picker opens.
-    //                 Relative paths are resolved from the project root; a missing file fails with the full path.
-    // Parameters    : pKey      (String) - ObjectRepository.properties key of the file input
-    //                 pFilePath (String) - absolute or project-relative path
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void uploadFile(String pKey, String pFilePath)
-    {
-        byKey(pKey).first().setInputFiles(CommonFunctions.resolveFilePath(pFilePath));
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : navigateTo
-    // Description   : Opens a URL in the current tab - replacement for getDriver().navigate().to(url) / getDriver().get(url).
-    // Parameters    : pUrl (String) - full URL
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void navigateTo(String pUrl)
-    {
-        page().navigate(pUrl);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : navigateBack
-    // Description   : Browser Back - replacement for getDriver().navigate().back().
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void navigateBack()
-    {
-        page().goBack();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clearCookies
-    // Description   : Deletes all cookies of the browser context - replacement for getDriver().manage().deleteAllCookies().
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void clearCookies()
-    {
-        CommonFunctions.getContext().clearCookies();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : pressKey
-    // Description   : Presses a key on the page (whatever element has focus) - replacement for Actions.sendKeys(Keys.X).
-    // Parameters    : pKey (String) - Playwright key name, e.g. Escape, Enter, Tab, ControlOrMeta+A
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void pressKey(String pKey)
-    {
-        page().keyboard().press(pKey);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : frame
-    // Description   : Locator scope inside an iframe - replacement for switchTo().frame(...). No switching back is needed:
-    //                 UiHelpers.frame("css=iframe#map").locator("xpath=//button").click();
-    // Parameters    : pSelector (String) - selector of the iframe, e.g. css=iframe#map
-    // Returns       : FrameLocator
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static FrameLocator frame(String pSelector)
-    {
-        return page().frameLocator(pSelector);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : acceptNextDialog
-    // Description   : The framework handles every pop-up dialog itself (see PlaywrightFactory). Call this BEFORE the click
-    //                 that opens an alert / confirm so the NEXT dialog is accepted; afterwards dialog.default.action applies again.
-    //                 Replacement for switchTo().alert().accept().
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 16-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void acceptNextDialog()
-    {
-        PlaywrightFactory.setNextDialogAction("accept", null);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : acceptNextDialog
-    // Description   : Same as acceptNextDialog(), and types the text into the NEXT prompt() dialog before accepting it.
-    //                 Replacement for switchTo().alert().sendKeys(text) + accept().
-    // Parameters    : pPromptText (String) - text for the prompt
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 16-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void acceptNextDialog(String pPromptText)
-    {
-        PlaywrightFactory.setNextDialogAction("accept", pPromptText);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : dismissNextDialog
-    // Description   : Call BEFORE the click that opens the dialog - the NEXT alert / confirm / prompt is dismissed (Cancel).
-    //                 Replacement for switchTo().alert().dismiss().
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 16-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void dismissNextDialog()
-    {
-        PlaywrightFactory.setNextDialogAction("dismiss", null);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : lastDialogText
-    // Description   : Text of the last pop-up dialog shown - replacement for driver.switchTo().alert().getText().
-    // Returns       : String - dialog message, or empty when no dialog has been shown
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 16-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static String lastDialogText()
-    {
-        return PlaywrightFactory.getLastDialogText();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clickAndSwitchToNewTab
-    // Description   : Clicks an element that opens a new tab/window, waits for it, and makes it the active page for iAction().
-    // Parameters    : pKey (String) - Object Repository key of the element that opens the tab
-    // Returns       : Page - the new page (keep the old one if you need to switch back via PlaywrightFactory.switchToPage)
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Page clickAndSwitchToNewTab(String pKey)
-    {
-        Page iNewPage = CommonFunctions.getContext().waitForPage(() -> byKey(pKey).first().click());
-        iNewPage.waitForLoadState();
-        PlaywrightFactory.switchToPage(iNewPage);
-        return iNewPage;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : downloadByClicking
-    // Description   : Clicks an element that triggers a download and saves the file under report.downloads.path.
-    //                 Works identically on Windows and in the Linux container (no dependency on ~/Downloads).
-    // Parameters    : pKey (String) - Object Repository key of the download button/link
-    // Returns       : Path - saved file
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Path downloadByClicking(String pKey)
-    {
-        Download iDownload = page().waitForDownload(() -> byKey(pKey).first().click());
-
-        File iDir = new File(ConfigManager.getOrDefault("report.downloads.path", "Test_Report/downloads"));
-        if (!iDir.exists()) { iDir.mkdirs(); }
-
-        Path iTarget = Paths.get(iDir.getAbsolutePath(), iDownload.suggestedFilename());
-        iDownload.saveAs(iTarget);
-        log.info("[UiHelpers] Download saved : " + iTarget);
-        return iTarget;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : downloadedFiles
-    // Description   : Every file the application downloaded during this test case, saved under report.downloads.path.
-    //                 Playwright never uses the Windows Downloads folder: the browser keeps a download in a temporary
-    //                 folder and deletes it on close, so PlaywrightFactory copies each one out as it arrives.
-    // Returns       : List<Path> - saved files, oldest first (empty when nothing was downloaded)
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static List<Path> downloadedFiles()
-    {
-        return PlaywrightFactory.getDownloads();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : waitForDownloadedFile
-    // Description   : Waits for a downloaded file whose name ends with one of the given extensions.
-    //                 Use it after the click that starts the download (Export to Excel, Download letter ...):
-    //                   Path iFile = UiHelpers.waitForDownloadedFile(".xlsx,.xls", 30);
-    // Parameters    : pExtensions      (String) - comma-separated list, e.g. ".xlsx,.xls" (blank = any file)
-    //                 pTimeoutSeconds  (int)    - how long to wait for the file to finish downloading
-    // Returns       : Path - the saved file, or null when nothing matching arrived in time
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Path waitForDownloadedFile(String pExtensions, int pTimeoutSeconds)
-    {
-        String[] iWanted = (pExtensions == null ? "" : pExtensions).split(",");
-        long     iDeadline = System.currentTimeMillis() + (pTimeoutSeconds * 1000L);
-
-        while (true)
-        {
-            for (Path iPath : PlaywrightFactory.getDownloads())
-            {
-                String iName = iPath.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
-                for (String iExtension : iWanted)
-                {
-                    String iSuffix = iExtension.trim().toLowerCase(java.util.Locale.ROOT);
-                    if (iSuffix.isEmpty() || iName.endsWith(iSuffix))
-                    {
-                        return iPath;
-                    }
-                }
-            }
-
-            if (System.currentTimeMillis() >= iDeadline)
-            {
-                log.warning("[UiHelpers] No downloaded file matching [" + pExtensions + "] after " + pTimeoutSeconds + " s");
-                return null;
-            }
-
-            page().waitForTimeout(250);
-        }
-    }
-}
+@regression
+Scenario: To Check all working functionalities in the Dashboard Page                           # src/test/resources/Test_Cases/BISS/INET/TC_04.feature:29
+Sept 18, 2026 11:30:47 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : To_Check_all_working_functiona
+Sept 18, 2026 11:30:47 A.M. utilities.SoftAssertManager reset
+INFO: [SoftAssert] State reset for current thread.
+Sept 18, 2026 11:30:47 A.M. utilities.RetryAnalyser clearRetryState
+INFO: [RetryAnalyser] Retry state cleared.
+Sept 18, 2026 11:30:47 A.M. stepdefinitions.Hooks beforeScenarioExecution
+INFO: ---------- Scenario START : To Check all working functionalities in the Dashboard Page ----------
+Sept 18, 2026 11:30:47 A.M. reporting.ReportManager beginTestCase
+INFO: [ReportManager] Test case started : TC_04
+Sept 18, 2026 11:30:47 A.M. stepdefinitions.TC_03 theAgentUserIsOnTheLoginPage
+INFO: Application launched via Hooks. Browser is active and URL loaded.
+Sept 18, 2026 11:30:47 A.M. stepdefinitions.TC_03 theAgentUserIsOnTheLoginPage
+INFO: [STEP] Given the agent user is on the login page
+Sept 18, 2026 11:30:47 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Given the agent user is on the login page | PASS | 35ms
+Sept 18, 2026 11:30:47 A.M. stepdefinitions.TC_03 theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP
+INFO: [LOGIN] Classic login detected.
+Sept 18, 2026 11:30:47 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:30:47.970] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='username'] | Value=aga6539
+Sept 18, 2026 11:30:47 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/protocol/openid-connect/auth?client_id=biss-ui&redirect_uri=https%3A%2F%2Fbiss-inet-ui-biss-sit.apps.services1.agriculture.go...
+  Given the agent user is on the login page                                                    # stepdefinitions.TC_03.theAgentUserIsOnTheLoginPage()
+Sept 18, 2026 11:30:48 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:30:48.831] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='username'] | Value=aga6539 | Duration=861 ms
+Sept 18, 2026 11:30:48 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:30:48.831] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value=
+Sept 18, 2026 11:30:49 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?session_code=uDXqCfAiY2QwW_If80Xqf6ZVSuC52eaQ4QNOIxNUQUw&execution=964121f3-d0c5-7996-f705-7f752ef...
+Sept 18, 2026 11:30:49 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?execution=4925fe90-0726-89cc-a32b-20838b95c812&client_id=biss-ui&tab_id=4QMJ7ah-6dE&client_data=ey...
+Sept 18, 2026 11:30:49 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:30:49.823] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//input[@id='kc-login'] | Value= | Duration=992 ms
+Sept 18, 2026 11:30:49 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:30:49.824] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=****
+Sept 18, 2026 11:30:50 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:30:50.222] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='password'] | Value=**** | Duration=398 ms
+Sept 18, 2026 11:30:50 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:30:50.225] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value=
+Sept 18, 2026 11:30:50 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?session_code=j-8aYc9KGcGLZt2H3Zg_ftKu_ZFjcpp0VjW9paxnqiw&execution=4925fe90-0726-89cc-a32b-20838b9...
+Sept 18, 2026 11:30:50 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://dafmsso-2p.apps.services1.agriculture.gov.ie/auth/realms/iDAFM-SIT/login-actions/authenticate?execution=f778ffe0-3d6e-d1bf-5578-936496c4f7e4&client_id=biss-ui&tab_id=4QMJ7ah-6dE&client_data=ey...
+Sept 18, 2026 11:30:51 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:30:51.064] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value= | Duration=840 ms
+Sept 18, 2026 11:30:54 A.M. stepdefinitions.TC_03 theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP
+INFO: [STEP] Detect login screen and auto-login using simple PIN loop...
+Sept 18, 2026 11:30:57 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:30:57.205] STEP START | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='otp' or @id='sms_code'or @id='totp'] | Value=111111
+Sept 18, 2026 11:30:57 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:30:57.627] STEP PASS  | ActionType=TEXTBOX | IdentifyBy=XPATH | Object=//input[@id='otp' or @id='sms_code'or @id='totp'] | Value=111111 | Duration=422 ms
+Sept 18, 2026 11:30:57 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:30:57.630] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value=
+Sept 18, 2026 11:30:58 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/&state=a24b18af-7fe3-46a9-82a3-3a4a81706751&session_state=94bcc692-55f2-eaed-d947-8a98a66c97ec&iss=https%3A%2F%2Fdafmsso-2p.apps.servi...
+  When the agent logs into the application with valid credentials and OTP                      # stepdefinitions.TC_03.theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP()
+  And the agent opens the "Basic Income Support for Sustainability" application                # stepdefinitions.TC_03.theAgentOpensTheApplication(java.lang.String)
+Sept 18, 2026 11:30:59 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:30:59.277] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//*[@id='kc-login'] | Value= | Duration=1646 ms
+Sept 18, 2026 11:30:59 A.M. stepdefinitions.TC_03 theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP
+INFO: [LOGIN] Classic login completed.
+Sept 18, 2026 11:30:59 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | When the agent logs into the application with valid credentials and OTP | PASS | 11s
+Sept 18, 2026 11:30:59 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And the agent opens the "Basic Income Support for Sustainability" application | PASS | 1ms
+Sept 18, 2026 11:30:59 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:30:59.284] STEP START | ActionType=WAITINVISIBLE | IdentifyBy=XPATH | Object=iScreenBuffer | Value=MDC Progress Spinner
+Sept 18, 2026 11:30:59 A.M. commonFunctions.CommonFunctions performWaitInvisible
+INFO: [2026-09-18 11:30:59.285] WAITINVISIBLE - watching locator : iScreenBuffer
+Sept 18, 2026 11:30:59 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:30:59 A.M. commonFunctions.CommonFunctions performWaitInvisible
+INFO: [2026-09-18 11:30:59.886] WAITINVISIBLE - spinner dismissed successfully : iScreenBuffer
+Sept 18, 2026 11:30:59 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:30:59.896] STEP PASS  | ActionType=WAITINVISIBLE | IdentifyBy=XPATH | Object=iScreenBuffer | Value=MDC Progress Spinner | Duration=612 ms
+Sept 18, 2026 11:30:59 A.M. stepdefinitions.TC_03 theAgentShouldLandOnTheBISSHomePage
+INFO: [STEP] Then the agent should land on the BISS Home page
+Sept 18, 2026 11:30:59 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:30:59.901] STEP START | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=
+Sept 18, 2026 11:31:01 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:31:02 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:02.727] STEP PASS  | ActionType=VERIFYELEMENT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value= | Duration=2827 ms
+Sept 18, 2026 11:31:02 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:02.731] STEP START | ActionType=VERIFYTEXT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=Basic Income Support for Sustainability
+Sept 18, 2026 11:31:04 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:04.368] STEP PASS  | ActionType=VERIFYTEXT | IdentifyBy=XPATH | Object=//*[contains(@id,'header-application-description') and normalize-space()='Basic Income Support for Sustainability'] | Value=Basic Income Support for Sustainability | Duration=1637 ms
+Sept 18, 2026 11:31:04 A.M. stepdefinitions.TC_03 theAgentShouldLandOnTheBISSHomePage
+INFO: BISS Home page confirmed | Title: Basic Income Support for Sustainability
+Sept 18, 2026 11:31:04 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then the agent should land on the BISS Home page | PASS | 5s
+Sept 18, 2026 11:31:04 A.M. stepdefinitions.TC_04 theAgentClicksOnQuickLinksHyperlink
+INFO: [STEP] When the agent clicks on the 'Transfer of Entitlements' hyperlink in the Quick Links section
+Sept 18, 2026 11:31:04 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:04.384] STEP START | ActionType=WAITINVISIBLE | IdentifyBy=XPATH | Object=iMDCGenericSpinner | Value=MDC Progress Spinner
+Sept 18, 2026 11:31:04 A.M. commonFunctions.CommonFunctions performWaitInvisible
+INFO: [2026-09-18 11:31:04.386] WAITINVISIBLE - watching locator : iMDCGenericSpinner
+  Then the agent should land on the BISS Home page                                             # stepdefinitions.TC_03.theAgentShouldLandOnTheBISSHomePage()
+Sept 18, 2026 11:31:04 A.M. commonFunctions.CommonFunctions performWaitInvisible
+INFO: [2026-09-18 11:31:04.457] WAITINVISIBLE - spinner dismissed successfully : iMDCGenericSpinner
+Sept 18, 2026 11:31:04 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:04.461] STEP PASS  | ActionType=WAITINVISIBLE | IdentifyBy=XPATH | Object=iMDCGenericSpinner | Value=MDC Progress Spinner | Duration=77 ms
+Sept 18, 2026 11:31:04 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:04.464] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//div[normalize-space()='Transfer of Entitlements']/following-sibling::div//a | Value=
+Sept 18, 2026 11:31:05 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:05.858] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//div[normalize-space()='Transfer of Entitlements']/following-sibling::div//a | Value= | Duration=1395 ms
+Sept 18, 2026 11:31:05 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | When the agent clicks on the "Transfer of Entitlements" hyperlink in the Quick Links section | PASS | 1s
+Sept 18, 2026 11:31:05 A.M. stepdefinitions.TC_04 theAgentNavigatesToTab
+INFO: [STEP] Then the agent navigates to the 'Home' tab
+Sept 18, 2026 11:31:05 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:05.875] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='Home'] | Value=
+  When the agent clicks on the "Transfer of Entitlements" hyperlink in the Quick Links section # stepdefinitions.TC_04.theAgentClicksOnQuickLinksHyperlink(java.lang.String)
+Sept 18, 2026 11:31:06 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/clients/transfers/transfer-out
+Sept 18, 2026 11:31:07 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:31:07 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:07.318] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='Home'] | Value= | Duration=1443 ms
+Sept 18, 2026 11:31:07 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then the agent navigates to the "Home" tab | PASS | 1s
+Sept 18, 2026 11:31:07 A.M. stepdefinitions.TC_04 theAgentClicksOnQuickLinksHyperlink
+INFO: [STEP] When the agent clicks on the 'NR/CISYF' hyperlink in the Quick Links section
+Sept 18, 2026 11:31:07 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:07.322] STEP START | ActionType=WAITINVISIBLE | IdentifyBy=XPATH | Object=iMDCGenericSpinner | Value=MDC Progress Spinner
+Sept 18, 2026 11:31:07 A.M. commonFunctions.CommonFunctions performWaitInvisible
+INFO: [2026-09-18 11:31:07.322] WAITINVISIBLE - watching locator : iMDCGenericSpinner
+  Then the agent navigates to the "Home" tab                                                   # stepdefinitions.TC_04.theAgentNavigatesToTab(java.lang.String)
+Sept 18, 2026 11:31:07 A.M. commonFunctions.CommonFunctions performWaitInvisible
+INFO: [2026-09-18 11:31:07.442] WAITINVISIBLE - spinner dismissed successfully : iMDCGenericSpinner
+Sept 18, 2026 11:31:07 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:07.444] STEP PASS  | ActionType=WAITINVISIBLE | IdentifyBy=XPATH | Object=iMDCGenericSpinner | Value=MDC Progress Spinner | Duration=123 ms
+Sept 18, 2026 11:31:07 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:07.446] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//div[normalize-space()='NR/CISYF']/following-sibling::div//a | Value=
+Sept 18, 2026 11:31:08 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/clients/nrcisyf
+Sept 18, 2026 11:31:08 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:08.763] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//div[normalize-space()='NR/CISYF']/following-sibling::div//a | Value= | Duration=1317 ms
+Sept 18, 2026 11:31:08 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | When the agent clicks on the "NR/CISYF" hyperlink in the Quick Links section | PASS | 1s
+Sept 18, 2026 11:31:08 A.M. stepdefinitions.TC_04 theAgentNavigatesToTab
+INFO: [STEP] Then the agent navigates to the 'Home' tab
+Sept 18, 2026 11:31:08 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:08.774] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='Home'] | Value=
+  When the agent clicks on the "NR/CISYF" hyperlink in the Quick Links section                 # stepdefinitions.TC_04.theAgentClicksOnQuickLinksHyperlink(java.lang.String)
+Sept 18, 2026 11:31:10 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:31:10 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:10.927] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='Home'] | Value= | Duration=2153 ms
+Sept 18, 2026 11:31:10 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then the agent navigates to the "Home" tab | PASS | 2s
+Sept 18, 2026 11:31:10 A.M. stepdefinitions.TC_04 theAgentClicksOnViewClientsButton
+INFO: [STEP] And the agent clicks on the View Clients button in the BISS Applications section
+Sept 18, 2026 11:31:10 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:10.937] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//a[@routerlink='clients'] | Value=
+  Then the agent navigates to the "Home" tab                                                   # stepdefinitions.TC_04.theAgentNavigatesToTab(java.lang.String)
+Sept 18, 2026 11:31:11 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/clients
+Sept 18, 2026 11:31:11 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:11.969] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//a[@routerlink='clients'] | Value= | Duration=1032 ms
+Sept 18, 2026 11:31:11 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And the agent clicks on the View Clients button in the BISS Applications section | PASS | 1s
+Sept 18, 2026 11:31:11 A.M. stepdefinitions.TC_04 theAgentNavigatesToTab
+INFO: [STEP] Then the agent navigates to the 'Home' tab
+Sept 18, 2026 11:31:11 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:11.978] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='Home'] | Value=
+  And the agent clicks on the View Clients button in the BISS Applications section             # stepdefinitions.TC_04.theAgentClicksOnViewClientsButton()
+Sept 18, 2026 11:31:13 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/
+Sept 18, 2026 11:31:14 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:14.085] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//span[@class='mdc-button__label']//span[contains(@class,'left-menu-link') and text()='Home'] | Value= | Duration=2107 ms
+Sept 18, 2026 11:31:14 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then the agent navigates to the "Home" tab | PASS | 2s
+Sept 18, 2026 11:31:14 A.M. stepdefinitions.TC_04 theAgentClicksOnReadMoreInNewsSection
+INFO: [STEP] Then the agent clicks on the Read More button in the News section
+Sept 18, 2026 11:31:14 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:14.098] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//div[contains(@class,'read-more-link')]//a[normalize-space()='Read More'] | Value=
+  Then the agent navigates to the "Home" tab                                                   # stepdefinitions.TC_04.theAgentNavigatesToTab(java.lang.String)
+Sept 18, 2026 11:31:14 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/news
+Sept 18, 2026 11:31:14 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:14.910] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//div[contains(@class,'read-more-link')]//a[normalize-space()='Read More'] | Value= | Duration=812 ms
+Sept 18, 2026 11:31:14 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | Then the agent clicks on the Read More button in the News section | PASS | 817ms
+Sept 18, 2026 11:31:14 A.M. stepdefinitions.TC_04 theAgentClicksOnContactUsButton
+INFO: [STEP] And the agent clicks on the Contact Us button
+Sept 18, 2026 11:31:14 A.M. commonFunctions.CommonFunctions logStepStart
+INFO: [2026-09-18 11:31:14.917] STEP START | ActionType=CLICK | IdentifyBy=XPATH | Object=//button[.//span[normalize-space()='Contact us']] | Value=
+  Then the agent clicks on the Read More button in the News section                            # stepdefinitions.TC_04.theAgentClicksOnReadMoreInNewsSection()
+Sept 18, 2026 11:31:15 A.M. commonFunctions.PlaywrightFactory lambda$attachPageListeners$7
+INFO: [BROWSER] Page changed (main) : https://biss-inet-ui-biss-sit.apps.services1.agriculture.gov.ie/#/contact
+Sept 18, 2026 11:31:15 A.M. commonFunctions.CommonFunctions logStepPass
+INFO: [2026-09-18 11:31:15.712] STEP PASS  | ActionType=CLICK | IdentifyBy=XPATH | Object=//button[.//span[normalize-space()='Contact us']] | Value= | Duration=795 ms
+Sept 18, 2026 11:31:15 A.M. reporting.ReportManager recordStep
+INFO: [ReportManager] Step recorded | And the agent clicks on the Contact Us button | PASS | 797ms
+Sept 18, 2026 11:31:15 A.M. utilities.SoftAssertManager assertAll
+INFO: [SoftAssert] All soft assertions passed.
+Sept 18, 2026 11:31:15 A.M. utilities.ScreenshotManager appendScenarioDivider
+INFO: [ScreenshotManager] Scenario divider added : To Check all working functionalities in the Dashboard Page [PASSED]
+Sept 18, 2026 11:31:15 A.M. stepdefinitions.Hooks afterScenarioExecution
+INFO: ---------- Scenario PASSED : To Check all working functionalities in the Dashboard Page ----------
+  And the agent clicks on the Contact Us button                                                # stepdefinitions.TC_04.theAgentClicksOnContactUsButton()
+Sept 18, 2026 11:31:16 A.M. commonFunctions.CommonFunctions finalizeWordReport
+INFO: [2026-09-18 11:31:16.413] Word report finalized : C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright\Test_Report\docs\TC_04_18_09_2026_11_30_47.docx
+Sept 18, 2026 11:31:16 A.M. commonFunctions.CommonFunctions writeHtmlReportIndex
+INFO: [2026-09-18 11:31:16.468] HTML report index updated: ReportIndex.html | TC=TC 04 | Status=PASS
