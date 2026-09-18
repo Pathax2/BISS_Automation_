@@ -1,565 +1,77 @@
-// ===================================================================================================================================
-// File          : BrowserProcessCleaner.java
-// Package       : utilities
-// Description   : Clean start for every test case - the Playwright replacement for the Selenium killProcessByName("chrome")
-//                 and killProcessByName("chromedriver") calls in Hooks.
-//
-//                 Runs from PlaywrightFactory.start(), before the browser is launched:
-//                   1. Stops browser processes, depending on browser.cleanup.before.start
-//                        none       - nothing is stopped (Docker, or when you want to keep every window)
-//                        automation - only browsers started by automation: Playwright (this framework) and Selenium
-//                                     (chromedriver). Your own Chrome windows stay open.
-//                        all        - every process of the browser under test (chrome.exe for CHROME), exactly like the
-//                                     Selenium framework. Your own Chrome windows close too.
-//                      chromedriver.exe left behind by the Selenium framework is stopped in both automation and all.
-//                   2. Once per run (first test case only), stops Playwright driver processes (node.exe) left behind by a
-//                      run that was stopped from IntelliJ or crashed.
-//                   3. Once per run, deletes the temporary folders such runs leave in %TEMP%
-//                      (browser.cleanup.temp.folders=true):
-//                        biss-pw-profile-*                 Chrome profile with the 67% zoom (this framework)
-//                        playwright_chromiumdev_profile-*  Chrome profile Playwright creates when no zoom is set
-//                        playwright_firefoxdev_profile-*   Firefox profile
-//                        playwright-artifacts-*            downloads / videos of the old run
-//                        playwright-java-*                 the Playwright driver unpacked by the old run (about 150 MB each)
-//
-//                 Cache and cookies: every test case already starts on a brand-new, empty profile (no cache, cookies,
-//                 local storage or saved logins from an earlier run), so there is no browser cache to clear.
-//                 Step 3 removes the leftovers of runs that could not tidy up after themselves.
-//
-//                 How processes are recognised:
-//                   Windows, all        - taskkill /F /T /IM chrome.exe, the same call the Selenium framework used.
-//                                         It takes about half a second; nothing reads process command lines.
-//                   Windows, automation - PowerShell reads each process command line (Get-CimInstance Win32_Process) so
-//                                         that only browsers carrying a Playwright/Selenium profile or switch are closed
-//                                         (--remote-debugging-pipe, --test-type=webdriver ...). This costs 5 to 9 seconds
-//                                         per call on a department laptop, so it runs ONCE per run by default
-//                                         (browser.cleanup.scope), not before every test case.
-//                   Linux / macOS - Java ProcessHandle, same rules. The Java process running the tests is never touched.
-//                   Docker        - skipped (the container starts clean every time).
-//
-//                 Do not start two runs at the same time on one computer with automation or all: the second run stops the
-//                 first run's browser.
-//
-// Config keys   : browser.cleanup.before.start   none | automation | all   (base: automation, dev: all, docker: none)
-//                 browser.cleanup.temp.folders   true | false              (default true)
-//                 browser.cleanup.scope          testcase | run - how often the slow command-line scan runs in
-//                                                automation mode (default run). taskkill in all mode always runs per
-//                                                test case: it is cheap.
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 17-09-2026
-// Updated       : 18-09-2026 - all mode uses taskkill directly (was 7-9 s of PowerShell/WMI per test case, now under 1 s);
-//                              the command-line scan runs once per run unless browser.cleanup.scope=testcase
-// ===================================================================================================================================
+# ===================================================================================================================================
+# File          : application-dev.properties
+# Description   : DEV / local laptop overrides for the BISS Playwright framework.
+#                 Only keys that differ from application.properties need to be listed here.
+#
+# Folder        : src/test/resources/config/application-dev.properties
+# Activation    : -Denv=dev  (default profile - the Maven "dev" profile is active by default)
+#
+# Author        : Aniket Pathare | aniket.pathare@goverment.ie
+# Date Created  : 10-03-2026
+# Updated       : 15-09-2026 - Playwright keys for the department laptop (installed Chrome, no browser download)
+# Updated       : 16-09-2026 - Page zoom 67% and JavaScript click fallback
+# Updated       : 17-09-2026 - browser.chromium.sandbox=true
+# Updated       : 17-09-2026 - browser.cleanup.before.start=all (Selenium behaviour), execution.fail.fast=true
+# Updated       : 18-09-2026 - Suite speed: highlight off, trace.screenshots=false, browser.cleanup.scope=run
+# ===================================================================================================================================
 
-package utilities;
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Existing keys (unchanged from the Selenium project)
+# -----------------------------------------------------------------------------------------------------------------------------------
+app.url=
+headless=false
+explicit.wait.seconds=20
+notify.email.enabled=false
+db.url=jdbc:oracle:thin:@dev-db-server:1521:BISSDEV
+db.username=biss_dev_user
 
-import java.io.File;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.Comparator;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Logger;
-import java.util.regex.Pattern;
-import java.util.stream.Stream;
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Playwright - local laptop behind the department web gateway
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Use the Google Chrome installed on the laptop (Playwright cannot download its own Chromium through the gateway)
+browser.channel=chrome
+playwright.skip.browser.download=true
 
-public final class BrowserProcessCleaner
-{
-    private static final Logger log = Logger.getLogger(BrowserProcessCleaner.class.getName());
+# Keep Chrome's sandbox on (no "--no-sandbox ... Stability and security will suffer" banner)
+browser.chromium.sandbox=true
 
-    // Command-line markers of a browser started by automation (Playwright or Selenium). A normal Chrome window has none of them.
-    private static final String AUTOMATION_MARKERS =
-            "biss-pw-profile-|playwright_chromiumdev_profile-|playwright_firefoxdev_profile-|ms-playwright"
-          + "|--remote-debugging-pipe|--test-type=webdriver|--enable-automation|scoped_dir";
+# Close every Chrome window before each test case, as the Selenium framework did (taskkill chrome.exe).
+# Change to automation to keep your own Chrome windows open and stop only browsers left by Playwright / Selenium runs.
+browser.cleanup.before.start=all
+browser.cleanup.temp.folders=true
+# automation mode only: run | testcase - how often the slow command-line scan runs. taskkill in all mode is cheap
+# and always runs before each test case.
+browser.cleanup.scope=run
 
-    // Temporary folders left behind by Playwright runs that did not close normally
-    private static final String[] TEMP_FOLDER_PREFIXES = {
-            "biss-pw-profile-",
-            "playwright_chromiumdev_profile-",
-            "playwright_firefoxdev_profile-",
-            "playwright-artifacts-",
-            "playwright-java-"
-    };
+# A failed scenario skips the rest of its test case; the runner continues with the next ExecutionControl row
+execution.fail.fast=true
 
-    private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-    private static final boolean IS_MAC     = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
+# Full-screen visible window. The red outline costs one extra browser call per action - switch it on while debugging
+# a single test case, keep it off for a suite run
+browser.maximize=true
+highlight.enabled=false
 
-    // Driver processes and temp folders are handled once per JVM: from the second test case on, the Playwright driver
-    // unpacked by this run is in use and must not be deleted.
-    private static final AtomicBoolean iFirstRunDone = new AtomicBoolean(false);
+# Page zoom, same as Ctrl+minus in Chrome (67 = the Selenium framework setting; try 70 or 80 if a page looks cramped)
+browser.zoom.percent=67
 
-    private BrowserProcessCleaner() {}
+# auto = normal click, JavaScript click when blocked | js = always JavaScript click | native = no JavaScript click
+click.strategy=auto
+click.attempt.timeout.ms=5000
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : cleanBeforeLaunch
-    // Description   : Entry point called by PlaywrightFactory.start() before the browser is launched.
-    //                 Never throws: a cleanup problem is logged as a warning and the test case carries on.
-    // Parameters    : pBrowserType (String) - CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
-    //                 pChannel     (String) - browser.channel value (chrome, msedge or blank)
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 17-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void cleanBeforeLaunch(String pBrowserType, String pChannel)
-    {
-        String iMode = ConfigManager.getOrDefault("browser.cleanup.before.start", "automation").trim().toLowerCase(Locale.ROOT);
+# Slow motion in milliseconds between actions (0 = full speed, 300-500 is good for demos)
+playwright.slowmo.ms=0
 
-        if (!iMode.equals("none") && !iMode.equals("automation") && !iMode.equals("all"))
-        {
-            log.warning("[CLEANUP] browser.cleanup.before.start='" + iMode + "' is not valid (none | automation | all). Using automation.");
-            iMode = "automation";
-        }
+# SIT uses internal certificates
+ignore.https.errors=true
 
-        if (iMode.equals("none"))
-        {
-            log.info("[CLEANUP] browser.cleanup.before.start=none - no browser processes stopped.");
-            return;
-        }
+# Keep a Playwright trace zip for failed test cases (open it at https://trace.playwright.dev)
+trace.mode=retain-on-failure
+# false = no screencast inside the trace. The filmstrip slowed every action down; the DOM snapshots are kept,
+# so the trace still replays the run. Set true only when you need to see each frame of a failure.
+trace.screenshots=false
 
-        if (isInsideContainer())
-        {
-            log.info("[CLEANUP] Running inside a container - nothing to clean.");
-            return;
-        }
+# Playwright exception names for the retry analyser (the Selenium names no longer apply)
+retry.on.exceptions=TimeoutError,PlaywrightException
 
-        boolean iFirstRun = iFirstRunDone.compareAndSet(false, true);
-        long    iStart    = System.currentTimeMillis();
-
-        try
-        {
-            List<String> iNames  = browserProcessNames(pBrowserType, pChannel);
-            int          iKilled = IS_WINDOWS
-                    ? stopOnWindows(iNames, iMode, iFirstRun)
-                    : stopWithProcessHandle(iNames, iMode, iFirstRun);
-
-            log.info("[CLEANUP] Mode=" + iMode + " | Browser processes " + iNames
-                    + " | Processes stopped: " + (iKilled < 0 ? "taskkill" : String.valueOf(iKilled))
-                    + " | " + (System.currentTimeMillis() - iStart) + " ms");
-
-            if (iFirstRun && ConfigManager.getBool("browser.cleanup.temp.folders", true))
-            {
-                if (iKilled != 0)
-                {
-                    // Windows keeps files locked for a moment after a process is stopped
-                    sleepQuietly(1000);
-                }
-                deleteStaleTempFolders();
-            }
-        }
-        catch (Exception iException)
-        {
-            log.warning("[CLEANUP] Cleanup skipped : " + iException.getMessage());
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : browserProcessNames
-    // Description   : Process names (Windows image names) of the browser under test.
-    //                 CHROME with channel msedge, or EDGE, is Microsoft Edge. Playwright's own Chromium is also chrome.exe.
-    // Parameters    : pBrowserType (String), pChannel (String)
-    // Returns       : List<String> - e.g. [chrome.exe]
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 17-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static List<String> browserProcessNames(String pBrowserType, String pChannel)
-    {
-        String iType    = pBrowserType == null ? "CHROME" : pBrowserType.trim().toUpperCase(Locale.ROOT);
-        String iChannel = pChannel == null ? "" : pChannel.trim().toLowerCase(Locale.ROOT);
-
-        List<String> iNames = new ArrayList<>();
-
-        if (iType.equals("EDGE") || iChannel.startsWith("msedge"))
-        {
-            iNames.add("msedge.exe");
-        }
-        else if (iType.equals("FIREFOX"))
-        {
-            iNames.add("firefox.exe");
-        }
-        else if (iType.equals("WEBKIT"))
-        {
-            iNames.add("Playwright.exe");
-        }
-        else
-        {
-            iNames.add("chrome.exe");
-        }
-        return iNames;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : stopOnWindows
-    // Description   : Runs one PowerShell command that reads the command line of every browser, chromedriver and node
-    //                 process and stops the ones that match the mode. The script is sent Base64-encoded
-    //                 (-EncodedCommand), so quotes and the execution policy for .ps1 files do not matter.
-    //                 If PowerShell cannot run and the mode is all, taskkill is used instead.
-    // Parameters    : pNames     (List<String>) - browser image names, e.g. [chrome.exe]
-    //                 pMode      (String)       - automation | all
-    //                 pFirstRun  (boolean)      - true = also stop orphan Playwright driver processes
-    // Returns       : int - number of processes stopped (-1 when unknown)
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 17-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static int stopOnWindows(List<String> pNames, String pMode, boolean pFirstRun)
-    {
-        // -- FAST PATH: all mode = taskkill, exactly what the Selenium framework did ------------------------------------
-        // Reading command lines through PowerShell/WMI costs 5-9 seconds on a department laptop; in all mode every
-        // process of that browser is closed anyway, so there is nothing to read.
-        if (pMode.equals("all"))
-        {
-            for (String iName : pNames)
-            {
-                runCommand(20, "taskkill", "/F", "/T", "/IM", iName);
-            }
-            runCommand(20, "taskkill", "/F", "/T", "/IM", "chromedriver.exe");
-            runCommand(20, "taskkill", "/F", "/T", "/IM", "msedgedriver.exe");
-
-            // Orphan Playwright driver processes need the command line to be identified - once per run is enough
-            if (pFirstRun)
-            {
-                stopOrphanDrivers();
-            }
-            return -1;   // taskkill does not report how many processes it closed
-        }
-
-        // -- automation mode: the command-line scan ----------------------------------------------------------------------
-        // Slow, so it runs once per run unless browser.cleanup.scope=testcase
-        if (!pFirstRun && !"testcase".equalsIgnoreCase(ConfigManager.getOrDefault("browser.cleanup.scope", "run")))
-        {
-            log.info("[CLEANUP] Command-line scan already done for this run (browser.cleanup.scope=run) - skipping.");
-            return 0;
-        }
-
-        Set<String> iAllNames = new LinkedHashSet<>(pNames);
-        iAllNames.add("chromedriver.exe");
-        iAllNames.add("msedgedriver.exe");
-        if (pFirstRun) { iAllNames.add("node.exe"); }
-
-        StringBuilder iFilter = new StringBuilder();
-        for (String iName : iAllNames)
-        {
-            if (iFilter.length() > 0) { iFilter.append(" OR "); }
-            iFilter.append("Name='").append(iName).append("'");
-        }
-
-        StringBuilder iBrowserList = new StringBuilder();
-        for (String iName : pNames)
-        {
-            if (iBrowserList.length() > 0) { iBrowserList.append(","); }
-            iBrowserList.append("'").append(iName.toLowerCase(Locale.ROOT)).append("'");
-        }
-
-        String iScript =
-                "$ErrorActionPreference = 'SilentlyContinue'\n"
-              + "$ProgressPreference = 'SilentlyContinue'\n"
-              + "$mode = '" + pMode + "'\n"
-              + "$browsers = @(" + iBrowserList + ")\n"
-              + "$markers = '" + psQuote(AUTOMATION_MARKERS) + "'\n"
-              + "$me = " + ProcessHandle.current().pid() + "\n"
-              + "$count = 0\n"
-              + "$list = Get-CimInstance -ClassName Win32_Process -Filter \"" + iFilter + "\"\n"
-              + "foreach ($p in $list) {\n"
-              + "  $name = ([string]$p.Name).ToLower()\n"
-              + "  $cmd = [string]$p.CommandLine\n"
-              + "  $stop = $false\n"
-              + "  if ($p.ProcessId -eq $me) { continue }\n"
-              + "  if ($name -eq 'chromedriver.exe' -or $name -eq 'msedgedriver.exe') { $stop = $true }\n"
-              + "  elseif ($name -eq 'node.exe') { $stop = ($cmd -match 'playwright-java-') -and ($cmd -match 'run-driver') }\n"
-              + "  elseif ($browsers -contains $name) { $stop = ($mode -eq 'all') -or ($cmd -match $markers) }\n"
-              + "  if ($stop) {\n"
-              + "    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; $count++ } catch { }\n"
-              + "  }\n"
-              + "}\n"
-              + "Write-Output $count\n";
-
-        String iEncoded = Base64.getEncoder().encodeToString(iScript.getBytes(StandardCharsets.UTF_16LE));
-
-        String iOutput = runCommand(30,
-                "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", iEncoded);
-
-        if (iOutput != null)
-        {
-            String iLast = lastLine(iOutput);
-            try
-            {
-                return Integer.parseInt(iLast);
-            }
-            catch (NumberFormatException iIgnored)
-            {
-                log.warning("[CLEANUP] Unexpected PowerShell output: " + shorten(iOutput));
-            }
-        }
-
-        // PowerShell blocked or failed
-        log.warning("[CLEANUP] PowerShell not available - automation browsers could not be identified, nothing stopped."
-                + " Set browser.cleanup.before.start=all to stop every " + pNames + " process with taskkill.");
-        return 0;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : stopOrphanDrivers
-    // Description   : Windows only, once per run: stops Playwright driver processes (node.exe running cli.js from
-    //                 %TEMP%\playwright-java-...) left behind by a run that was stopped in IntelliJ or crashed.
-    //                 A command line is needed to tell them apart from any other node process, so PowerShell is used.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void stopOrphanDrivers()
-    {
-        // A driver can only be orphaned when its unpacked folder is still in %TEMP% - checking that first costs
-        // milliseconds and skips the 5-9 second PowerShell scan on a laptop that is already clean
-        if (!hasStaleDriverFolder())
-        {
-            return;
-        }
-
-        String iScript =
-                "$ErrorActionPreference = 'SilentlyContinue'\n"
-              + "$ProgressPreference = 'SilentlyContinue'\n"
-              + "$count = 0\n"
-              + "$list = Get-CimInstance -ClassName Win32_Process -Filter \"Name='node.exe'\"\n"
-              + "foreach ($p in $list) {\n"
-              + "  $cmd = [string]$p.CommandLine\n"
-              + "  if (($cmd -match 'playwright-java-') -and ($cmd -match 'run-driver')) {\n"
-              + "    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; $count++ } catch { }\n"
-              + "  }\n"
-              + "}\n"
-              + "Write-Output $count\n";
-
-        String iEncoded = Base64.getEncoder().encodeToString(iScript.getBytes(StandardCharsets.UTF_16LE));
-        String iOutput  = runCommand(30,
-                "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", iEncoded);
-
-        if (iOutput != null && !lastLine(iOutput).equals("0"))
-        {
-            log.info("[CLEANUP] Orphan Playwright driver processes stopped: " + lastLine(iOutput));
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : stopWithProcessHandle
-    // Description   : Linux / macOS version using Java's ProcessHandle (command lines are readable for your own processes).
-    //                 The Java process that runs the tests, and its parents, are never stopped.
-    // Parameters    : pNames (List<String>), pMode (String), pFirstRun (boolean)
-    // Returns       : int - number of processes stopped
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 17-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static int stopWithProcessHandle(List<String> pNames, String pMode, boolean pFirstRun)
-    {
-        Set<Long> iProtected = new LinkedHashSet<>();
-        ProcessHandle iSelf = ProcessHandle.current();
-        iProtected.add(iSelf.pid());
-        iSelf.parent().ifPresent(iParent -> {
-            iProtected.add(iParent.pid());
-            iParent.parent().ifPresent(iGrand -> iProtected.add(iGrand.pid()));
-        });
-
-        Pattern iMarkers    = Pattern.compile(AUTOMATION_MARKERS);
-        Pattern iAllBrowser = IS_MAC
-                ? Pattern.compile("/(Google Chrome|Chromium|Microsoft Edge|firefox)(\\s|$)")
-                : Pattern.compile("/(chrome|chromium|chromium-browser|google-chrome|msedge|microsoft-edge|firefox)(\\s|$)");
-
-        int[] iCount = { 0 };
-
-        try (Stream<ProcessHandle> iAll = ProcessHandle.allProcesses())
-        {
-            iAll.forEach(iHandle -> {
-                if (iProtected.contains(iHandle.pid())) { return; }
-
-                String iCmd  = iHandle.info().commandLine().orElse(iHandle.info().command().orElse(""));
-                String iExe  = iHandle.info().command().orElse("");
-                String iBase = new File(iExe).getName().toLowerCase(Locale.ROOT);
-
-                boolean iStop = false;
-
-                if (iBase.equals("chromedriver") || iBase.equals("msedgedriver"))
-                {
-                    iStop = true;
-                }
-                else if (iBase.equals("node"))
-                {
-                    iStop = pFirstRun && iCmd.contains("playwright-java-") && iCmd.contains("run-driver");
-                }
-                else if (iAllBrowser.matcher(iExe + " ").find() || iExe.contains("ms-playwright"))
-                {
-                    iStop = pMode.equals("all") || iMarkers.matcher(iCmd).find();
-                }
-
-                if (iStop && iHandle.destroyForcibly())
-                {
-                    iCount[0]++;
-                }
-            });
-        }
-
-        return iCount[0];
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : deleteStaleTempFolders
-    // Description   : Deletes Playwright temporary folders left in java.io.tmpdir by earlier runs (see header list).
-    //                 Files still locked by a running program are skipped silently.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 17-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void deleteStaleTempFolders()
-    {
-        Path iTemp = Paths.get(System.getProperty("java.io.tmpdir"));
-        int  iFolders = 0;
-        long iBytes   = 0L;
-
-        try (Stream<Path> iList = Files.list(iTemp))
-        {
-            List<Path> iCandidates = new ArrayList<>();
-            iList.filter(Files::isDirectory)
-                 .filter(iPath -> startsWithAny(iPath.getFileName().toString()))
-                 .forEach(iCandidates::add);
-
-            for (Path iFolder : iCandidates)
-            {
-                iBytes += deleteTree(iFolder);
-                if (!Files.exists(iFolder)) { iFolders++; }
-            }
-        }
-        catch (Exception iException)
-        {
-            log.warning("[CLEANUP] Temp folder cleanup skipped : " + iException.getMessage());
-            return;
-        }
-
-        if (iFolders > 0 || iBytes > 0)
-        {
-            log.info("[CLEANUP] Old Playwright temp folders removed: " + iFolders + " (" + (iBytes / (1024 * 1024)) + " MB) from " + iTemp);
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : hasStaleDriverFolder
-    // Description   : true when %TEMP% still holds a playwright-java-* folder, which is what an orphaned driver leaves.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static boolean hasStaleDriverFolder()
-    {
-        try (Stream<Path> iList = Files.list(Paths.get(System.getProperty("java.io.tmpdir"))))
-        {
-            return iList.anyMatch(iPath -> iPath.getFileName().toString().startsWith("playwright-java-"));
-        }
-        catch (Exception iException)
-        {
-            return false;
-        }
-    }
-
-    private static boolean startsWithAny(String pName)
-    {
-        for (String iPrefix : TEMP_FOLDER_PREFIXES)
-        {
-            if (pName.startsWith(iPrefix)) { return true; }
-        }
-        return false;
-    }
-
-    private static long deleteTree(Path pRoot)
-    {
-        long[] iBytes = { 0L };
-        try (Stream<Path> iWalk = Files.walk(pRoot))
-        {
-            iWalk.sorted(Comparator.reverseOrder()).forEach(iPath -> {
-                try
-                {
-                    long iSize = Files.isRegularFile(iPath) ? Files.size(iPath) : 0L;
-                    Files.deleteIfExists(iPath);
-                    iBytes[0] += iSize;
-                }
-                catch (Exception iIgnored)
-                {
-                    // locked or already gone
-                }
-            });
-        }
-        catch (Exception iIgnored)
-        {
-            // folder disappeared while walking
-        }
-        return iBytes[0];
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : runCommand
-    // Description   : Runs an operating system command with a time limit and returns its output.
-    // Parameters    : pTimeoutSeconds (int), pCommand (String...)
-    //                 Error output is discarded (PowerShell writes progress records there).
-    // Returns       : String - standard output, or null when the command could not run or exited with an error
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 17-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static String runCommand(int pTimeoutSeconds, String... pCommand)
-    {
-        try
-        {
-            Process iProcess = new ProcessBuilder(pCommand).redirectError(ProcessBuilder.Redirect.DISCARD).start();
-            iProcess.getOutputStream().close();
-
-            byte[][] iOut = new byte[1][];
-            Thread iReader = new Thread(() -> {
-                try { iOut[0] = iProcess.getInputStream().readAllBytes(); }
-                catch (Exception iIgnored) { iOut[0] = new byte[0]; }
-            });
-            iReader.setDaemon(true);
-            iReader.start();
-
-            if (!iProcess.waitFor(pTimeoutSeconds, TimeUnit.SECONDS))
-            {
-                iProcess.destroyForcibly();
-                log.warning("[CLEANUP] " + pCommand[0] + " did not finish within " + pTimeoutSeconds + " s");
-                return null;
-            }
-            iReader.join(2000);
-
-            String iText = iOut[0] == null ? "" : new String(iOut[0], StandardCharsets.UTF_8).trim();
-            return iProcess.exitValue() == 0 ? iText : null;
-        }
-        catch (Exception iException)
-        {
-            return null;
-        }
-    }
-
-    private static boolean isInsideContainer()
-    {
-        return !IS_WINDOWS && (new File("/.dockerenv").exists() || new File("/run/.containerenv").exists());
-    }
-
-    private static String psQuote(String pText)
-    {
-        return pText.replace("'", "''");
-    }
-
-    private static String lastLine(String pText)
-    {
-        String[] iLines = pText.trim().split("\\R");
-        return iLines.length == 0 ? "" : iLines[iLines.length - 1].trim();
-    }
-
-    private static String shorten(String pText)
-    {
-        String iOne = pText.replaceAll("\\s+", " ").trim();
-        return iOne.length() > 200 ? iOne.substring(0, 200) + "..." : iOne;
-    }
-
-    private static void sleepQuietly(long pMs)
-    {
-        try { Thread.sleep(pMs); }
-        catch (InterruptedException iInterrupted) { Thread.currentThread().interrupt(); }
-    }
-}
+# Oracle herd/agent bootstrap - true = same behaviour as the Selenium framework
+db.bootstrap=true
