@@ -1,43 +1,54 @@
-package stepdefinitions;
-
-import commonFunctions.CommonFunctions;
-import io.cucumber.java.en.And;
-import io.cucumber.java.en.Then;
-import org.junit.jupiter.api.Assertions;
-import org.openqa.selenium.By;
-import org.openqa.selenium.support.ui.ExpectedConditions;
-import org.openqa.selenium.support.ui.WebDriverWait;
-import utilities.ObjReader;
-
-import java.time.Duration;
-import java.util.logging.Logger;
-import static commonFunctions.CommonFunctions.*;
-
 // ===================================================================================================================================
 // File          : TC_09.java
 // Package       : stepdefinitions
-// Description   : Step definitions for TC_09 — BISSAGL-20849
+// Description   : Step definitions for TC_09 - BISSAGL-20849
 //                 Verifies an agent can view payments and land details for a client
 //                 without a technical error appearing on screen.
 //
+//                 Naming conventions used throughout:
+//                   iAction(actionType, identifyBy, locator, value)  - all UI interactions
+//
+//                 Playwright migration notes:
+//                   - The local isVisible(By, seconds) helper used WebDriverWait; it now uses
+//                     UiHelpers.isVisible(Locator, seconds), which waits the same number of seconds and
+//                     returns false instead of throwing.
+//                   - .first() is added so a locator matching several elements behaves like Selenium findElement
+//                     (Playwright would otherwise fail with a strict mode violation).
+//                   - Selenium imports (By, WebDriverWait, ExpectedConditions) and the unused ObjReader import removed.
+//                   - Every other step goes through iAction, which is already Playwright-based - logic unchanged.
+//
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 26-03-2026
+// Updated       : 18-09-2026 - Migrated to Playwright (UiHelpers.isVisible, Selenium imports removed)
 // ===================================================================================================================================
 
-public class TC_09 {
+package stepdefinitions;
 
+import com.microsoft.playwright.Locator;
+import commonFunctions.UiHelpers;
+import io.cucumber.java.en.And;
+import io.cucumber.java.en.Then;
+import org.junit.jupiter.api.Assertions;
+
+import java.util.logging.Logger;
+
+import static commonFunctions.CommonFunctions.iAction;
+
+public class TC_09
+{
     private static final Logger log = Logger.getLogger(TC_09.class.getName());
 
 
     // ***************************************************************************************************************************************************************************************
     // Step          : And the agent selects "2023" from the "schemeYear" dropdown
     // Description   : Selects the specified scheme year from the named mat-select dropdown.
-    //                 The dropdown is identified by its formcontrolname attribute.
-    //                 pDropdownName maps directly to formcontrolname in the DOM.
-    // Parameters    : pYear         — the scheme year to select e.g. "2023"
-    //                 pDropdownName — the formcontrolname of the mat-select e.g. "schemeYear"
-    // Author        : Aniket Pathare
-    // Date          : 26-03-2026
+    //                 The dropdown is identified by its id attribute - pDropdownName maps directly to it.
+    //                 iAction LIST opens the mat-select and clicks the matching option in the overlay panel.
+    // Parameters    : pYear         - the scheme year to select e.g. "2023"
+    //                 pDropdownName - the id of the mat-select e.g. "schemeYear"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 26-03-2026
+    // Date Updated  : 18-09-2026 (Playwright - no change in logic)
     // ***************************************************************************************************************************************************************************************
     @And("the agent selects {string} from the {string} dropdown")
     public void theAgentSelectsFromTheDropdown(String pYear, String pDropdownName)
@@ -45,7 +56,7 @@ public class TC_09 {
         log.info("[STEP] And the agent selects '" + pYear + "' from the '" + pDropdownName + "' dropdown");
 
         // Scheme year mat-select is identified by id attribute, not formcontrolname
-        // Wrapped inside biss-scheme-year custom component — id is the stable anchor
+        // Wrapped inside biss-scheme-year custom component - id is the stable anchor
         String iDropdownXpath = "//mat-select[@id='" + pDropdownName + "']";
 
         iAction("LIST", "XPATH", iDropdownXpath, pYear);
@@ -56,19 +67,18 @@ public class TC_09 {
     // ***************************************************************************************************************************************************************************************
     // Step          : And the agent clicks on the "Payments" tab
     // Description   : Clicks the named tab on the Applications / Payments screen.
-    //                 Targets a mat-tab-link or mat-tab label containing the exact tab text.
-    // Parameters    : pTabName — the visible tab label text e.g. "Payments"
-    // Author        : Aniket Pathare
-    // Date          : 26-03-2026
+    //                 Tabs are plain span elements inside div.tab-style, NOT Angular Material mat-tab components.
+    // Parameters    : pTabName - the visible tab label text e.g. "Payments"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 26-03-2026
+    // Date Updated  : 18-09-2026 (Playwright - no change in logic)
     // ***************************************************************************************************************************************************************************************
     @And("the agent clicks on the {string} tab")
     public void theAgentClicksOnTheTab(String pTabName)
     {
         log.info("[STEP] And the agent clicks on the '" + pTabName + "' tab");
 
-        // Tabs are plain <span> elements inside div.tab-style —
-        // NOT Angular Material mat-tab components.
-        // Target by text content — covers both tab-border-style and no-tab-border-style states
+        // Target by text content - covers both tab-border-style and no-tab-border-style states
         String iTabXpath = "//div[contains(@class,'tab-style')]//span[normalize-space()='" + pTabName + "']";
 
         iAction("WAITVISIBLE",   "XPATH", iTabXpath, null);
@@ -80,40 +90,63 @@ public class TC_09 {
 
     // ***************************************************************************************************************************************************************************************
     // Step          : Then Agent Verifies No "Technical error..." Error shown on page
-    // Description   : Asserts that the specified error message text is NOT present anywhere
-    //                 on the current page. Used to verify defect BISSAGL-20849 is resolved —
-    //                 the technical error message should not appear after navigating to Payments.
-    //                 Uses findElements rather than a hard assertion so a missing element
-    //                 (the happy path) passes cleanly without throwing NoSuchElementException.
-    // Parameters    : pErrorMessage — the exact error text to verify is absent
-    // Author        : Aniket Pathare
-    // Date          : 26-03-2026
+    // Description   : Asserts that the specified error message text is NOT present anywhere on the current page.
+    //                 Used to verify defect BISSAGL-20849 is resolved - the technical error message should not
+    //                 appear after navigating to Payments.
+    //                 isVisible returns false instead of throwing, so the happy path passes cleanly.
+    // Parameters    : pErrorMessage - the exact error text to verify is absent
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 26-03-2026
+    // Date Updated  : 18-09-2026 (Playwright - UiHelpers.isVisible)
     // ***************************************************************************************************************************************************************************************
     @Then("Agent Verifes No {string} Error shown on page.")
     public void agentVerifiesNoErrorShownOnPage(String pErrorMessage)
     {
         log.info("[STEP] Then Agent Verifies No '" + pErrorMessage + "' Error shown on page.");
 
-        // Search for any element on the page that contains the error message text —
+        // Search for any element on the page that contains the error message text -
         // uses contains() to handle partial text matches and surrounding whitespace
         String iErrorXpath = "//*[contains(normalize-space(),'" + pErrorMessage + "')]";
 
-        boolean iErrorPresent = isVisible(By.xpath(iErrorXpath), 3);
+        boolean iErrorPresent = isVisible(iErrorXpath, 3);
 
         Assertions.assertFalse(iErrorPresent,
-                "Technical error message was found on screen — defect BISSAGL-20849 may have regressed. "
+                "Technical error message was found on screen - defect BISSAGL-20849 may have regressed. "
                         + "Error text: '" + pErrorMessage + "'");
 
         log.info("No technical error message found on page. Defect BISSAGL-20849 is not regressed.");
     }
-    private static boolean isVisible(By locator, int seconds) {
-        try {
-            WebDriverWait wait = new WebDriverWait(CommonFunctions.getDriver(), Duration.ofSeconds(seconds));
-            wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
 
+
+    // ===================================================================================================================================
+    //  PRIVATE HELPERS (Playwright replacements for the Selenium helpers in this class)
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : xp
+    // Description   : Builds a Playwright Locator from an XPath string (the framework adds the "xpath=" prefix).
+    // Parameters    : pXpath (String) - XPath expression
+    // Returns       : Locator
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 18-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static Locator xp(String pXpath)
+    {
+        return UiHelpers.byXpath(pXpath);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isVisible
+    // Description   : Replacement for the Selenium WebDriverWait + visibilityOfElementLocated helper.
+    //                 Waits up to pSeconds for the FIRST match to become visible; returns false on timeout.
+    // Parameters    : pXpath   (String) - XPath expression
+    //                 pSeconds (int)    - how long to wait
+    // Returns       : boolean - true when visible within the time limit
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 18-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static boolean isVisible(String pXpath, int pSeconds)
+    {
+        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
     }
 }
