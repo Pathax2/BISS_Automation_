@@ -83,8 +83,7 @@ public class TC_05_ENTS
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
     @When("the agent logs out and re-logs in as the individual transferee {string}")
-    public void theAgentLogsOutAndReLogsInAsTheIndividualTransferee(String pUsername)
-    {
+    public void theAgentLogsOutAndReLogsInAsTheIndividualTransferee(String pUsername) throws InterruptedException {
         log.info("[STEP] When the agent logs out and re-logs in as the individual transferee: " + pUsername);
         performLogout();
 
@@ -189,6 +188,22 @@ public class TC_05_ENTS
 
                 // All available PIN digits are filled — submit the PIN form
                 iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+                Thread.sleep(2000);
+                log.info("[LOGIN] PIN login submitted.");
+
+                for (int iNext = 1; iNext <= 6; iNext++)
+                {
+                    if (isVisible(By.xpath(ObjReader.getLocator("iNextBtnNewUser")), 1))
+                    {
+                        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                        log.info("Clicked Next button - Attempt " + iNext);
+                    }
+                    else
+                    {
+                        log.info("Next button no longer available after " + (iNext - 1) + " clicks.");
+                        break;
+                    }
+                }
                 log.info("[LOGIN] PIN login submitted.");
 
                 if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 2))
