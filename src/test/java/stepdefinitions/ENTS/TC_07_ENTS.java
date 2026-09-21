@@ -86,8 +86,7 @@ public class TC_07_ENTS
     // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
     @When("the agent logs out and re-logs in as the ETF partner {string}")
-    public void theAgentLogsOutAndReLogsInAsTheETFPartner(String pPartnerUsername)
-    {
+    public void theAgentLogsOutAndReLogsInAsTheETFPartner(String pPartnerUsername) throws InterruptedException {
         log.info("[STEP] When the agent logs out and re-logs in as the ETF partner: " + pPartnerUsername);
 
         performLogout();
@@ -235,8 +234,7 @@ public class TC_07_ENTS
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 22-05-2026
     // ***************************************************************************************************************************************************************************************
-    private void performLogin(String pUsername)
-    {
+    private void performLogin(String pUsername) throws InterruptedException {
         log.info("[TC13-RELOGIN] Logging in as: " + pUsername);
         getDriver().navigate().to(Hooks.iUrl);
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
@@ -275,6 +273,22 @@ public class TC_07_ENTS
                 }
             }
             iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
+            Thread.sleep(2000);
+            log.info("[LOGIN] PIN login submitted.");
+
+            for (int iNext = 1; iNext <= 6; iNext++)
+            {
+                if (isVisible(By.xpath(ObjReader.getLocator("iNextBtnNewUser")), 1))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                    log.info("Clicked Next button - Attempt " + iNext);
+                }
+                else
+                {
+                    log.info("Next button no longer available after " + (iNext - 1) + " clicks.");
+                    break;
+                }
+            }
             iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
             iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
             log.info("[TC13-RELOGIN] PIN + TOTP submitted.");
