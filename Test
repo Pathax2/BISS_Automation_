@@ -1,392 +1,251 @@
-// ===================================================================================================================================
-// File          : TestRunner.java
-// Package       : runner
-// Description   : Entry point for the BISS BDD Cucumber automation framework (Playwright edition).
-//                 Reads ExecutionControl.xlsx, runs the selected test cases one by one through the Cucumber CLI,
-//                 writes PASS/FAIL back and drives the reporting pipeline:
-//                   ReportManager -> HtmlReportGenerator -> JUnitXmlGenerator
-//
-// Selection (NEW - container friendly):
-//   -Dtestcase.ids=TC_01_Login,TC_04   or  BISS_TESTCASE_IDS=TC_01_Login,TC_04
-//       Runs exactly these IDs, ignoring the Execution=Y flag. Lets CI shard one test case per container
-//       without editing the Excel file inside the image.
-//   (not set)
-//       Original behaviour - every row with Execution=Y.
-//
-// Environment (NEW):
-//   -Denvironment=SIT  or  BISS_ENVIRONMENT=SIT  overrides the Environment column for every selected row.
-//
-// Excel write-back:
-//   -Dexecution.control.writeback=false  or  BISS_EXECUTION_CONTROL_WRITEBACK=false  skips the Status write
-//   (useful when the xlsx is baked into a read-only image layer).
-//
-// Author        : Aniket Pathare | aniket.pathare@goverment.ie
-// Date Created  : 10-03-2026
-// Updated       : 29-03-2026 - Integrated CucumberStepListener + ReportManager.beginTestCase()
-// Updated       : 15-09-2026 - testcase.ids / environment override / optional write-back for Docker execution
-// Updated       : 16-09-2026 - Feature files found in any sub-folder depth, case-insensitive fallback (Selenium rule restored)
-// Updated       : 18-09-2026 - Closes the shared browser after the last test case (browser.reuse)
-// ===================================================================================================================================
+# ===================================================================================================================================
+# File          : application.properties
+# Description   : Base configuration defaults for the BISS automation framework (Playwright edition).
+#                 These values apply to ALL environments unless overridden by a profile file.
+#                 Profile files (application-dev.properties, application-docker.properties, etc.)
+#                 overlay and override these values for specific environments.
+#
+# Folder        : src/test/resources/config/application.properties
+#
+# Resolution    : -Dkey=value  >  BISS_KEY environment variable  >  application-<env>.properties  >  this file
+# Activation    : This file is always loaded. Profile overlay activated via -Denv=<profile> (default dev)
+#
+# Author        : Aniket Pathare | aniket.pathare@goverment.ie
+# Date Created  : 10-03-2026
+# Updated       : 16-09-2026 - Playwright keys added, Selenium-only keys removed
+#                 16-09-2026 - browser.zoom.percent (67), click.strategy, click.attempt.timeout.ms 5000
+#                 16-09-2026 - browser.https.upgrades, dialog handling, [BROWSER] event log
+#                 17-09-2026 - browser.cleanup.before.start, browser.cleanup.temp.folders, execution.fail.fast
+#                 18-09-2026 - browser.cleanup.scope, trace.screenshots, trace.snapshots (suite run speed)
+#                 18-09-2026 - browser.reuse: one browser for the whole run, clean session per test case
+# ===================================================================================================================================
 
-package runner;
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Browser Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Supported values: CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
+browser=CHROME
 
-import io.cucumber.core.cli.Main;
-import org.junit.jupiter.api.Test;
-import reporting.HtmlReportGenerator;
-import reporting.JUnitXmlGenerator;
-import reporting.ReportManager;
-import utilities.ConfigManager;
-import utilities.ExcelUtilities;
+# Installed browser to drive instead of Playwright's bundled Chromium: blank | chrome | msedge
+# (a value here also stops Playwright from trying to download browsers)
+browser.channel=
 
-import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Set;
-import java.util.logging.Logger;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+# false = Playwright default (--no-sandbox, needed when Chrome runs as root, e.g. in Docker). The dev profile sets true.
+browser.chromium.sandbox=false
 
-public class TestRunner
-{
-    private static final Logger log = Logger.getLogger(TestRunner.class.getName());
+# true = ONE browser for the whole run. Each test case still starts clean: new tab, cookies cleared and the site's
+# storage wiped, so every test case logs in again. Saves the 8-30 s Chrome start and the 10-14 s close per test case.
+# false = a new browser per test case (the behaviour up to 17-09).
+browser.reuse=true
 
-    public static final String iExecutionControlFilePath  = ConfigManager.getOrDefault("execution.control.path",  "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
-    public static final String iExecutionControlSheetName = ConfigManager.getOrDefault("execution.control.sheet", "Sheet1");
-    public static final String iFeatureDirectoryPath      = ConfigManager.getOrDefault("feature.directory.path",  "src/test/resources/Test_Cases/");
-    public static final String iStepDefinitionsGlue       = ConfigManager.getOrDefault("glue.package",            "stepdefinitions");
+# 0 = keep the same browser for the whole run. Set e.g. 10 to start a fresh browser every 10 test cases.
+browser.reuse.max.testcases=0
 
-    private static final String iHtmlReportPath     = "target/cucumber-reports/";
-    private static final String iJsonReportPath     = "target/cucumber-json/";
-    private static final String iStepListenerPlugin = "reporting.CucumberStepListener";
+# Browser processes stopped before each test case starts (replaces the Selenium killProcessByName("chrome")):
+#   none       = nothing stopped
+#   automation = only browsers started by Playwright or Selenium (your own Chrome windows stay open)
+#   all        = every chrome.exe (msedge.exe for Edge), like the Selenium framework - your own Chrome windows close too
+# chromedriver.exe left over from Selenium runs is stopped by automation and all.
+browser.cleanup.before.start=automation
 
-    @Test
-    public void executeSelectedTestCases()
-    {
-        runFrameworkExecution();
-    }
+# true = on the first test case of a run, delete old Playwright temp folders (profiles, driver copies) from %TEMP%
+browser.cleanup.temp.folders=true
 
-    public static void main(String[] pArgs)
-    {
-        runFrameworkExecution();
-    }
+# automation mode only: run = scan process command lines once per run (fast), testcase = before every test case (slow)
+browser.cleanup.scope=run
 
-    private static Set<String> requestedTestCaseIds()
-    {
-        String iRaw = ConfigManager.getOrDefault("testcase.ids", "");
-        return Arrays.stream(iRaw.split("[,;\\s]+"))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .map(s -> s.toUpperCase(Locale.ROOT))
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
+# true = never download browsers (laptops behind the department web gateway)
+playwright.skip.browser.download=false
 
-    private static void runFrameworkExecution()
-    {
-        ExcelUtilities iExcel      = new ExcelUtilities(iExecutionControlFilePath);
-        int            iRowCount   = iExcel.getRowCount(iExecutionControlSheetName);
-        Set<String>    iRequested  = requestedTestCaseIds();
-        Set<String>    iMatched    = new LinkedHashSet<>();
-        String         iEnvOverride = ConfigManager.getOrDefault("environment", "");
-        boolean        iWriteBack  = ConfigManager.getBool("execution.control.writeback", true);
-        boolean        iAnyRun     = false;
-        int            iPassCount  = 0;
-        int            iFailCount  = 0;
+# Run browser in headless mode (no visible window) - set true for CI/Bamboo agents and Docker
+headless=false
 
-        if (!iRequested.isEmpty())
-        {
-            log.info("[RUNNER] testcase.ids supplied - Execution flag ignored. Requested: " + iRequested);
-        }
+# Window / viewport
+browser.maximize=false
+viewport.width=1920
+viewport.height=1080
 
-        String iSuiteBrowser = ConfigManager.getOrDefault("browser", "CHROME");
-        ReportManager.startSuite(iEnvOverride, iSuiteBrowser);
+# Locale and timezone used by every browser context
+browser.locale=en-IE
+browser.timezone=Europe/Dublin
 
-        for (int iRowNumber = 1; iRowNumber <= iRowCount; iRowNumber++)
-        {
-            String iTestCaseID   = "";
-            String iEnvironment  = "";
-            String iBrowser      = "";
-            String iDescription  = "";
-            String iTags         = "";
-            String iErrorMessage;
-            String iScreenshot;
-            long   iStartTime    = 0L;
+# Accept internal / self-signed certificates
+ignore.https.errors=false
 
-            try
-            {
-                iTestCaseID = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "TestCase_ID").trim();
+# Open http:// links over https:// first, exactly like normal Chrome (Chrome 'HTTPS-Upgrades').
+# Playwright turns this off by default; without it the BISS Exit link (http://agfood.icentest...) times out on port 80.
+browser.https.upgrades=true
 
-                if (iRequested.isEmpty())
-                {
-                    String iExecFlag = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Execution").trim();
-                    if (!iExecFlag.equalsIgnoreCase("Y"))
-                    {
-                        log.info("[RUNNER] Row " + iRowNumber + " skipped (Execution=" + iExecFlag + ")");
-                        continue;
-                    }
-                }
-                else if (!iRequested.contains(iTestCaseID.toUpperCase(Locale.ROOT)))
-                {
-                    continue;
-                }
+# Safety net: hosts that are always redirected from http:// to https:// (comma-separated, *.domain allowed).
+# Leave blank unless a host still times out with browser.https.upgrades=true. Example:
+# browser.https.upgrade.hosts=agfood.icentest.agriculture.gov.ie
+browser.https.upgrade.hosts=
 
-                iMatched.add(iTestCaseID.toUpperCase(Locale.ROOT));
-                iAnyRun = true;
+# Browser proxy (blank = use the operating system settings)
+browser.proxy.server=
+browser.proxy.bypass=
 
-                iEnvironment = iEnvOverride.isEmpty()
-                        ? iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Environment").trim()
-                        : iEnvOverride;
-                iDescription = iExcel.getCellValue(iExecutionControlSheetName, iRowNumber, "Description").trim();
+# Visual aids for local runs
+highlight.enabled=false
+playwright.slowmo.ms=0
 
-                if (iTestCaseID.isEmpty())
-                {
-                    throw new RuntimeException("TestCase_ID is blank at row " + iRowNumber);
-                }
+# Page zoom, same as Ctrl+minus in Chrome (100 = normal). 67 matches the Selenium framework
+# (ChromeOptions profile.default_zoom_level = -2.196545). Other examples: 70, 75, 80, 90
+browser.zoom.percent=67
 
-                if (iEnvironment.isEmpty())
-                {
-                    throw new RuntimeException("Environment is blank for TestCase_ID : " + iTestCaseID);
-                }
+# Extra CSS zoom on the page body only (the old per-action document.body.style.zoom='84%').
+# 100 = off. Normally leave this at 100 and use browser.zoom.percent instead.
+ui.zoom.percent=100
 
-                iBrowser = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Browser", iSuiteBrowser);
-                iTags    = safeGetCell(iExcel, iExecutionControlSheetName, iRowNumber, "Tags", "");
+# false = first matching element (Selenium behaviour), true = Playwright strict mode
+locator.strict=false
 
-                // -Dbrowser.force=true makes -Dbrowser win over the Excel column (containers only ship Chromium/Firefox/WebKit)
-                if (ConfigManager.getBool("browser.force", false))
-                {
-                    iBrowser = iSuiteBrowser;
-                }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Wait Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Maximum seconds for any element action (click, fill, visible ...)
+explicit.wait.seconds=20
 
-                String iFeaturePath = locateFeatureFile(iTestCaseID);
+# Maximum seconds for page navigation
+page.load.timeout.seconds=30
 
-                System.setProperty("testcase",    iTestCaseID);
-                System.setProperty("environment", iEnvironment);
-                System.setProperty("browser",     iBrowser);
+# Polling interval for custom waits (milliseconds)
+wait.polling.interval.ms=250
 
-                printExecutionHeader(iTestCaseID, iEnvironment, iBrowser, iFeaturePath);
-                new File(iHtmlReportPath).mkdirs();
-                new File(iJsonReportPath).mkdirs();
+# Click strategy for CLICK, RADIOBUTTON, CHECKBOX, LIST ...
+#   auto   = normal click; JavaScript click if the normal click is blocked (Selenium ElementClickIntercepted behaviour)
+#   js     = always JavaScript click (arguments[0].click())
+#   native = normal click only, no JavaScript fallback
+# The JSCLICK action always uses a JavaScript click, whatever this is set to.
+click.strategy=auto
 
-                ReportManager.beginTestCase(iTestCaseID, iDescription, iTags);
+# How long a normal click may be blocked (overlay, spinner) before the JavaScript click is used (milliseconds)
+click.attempt.timeout.ms=5000
 
-                iStartTime = System.currentTimeMillis();
+# Browser pop-up dialogs (alert / confirm / prompt): accept = click OK, dismiss = click Cancel.
+# 'Leave site?' pop-ups are always accepted. UiHelpers.acceptNextDialog() / dismissNextDialog() override one dialog.
+dialog.default.action=accept
 
-                byte iExitCode = Main.run(
-                        new String[]{
-                                iFeaturePath,
-                                "--glue",   iStepDefinitionsGlue,
-                                "--plugin", "pretty",
-                                "--plugin", "summary",
-                                "--plugin", iStepListenerPlugin,
-                                "--plugin", "html:" + iHtmlReportPath + iTestCaseID + ".html",
-                                "--plugin", "json:" + iJsonReportPath + iTestCaseID + ".json"
-                        },
-                        Thread.currentThread().getContextClassLoader()
-                );
+# [BROWSER] lines in the run log: page changes, new tabs, dialogs, failed requests, HTTP 4xx/5xx, console errors
+log.browser.events=true
+log.browser.console.errors=true
 
-                long iDuration = System.currentTimeMillis() - iStartTime;
+# How long an "if present" / "if applicable" step looks for an optional element before deciding it is absent.
+# This wait is paid every time such an element is NOT there, so keep it small (the action timeout above is not used).
+probe.timeout.seconds=3
 
-                if (iExitCode == 0)
-                {
-                    writeStatus(iExcel, iWriteBack, iRowNumber, "PASS");
-                    log.info("[RUNNER] PASS : " + iTestCaseID + "  (" + formatDuration(iDuration) + ")");
-                    iPassCount++;
+# WAITVISIBLE / VERIFYELEMENT / LIST option timeouts (seconds)
+wait.visible.seconds=30
+verify.element.timeout.seconds=20
+list.option.timeout.seconds=30
 
-                    ReportManager.recordResult(iTestCaseID, iDescription, "PASS",
-                            iDuration, "", "", iTags, iEnvironment, iBrowser);
-                }
-                else
-                {
-                    iErrorMessage = System.getProperty("lastFailureReason." + iTestCaseID, "");
-                    iScreenshot   = System.getProperty("lastScreenshotPath." + iTestCaseID, "");
-                    String iTrace = System.getProperty("lastTracePath." + iTestCaseID, "");
-                    if (!iTrace.isEmpty())
-                    {
-                        iErrorMessage = iErrorMessage + (iErrorMessage.isEmpty() ? "" : " | ") + "Trace: " + iTrace;
-                    }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Retry Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Number of times to retry a failed test case (0 = no retry)
+retry.count=1
 
-                    writeStatus(iExcel, iWriteBack, iRowNumber, "FAIL");
-                    log.severe("[RUNNER] FAIL : " + iTestCaseID + "  (" + formatDuration(iDuration) + ")");
-                    iFailCount++;
+# Exception types that trigger a retry (comma-separated simple class names) - Playwright names
+retry.on.exceptions=TimeoutError,PlaywrightException
 
-                    ReportManager.recordResult(iTestCaseID, iDescription, "FAIL",
-                            iDuration, iErrorMessage, iScreenshot, iTags, iEnvironment, iBrowser);
-                }
-            }
-            catch (Exception iException)
-            {
-                long iDuration = iStartTime > 0 ? System.currentTimeMillis() - iStartTime : 0L;
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Test Data
+# -----------------------------------------------------------------------------------------------------------------------------------
+test.data.file.path=src/test/resources/Test_Data/TestData.xlsx
+test.data.sheet.name=Data
 
-                try
-                {
-                    if (!iTestCaseID.isEmpty())
-                    {
-                        writeStatus(iExcel, iWriteBack, iRowNumber, "FAIL");
-                    }
-                }
-                catch (Exception ignored) {}
+# Write the runtime HerdNumber / Username back into TestData.xlsx
+testdata.writeback.enabled=true
 
-                log.severe("[RUNNER] ERROR - Row=" + iRowNumber + "  TestCase_ID=" + iTestCaseID
-                        + "\n           Reason: " + iException.getMessage());
+# Oracle herd/agent bootstrap before each test case (false = use the sheet values)
+db.bootstrap=true
 
-                iFailCount++;
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Execution Control
+# -----------------------------------------------------------------------------------------------------------------------------------
+execution.control.path=src/test/resources/Execution_Control_File/ExecutionControl.xlsx
+execution.control.sheet=Sheet1
 
-                ReportManager.recordResult(iTestCaseID, iDescription, "ERROR",
-                        iDuration, iException.getMessage(), "", iTags, iEnvironment, iBrowser);
-            }
-        }
+# Write PASS / FAIL back into the Status column
+execution.control.writeback=true
 
-        // browser.reuse keeps one browser open across test cases - close it now that the last one has finished
-        try   { commonFunctions.CommonFunctions.shutdownBrowser(); }
-        catch (Exception e) { log.warning("[RUNNER] Browser shutdown failed : " + e.getMessage()); }
+# Comma-separated IDs to run regardless of the Execution flag (blank = Execution=Y rows)
+testcase.ids=
 
-        ReportManager.endSuite();
-        printExecutionSummary(iPassCount, iFailCount);
+# true  = when a scenario fails, the remaining scenarios of that test case are skipped and the runner moves on to the
+#         next test case in ExecutionControl.xlsx (a failed step already stops its own scenario)
+# false = every scenario of the test case still runs
+execution.fail.fast=true
 
-        try   { HtmlReportGenerator.generate(); }
-        catch (Exception e) { log.severe("[RUNNER] HTML report failed : " + e.getMessage()); }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Object Repository
+# -----------------------------------------------------------------------------------------------------------------------------------
+object.repository.path=src/test/resources/Object_Repository/ObjectRepository.properties
 
-        try   { JUnitXmlGenerator.generate(); }
-        catch (Exception e) { log.severe("[RUNNER] JUnit XML failed : " + e.getMessage()); }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Feature Files
+# -----------------------------------------------------------------------------------------------------------------------------------
+feature.directory.path=src/test/resources/Test_Cases/
+glue.package=stepdefinitions
 
-        if (!iRequested.isEmpty())
-        {
-            Set<String> iMissing = new LinkedHashSet<>(iRequested);
-            iMissing.removeAll(iMatched);
-            if (!iMissing.isEmpty())
-            {
-                throw new RuntimeException("testcase.ids not found in ExecutionControl.xlsx: " + iMissing);
-            }
-        }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Reporting
+# -----------------------------------------------------------------------------------------------------------------------------------
+report.docs.path=Test_Report/docs
+report.screenshots.path=Test_Report/screenshots
+report.html.path=Test_Report/html/
+report.traces.path=Test_Report/traces
+report.downloads.path=Test_Report/downloads
+junit.xml.path=target/surefire-reports/
 
-        if (!iAnyRun)
-        {
-            throw new RuntimeException("No test cases selected. Set Execution=Y in ExecutionControl.xlsx or pass -Dtestcase.ids=...");
-        }
+# Playwright trace: off | on | retain-on-failure
+trace.mode=retain-on-failure
 
-        if (iFailCount > 0)
-        {
-            throw new RuntimeException("Suite completed with " + iFailCount + " failure(s). "
-                    + "Check Test_Report/html, Test_Report/docs and Test_Report/traces.");
-        }
-    }
+# Screencast inside the trace: false keeps every action fast, true records a filmstrip of the run
+trace.screenshots=false
+# DOM snapshot per action - this is what the trace viewer replays. Keep true.
+trace.snapshots=true
 
-    private static void writeStatus(ExcelUtilities pExcel, boolean pWriteBack, int pRow, String pStatus)
-    {
-        if (!pWriteBack) { return; }
-        pExcel.setCellValue(iExecutionControlSheetName, pRow, "Status", pStatus);
-    }
+# Screenshot on PASS as well (true = capture every step, false = failure only)
+screenshot.on.pass=false
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : locateFeatureFile
-    // Description   : Finds <TestCase_ID>.feature anywhere under the feature folder (same rule as the Selenium TestRunner).
-    //                   1. Test_Cases/<ID>.feature
-    //                   2. Any sub-folder, any depth, exact file name (shallowest match wins)
-    //                   3. Any sub-folder, any depth, ignoring upper/lower case (a warning is logged, because the
-    //                      Linux Docker container is case-sensitive and would not find that file with a different case)
-    //                 When nothing is found, the error lists the folder searched and how many feature files it holds.
-    // Parameters    : pTestCaseID (String) - TestCase_ID from ExecutionControl.xlsx
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 10-03-2026 | Updated: 16-09-2026 (recursive, case-insensitive fallback, clearer error)
-    // ***************************************************************************************************************************************************************************************
-    private static String locateFeatureFile(String pTestCaseID)
-    {
-        final String iFeatureName = pTestCaseID + ".feature";
-        File iRoot = new File(iFeatureDirectoryPath);
+# Auto-delete screenshots older than N days (0 = never delete)
+screenshot.retention.days=30
 
-        File iDirect = new File(iRoot, iFeatureName);
-        if (iDirect.isFile())
-        {
-            return iDirect.getPath();
-        }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Email Notification
+# -----------------------------------------------------------------------------------------------------------------------------------
+notify.email.enabled=false
+notify.email.smtp.host=smtp.office365.com
+notify.email.smtp.port=587
+notify.email.smtp.starttls=true
+notify.email.from=automation@biss.ie
+notify.email.to=qa-team@biss.ie
+# notify.email.password - set via Bamboo plan variable or BISS_NOTIFY_EMAIL_PASSWORD, never store here
 
-        if (!iRoot.isDirectory())
-        {
-            throw new RuntimeException("Feature folder does not exist : " + iRoot.getAbsolutePath()
-                    + " | Copy the Test_Cases folder into src/test/resources/ or set -Dfeature.directory.path");
-        }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Database (optional - leave blank if not used)
+# -----------------------------------------------------------------------------------------------------------------------------------
+db.enabled=false
+db.driver=oracle.jdbc.OracleDriver
+db.url=
+db.username=
+# db.password - set via Bamboo plan variable or BISS_DB_PASSWORD, never store here
+db.connection.pool.size=5
+db.query.timeout.seconds=30
 
-        List<Path> iAllFeatures;
-        try (Stream<Path> iWalk = Files.walk(iRoot.toPath()))
-        {
-            iAllFeatures = iWalk.filter(Files::isRegularFile)
-                                .filter(iPath -> iPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".feature"))
-                                .sorted(Comparator.comparingInt(Path::getNameCount).thenComparing(Path::toString))
-                                .collect(Collectors.toList());
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Failed searching for feature file " + iFeatureName + " under "
-                    + iRoot.getAbsolutePath() + " : " + iException.getMessage(), iException);
-        }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------------------------------------------------------------
+log.level=INFO
+log.output.path=target/logs/
 
-        for (Path iPath : iAllFeatures)
-        {
-            if (iPath.getFileName().toString().equals(iFeatureName))
-            {
-                return iPath.toString();
-            }
-        }
-
-        for (Path iPath : iAllFeatures)
-        {
-            if (iPath.getFileName().toString().equalsIgnoreCase(iFeatureName))
-            {
-                log.warning("[RUNNER] Feature file name differs in case : expected '" + iFeatureName + "', found '"
-                        + iPath.getFileName() + "'. This works on Windows but fails in the Linux Docker container - rename the file.");
-                return iPath.toString();
-            }
-        }
-
-        throw new RuntimeException("Feature file not found : " + iFeatureName + " | Searched " + iRoot.getAbsolutePath()
-                + " and all sub-folders | Feature files found there : " + iAllFeatures.size()
-                + " | TestCase_ID in ExecutionControl.xlsx must match the .feature file name");
-    }
-
-    private static String safeGetCell(ExcelUtilities pExcel, String pSheet, int pRow, String pColumnName, String pDefault)
-    {
-        try
-        {
-            String iValue = pExcel.getCellValue(pSheet, pRow, pColumnName).trim();
-            return iValue.isEmpty() ? pDefault : iValue;
-        }
-        catch (Exception iException)
-        {
-            return pDefault;
-        }
-    }
-
-    private static void printExecutionHeader(String pID, String pEnv, String pBrowser, String pPath)
-    {
-        System.out.println("\n==================================================================");
-        System.out.println("  STARTING   : " + pID);
-        System.out.println("  Environment: " + pEnv);
-        System.out.println("  Browser    : " + pBrowser);
-        System.out.println("  Feature    : " + pPath);
-        System.out.println("==================================================================");
-    }
-
-    private static void printExecutionSummary(int pPass, int pFail)
-    {
-        System.out.println("\n==================================================================");
-        System.out.println("  EXECUTION SUMMARY");
-        System.out.println("  Total : " + (pPass + pFail));
-        System.out.println("  PASS  : " + pPass);
-        System.out.println("  FAIL  : " + pFail);
-        System.out.println("  HTML  : Test_Report/html/");
-        System.out.println("  XML   : target/surefire-reports/BISS_Execution_Results.xml");
-        System.out.println("  TRACE : Test_Report/traces/ (failed test cases only)");
-        System.out.println("==================================================================");
-    }
-
-    private static String formatDuration(long pMs)
-    {
-        long iSecs = (pMs / 1000) % 60;
-        long iMins = pMs / (1000 * 60);
-        return iMins > 0 ? iMins + "m " + iSecs + "s" : iSecs + "s";
-    }
-}
+# ---- ENTS runtime test data (utilities.EntsTestData) ----
+# Rows fetched per ENTS query (random order). The Agent Login query runs once per agent per run.
+ents.pool.size=200
+# true = a herd listed in the used-herds file is never picked again
+ents.skip.used.herds=true
+# One line per herd handed out: timestamp,testcase,role,herd,login,purpose. Delete the file to start again.
+ents.used.herds.file=runtime-data/ents_used_herds.csv
+# ENTS test cases skip the BISS herd + agent DB lookup (they get their data from the ENTS queries)
+db.bootstrap.ents=false
