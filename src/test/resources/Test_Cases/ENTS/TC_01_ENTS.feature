@@ -39,7 +39,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
 
   Background:
     Given the agent user is on the login page
-    When the individual logs in as transferor "aga6077"
+    When the individual logs in as transferor "aga6525"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
@@ -79,7 +79,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor
-    When the individual logs in as transferor "aga6077"
+    When the individual logs in as transferor "aga6525"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
@@ -109,7 +109,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the individual logs in as transferor "aga6077"
+    When the individual logs in as transferor "aga6525"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
@@ -139,7 +139,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the individual logs in as transferor "aga6077"
+    When the individual logs in as transferor "aga6525"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
@@ -170,7 +170,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the individual logs in as transferor "aga6077"
+    When the individual logs in as transferor "aga6525"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
@@ -201,7 +201,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the individual logs in as transferor "aga6077"
+    When the individual logs in as transferor "aga6525"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
@@ -231,7 +231,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     # ===========================================
 
     # --- Transferor ---
-    When the individual logs in as transferor "aga6077"
+    When the individual logs in as transferor "aga6525"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
