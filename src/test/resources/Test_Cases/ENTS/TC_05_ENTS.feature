@@ -55,7 +55,7 @@ Feature: TC_05_ENTS - Transfer Application E2E Regression Pack (Agent to Individ
 
     # --- Transferor (Agent) ---
     When the agent creates a transfer application with the following details
-      | transferorHerd | Patricia McFarland        |
+      | transferorHerd | Patricia McFarland|
       | transfereeHerd | Y104069X        |
       | transfereeName | Daniel Mulvany  |
       | transferType   | Change of Registration Details|
