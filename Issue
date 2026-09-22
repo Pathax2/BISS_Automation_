@@ -1,162 +1,421 @@
-# ENTS SQL Query Reference for Automation Testing
+package utilities;
 
-Source: Confluence page "SQL Query Reference for Automation Testing" by Ruchi Malik.
-The SQL is the same as on the page, with one change: the optional herd filter lines started with `//`, which Oracle does not read as a comment, so they now start with `--`.
+import commonFunctions.CommonFunctions;
+import database.DBRouter;
 
-| Query | Purpose | Main tables | Key filters | Returns | How to narrow it |
-|---|---|---|---|---|---|
-| Agent Login | Herds handled by one agent login | `tden_owner_history`, `vwen_ent_sets`, `vwco_ents_herd_abls_rpt`, `vwco_ems_client_details` | `ent_num_ents > 10`, `herd_agt LIKE '%aga6525%'`, one row per herd, alive holder preferred | herd_number, Herd_Name, AddressLine1, Agent_Login | Change `aga6525` in both places; uncomment the `herd_number IN (...)` line for specific herds |
-| Individual Login | Herds with their own online login | `vwco_ents_herd_abls_rpt`, `vwco_ems_client_details` | `herd_ols_login IS NOT NULL`, `start_date > '31-DEC-22'`, one row per herd | Login_ID, Name, herd_number, Address | Uncomment the `herd_number IN (...)` line for specific herds |
-| ETF Login | Individual herds linked to an ETF, with the ETF username | `vwco_ents_herd_abls_rpt`, `tden_herd_etf_link`, `vw_sso_roles_for_user_ents`, `vwco_ems_client_details` | `cust_type = 'Individual'`, `hel_grantor_type = 1`, `hel_scheme_year = 2026`, `hel_txor_ents_allowed > 10`, `hel_herd_no NOT LIKE '2%'` | individual_login, herd_number, herd_name, ETF_Username | Uncomment the `ve.herd_id IN (...)` line for specific herds |
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Random;
+import java.util.Set;
 
-How the dedupe works (Agent and Individual Login): `herd_number_status` checks whether any client row for the herd has `death_indicator = 'Y'`. The final query keeps one row per herd, preferring the row with no death flag when a death exists, or the `'N'` row when none does, then the latest `start_date`.
+// =====================================================================================================================================
+// File          : EntsTestData.java
+// Package       : utilities
+// Description   : Runtime test data for the ENTS (Transfer of Entitlements) test cases.
+//
+//                 Replaces the herd numbers and names that were typed into the ENTS feature files. The feature file now
+//                 carries a token such as {transferor.herd}; the step that creates the transfer asks this class for a
+//                 fresh pair of herds, and every later step in the same section reads the same pair.
+//
+//                 How a pair is picked (same-agent transfers):
+//                   1. The Agent Login query runs ONCE per agent per run on the ENTS_DATA connection (DBRouter "ENTS").
+//                      Up to ents.pool.size rows come back in random order and are kept in memory for the whole run.
+//                   2. The rows are shuffled again, and every herd already listed in the used-herds file is skipped.
+//                   3. The first unused herd becomes the transferor, the next unused herd becomes the transferee.
+//                   4. Both herds are written to the used-herds file straight away, so a failed run does not hand the
+//                      same (possibly half-transferred) herds to the next run.
+//
+//                 Tokens understood by resolve():
+//                   {transferor.herd}  {transferor.name}  {transferor.address}
+//                   {transferee.herd}  {transferee.name}  {transferee.address}
+//                   {agent}
+//                 Any other value is returned unchanged, so a feature file can still pin a herd for debugging.
+//
+//                 Settings (application.properties):
+//                   ents.pool.size          - rows fetched per query (default 200)
+//                   ents.skip.used.herds    - true = never reuse a herd listed in the used-herds file (default true)
+//                   ents.used.herds.file    - the used-herds file (default runtime-data/ents_used_herds.csv)
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 22-09-2026
+// =====================================================================================================================================
 
-## 1. Agent Login
+public final class EntsTestData
+{
+    private EntsTestData() { }
 
-```sql
-WITH herd_numbers AS (
-    SELECT DISTINCT ohs_herd app_from_herd
-    FROM tden_owner_history,
-         vwen_ent_sets,
-         vwco_ents_herd_abls_rpt
-    WHERE ohs_scheme_year = ent_scheme_year
-      AND ohs_own_id = ent_own_id
-      AND ohs_hist_no = ent_hist_no
-      --AND ent_scheme_year = 2026
-      AND ent_num_ents > 10
-      AND ohs_herd = herd_id
-      AND herd_agt LIKE '%aga6525%'
-),
-herd_number_status AS (
-    SELECT t.herd_number,
-           MAX(CASE WHEN t.death_indicator = 'Y' THEN 1 ELSE 0 END) has_y
-    FROM vwco_ems_client_details t
-    JOIN herd_numbers i
-      ON i.app_from_herd = t.herd_number
-    GROUP BY t.herd_number
-)
-SELECT herd_number,
-       initcap(payee_name) Herd_Name,
-       initcap(addr1) AddressLine1,
-       'aga6525' Agent_Login
-FROM (
-    SELECT t.*,
-           ROW_NUMBER() OVER (
-               PARTITION BY t.herd_number
-               ORDER BY
-                   CASE
-                       WHEN s.has_y = 1 AND t.death_indicator IS NULL THEN 1
-                       WHEN s.has_y = 0 AND t.death_indicator = 'N' THEN 1
-                       ELSE 2
-                   END,
-                   t.start_date DESC
-           ) rn
-    FROM vwco_ems_client_details t
-    JOIN herd_numbers i
-      ON i.app_from_herd = t.herd_number
-    JOIN herd_number_status s
-      ON s.herd_number = t.herd_number
-)
-WHERE rn = 1
---AND herd_number IN ('D1074220','D2700981','D2361427')
-;
-```
+    // =================================================================================================
+    // DATA HOLDERS
+    // =================================================================================================
 
-## 2. Individual Login
+    // One herd returned by an ENTS query
+    public static final class Herd
+    {
+        public final String herdNumber;
+        public final String name;
+        public final String address;
 
-```sql
-WITH herd_numbers AS (
-    SELECT vr.herd_ols_login Login_ID,
-           vr.herd_id app_from_herd
-    FROM vwco_ents_herd_abls_rpt vr
-    WHERE vr.herd_ols_login IS NOT NULL
-      AND vr.start_date > '31-DEC-22'
-),
-herd_number_status AS (
-    SELECT t.herd_number,
-           MAX(CASE WHEN t.death_indicator = 'Y' THEN 1 ELSE 0 END) has_y
-    FROM vwco_ems_client_details t
-    JOIN herd_numbers i
-      ON i.app_from_herd = t.herd_number
-    GROUP BY t.herd_number
-)
-SELECT Login_ID,
-       initcap(payee_name) Name,
-       herd_number,
-       initcap(addr1) Address
-FROM (
-    SELECT t.*,
-           i.Login_ID,
-           ROW_NUMBER() OVER (
-               PARTITION BY t.herd_number
-               ORDER BY
-                   CASE
-                       WHEN s.has_y = 1 AND t.death_indicator IS NULL THEN 1
-                       WHEN s.has_y = 0 AND t.death_indicator = 'N' THEN 1
-                       ELSE 2
-                   END,
-                   t.start_date DESC
-           ) rn
-    FROM vwco_ems_client_details t
-    JOIN herd_numbers i
-      ON i.app_from_herd = t.herd_number
-    JOIN herd_number_status s
-      ON s.herd_number = t.herd_number
-)
-WHERE rn = 1
---AND herd_number IN ('G1740503','Q1201540','L1582159')
-;
-```
+        Herd(String pHerdNumber, String pName, String pAddress)
+        {
+            herdNumber = pHerdNumber;
+            name       = pName;
+            address    = pAddress;
+        }
 
-## 3. ETF Login
+        @Override
+        public String toString() { return herdNumber + " (" + name + ")"; }
+    }
 
-```sql
-SELECT t.individual_login,
-       t.herd_number,
-       t.herd_name,
-       (
-           SELECT username
-           FROM tden_herd_etf_link, vw_sso_roles_for_user_ents
-           WHERE hel_scheme_year = 2026
-             AND hel_txor_ents_allowed > 10
-             AND businessid = hel_etf_no
-             AND hel_herd_no NOT LIKE '2%'
-             AND hel_etf_no = t.etf_no
-             AND ROWNUM = 1
-       ) AS ETF_Username
-       --,t.etf_no
-FROM (
-    SELECT ve.herd_ols_login individual_login,
-           ve.herd_id        herd_number,
-           (
-               SELECT initcap(cd.payee_name)
-               FROM vwco_ems_client_details cd
-               WHERE cd.herd_number = ve.herd_id
-                 AND ROWNUM = 1
-           ) AS herd_name,
-           (
-               SELECT hel_etf_no
-               FROM tden_herd_etf_link
-               WHERE hel_herd_no = ve.herd_id
-                 AND ROWNUM = 1
-           ) AS etf_no
-    FROM vwco_ents_herd_abls_rpt ve
-    WHERE 1 = 1
-      AND ve.cust_type = 'Individual'
-      AND ve.herd_ols_login IS NOT NULL
-      --AND ve.herd_id IN ('H2311293', 'H2590656')
-      AND ve.herd_id IN (
-          SELECT DISTINCT hel_herd_no
-          FROM tden_herd_etf_link
-          WHERE hel_grantor_type = 1
-      )
-) t;
-```
+    // The herds used by one transfer section
+    public static final class TransferPair
+    {
+        public final String agent;
+        public final Herd   transferor;
+        public final Herd   transferee;
 
-## Notes
+        TransferPair(String pAgent, Herd pTransferor, Herd pTransferee)
+        {
+            agent      = pAgent;
+            transferor = pTransferor;
+            transferee = pTransferee;
+        }
+    }
 
-| Point | Detail |
-|---|---|
-| Date filter in Individual Login | `start_date > '31-DEC-22'` depends on the session date format (NLS). `start_date > DATE '2022-12-31'` works in any session. |
-| ETF_Username can be empty | The username subquery also needs `hel_scheme_year = 2026` and more than 10 entitlements, so herds whose ETF misses those rules return NULL. |
-| Scheme year | ETF Login is fixed to 2026. Change `hel_scheme_year` each year. |
+    // =================================================================================================
+    // STATE
+    // =================================================================================================
+
+    private static final String LOG_PREFIX = "[ENTS-DATA] ";
+    private static final String CSV_HEADER = "timestamp,testcase,role,herd,login,purpose";
+
+    // Agent login -> rows of the Agent Login query (fetched once per run, the query takes several seconds)
+    private static final Map<String, List<Herd>> AGENT_POOLS = new HashMap<>();
+
+    // Herds handed out in this run (covers ents.skip.used.herds=false, where the file is not consulted)
+    private static final Set<String> USED_THIS_RUN = new HashSet<>();
+
+    private static TransferPair iCurrentPair   = null;
+    private static String       iLoggedInUser  = "";
+
+    // =================================================================================================
+    // SCENARIO LIFECYCLE
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resetScenario
+    // Description   : Clears the pair of the previous scenario. Called from Hooks before every scenario.
+    //                 The query results stay cached for the whole run.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void resetScenario()
+    {
+        iCurrentPair  = null;
+        iLoggedInUser = "";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setLoggedInUser / loggedInUser
+    // Description   : The ENTS login steps record who is logged in, so a same-agent transfer knows which agent's herds
+    //                 to use without repeating the login in the feature file.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void setLoggedInUser(String pUsername)
+    {
+        iLoggedInUser = pUsername == null ? "" : pUsername.trim();
+    }
+
+    public static synchronized String loggedInUser()
+    {
+        return iLoggedInUser;
+    }
+
+    public static synchronized TransferPair currentPair()
+    {
+        return iCurrentPair;
+    }
+
+    // =================================================================================================
+    // TOKENS
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : hasToken / tableHasToken
+    // Description   : True when a value (or any value of a DataTable map) is a runtime token such as {transferor.herd}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean hasToken(String pValue)
+    {
+        if (pValue == null) return false;
+        String iValue = pValue.trim();
+        return iValue.startsWith("{") && iValue.endsWith("}");
+    }
+
+    public static boolean tableHasToken(Map<String, String> pTable)
+    {
+        if (pTable == null) return false;
+        for (String iValue : pTable.values())
+        {
+            if (hasToken(iValue)) return true;
+        }
+        return false;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolve
+    // Description   : Replaces a runtime token with the value of the current pair. Plain values come back unchanged.
+    //                 Throws with a clear message when a token is used before any pair was picked, or is misspelt.
+    // Parameters    : pValue (String) - DataTable cell, e.g. "{transferee.herd}" or "C1010148"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized String resolve(String pValue)
+    {
+        if (pValue == null) return null;
+        if (!hasToken(pValue)) return pValue.trim();
+
+        String iToken = pValue.trim().toLowerCase(Locale.ROOT);
+
+        if (iCurrentPair == null)
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Token " + pValue.trim() + " used before a transfer pair was picked. "
+                    + "The step that creates the transfer must run first in this section.");
+        }
+
+        switch (iToken)
+        {
+            case "{transferor.herd}":    return iCurrentPair.transferor.herdNumber;
+            case "{transferor.name}":    return iCurrentPair.transferor.name;
+            case "{transferor.address}": return iCurrentPair.transferor.address;
+            case "{transferee.herd}":    return iCurrentPair.transferee.herdNumber;
+            case "{transferee.name}":    return iCurrentPair.transferee.name;
+            case "{transferee.address}": return iCurrentPair.transferee.address;
+            case "{agent}":              return iCurrentPair.agent;
+            default:
+                throw new IllegalArgumentException(LOG_PREFIX + "Unknown token " + pValue.trim()
+                        + ". Use {transferor.herd}, {transferor.name}, {transferee.herd}, {transferee.name}, "
+                        + "{transferor.address}, {transferee.address} or {agent}.");
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolveTable
+    // Description   : Returns a copy of a DataTable map with every token replaced (keys and order kept)
+    // Parameters    : pTable (Map) - the DataTable as a key/value map
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Map<String, String> resolveTable(Map<String, String> pTable)
+    {
+        Map<String, String> iResolved = new LinkedHashMap<>();
+        for (Map.Entry<String, String> iEntry : pTable.entrySet())
+        {
+            iResolved.put(iEntry.getKey(), resolve(iEntry.getValue()));
+        }
+        return iResolved;
+    }
+
+    // =================================================================================================
+    // PAIR SELECTION
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextSameAgentPair
+    // Description   : Picks two different, unused herds of the same agent (transferor + transferee), records them in
+    //                 the used-herds file, logs them and makes them the current pair.
+    // Parameters    : pAgent   (String) - agent login, e.g. "aga6077"
+    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextSameAgentPair(String pAgent, String pPurpose)
+    {
+        if (pAgent == null || pAgent.isBlank())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take herds from. "
+                    + "The ENTS login step must run before the transfer is created.");
+        }
+
+        String     iAgent     = pAgent.trim();
+        List<Herd> iPool      = agentPool(iAgent);
+        Set<String> iUsed     = usedHerds();
+        List<Herd> iAvailable = new ArrayList<>();
+
+        for (Herd iHerd : iPool)
+        {
+            if (!iUsed.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
+        }
+
+        if (iAvailable.size() < 2)
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query for " + iAgent + " has " + iAvailable.size()
+                    + " unused herd(s) left out of " + iPool.size() + ", and a transfer needs 2. "
+                    + "Clear or trim " + usedFile() + ", raise ents.pool.size, or use another agent.");
+        }
+
+        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
+        Herd iTransferor = iAvailable.get(0);
+        Herd iTransferee = iAvailable.get(1);
+
+        markUsed("transferor", iTransferor.herdNumber, iAgent, pPurpose);
+        markUsed("transferee", iTransferee.herdNumber, iAgent, pPurpose);
+
+        iCurrentPair = new TransferPair(iAgent, iTransferor, iTransferee);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] | Agent=" + iAgent
+                + " | Transferor=" + iTransferor + " | Transferee=" + iTransferee
+                + " | " + (iAvailable.size() - 2) + " unused herd(s) left in the pool");
+
+        return iCurrentPair;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : agentPool
+    // Description   : Rows of the Agent Login query for one agent, fetched once per run and cached
+    // Parameters    : pAgent (String) - agent login
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static List<Herd> agentPool(String pAgent)
+    {
+        String     iKey    = pAgent.toLowerCase(Locale.ROOT);
+        List<Herd> iCached = AGENT_POOLS.get(iKey);
+        if (iCached != null) return iCached;
+
+        int  iLimit = ConfigManager.getInt("ents.pool.size", 200);
+        long iStart = System.currentTimeMillis();
+
+        CommonFunctions.log.info(LOG_PREFIX + "Running Agent Login query for " + pAgent + " (up to " + iLimit + " rows)...");
+        DBRouter.runDB("ENTS", "ENTS Agent Login herds", pAgent, String.valueOf(iLimit));
+
+        List<Herd> iPool = new ArrayList<>();
+        for (Map<String, Object> iRow : DBRouter.getRows())
+        {
+            String iHerd = text(iRow, "HERD_NUMBER");
+            if (!iHerd.isEmpty())
+            {
+                iPool.add(new Herd(iHerd, text(iRow, "HERD_NAME"), text(iRow, "ADDRESSLINE1")));
+            }
+        }
+
+        CommonFunctions.log.info(LOG_PREFIX + "Agent Login query for " + pAgent + " returned " + iPool.size()
+                + " herd(s) in " + (System.currentTimeMillis() - iStart) / 1000 + " s");
+
+        if (iPool.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query returned no herds for " + pAgent
+                    + ". Check the agent login, or run the query in SQL Developer on CENTEST_ENTS_DATA.");
+        }
+
+        AGENT_POOLS.put(iKey, iPool);
+        return iPool;
+    }
+
+    private static String text(Map<String, Object> pRow, String pColumn)
+    {
+        return Objects.toString(pRow.get(pColumn), "").trim();
+    }
+
+    // =================================================================================================
+    // USED-HERDS FILE
+    // =================================================================================================
+
+    private static Path usedFile()
+    {
+        return Paths.get(ConfigManager.getOrDefault("ents.used.herds.file", "runtime-data/ents_used_herds.csv"));
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : usedHerds
+    // Description   : Herds that must not be picked: those handed out in this run, plus (when ents.skip.used.herds=true)
+    //                 every herd listed in the used-herds file from earlier runs.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static Set<String> usedHerds()
+    {
+        Set<String> iUsed = new HashSet<>(USED_THIS_RUN);
+
+        if (!ConfigManager.getBool("ents.skip.used.herds", true)) return iUsed;
+
+        Path iFile = usedFile();
+        if (!Files.exists(iFile)) return iUsed;
+
+        try
+        {
+            for (String iLine : Files.readAllLines(iFile, StandardCharsets.UTF_8))
+            {
+                String[] iCells = iLine.split(",", -1);
+                if (iCells.length >= 4 && !iCells[3].isBlank() && !"herd".equalsIgnoreCase(iCells[3].trim()))
+                {
+                    iUsed.add(iCells[3].trim());
+                }
+            }
+        }
+        catch (IOException e)
+        {
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not read " + iFile + " (" + e.getMessage()
+                    + ") - only herds used in this run are skipped.");
+        }
+        return iUsed;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : markUsed
+    // Description   : Adds one line to the used-herds file. A write failure is logged, never fatal.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void markUsed(String pRole, String pHerd, String pLogin, String pPurpose)
+    {
+        USED_THIS_RUN.add(pHerd);
+
+        Path iFile = usedFile();
+        try
+        {
+            if (iFile.getParent() != null) Files.createDirectories(iFile.getParent());
+            if (!Files.exists(iFile))
+            {
+                Files.write(iFile, (CSV_HEADER + System.lineSeparator()).getBytes(StandardCharsets.UTF_8));
+            }
+
+            String iLine = String.join(",",
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                    csv(System.getProperty("testcase", "")),
+                    csv(pRole),
+                    csv(pHerd),
+                    csv(pLogin),
+                    csv(pPurpose)) + System.lineSeparator();
+
+            Files.write(iFile, iLine.getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+        }
+        catch (IOException e)
+        {
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not record " + pHerd + " in " + iFile + " (" + e.getMessage() + ")");
+        }
+    }
+
+    // Commas would break the simple CSV format - replace them
+    private static String csv(String pValue)
+    {
+        return pValue == null ? "" : pValue.replace(',', ' ').replace('\n', ' ').replace('\r', ' ').trim();
+    }
+}
