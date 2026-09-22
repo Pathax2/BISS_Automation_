@@ -1,3 +1,28 @@
+// ===================================================================================================================================
+// File          : Hooks.java
+// Package       : stepdefinitions
+// Description   : Cucumber lifecycle hooks - PLAYWRIGHT edition.
+//
+//                 Changes versus the Selenium Hooks:
+//                   - killProcessByName("chrome"/"chromedriver") moved to utilities.BrowserProcessCleaner, called by
+//                     PlaywrightFactory before every launch (browser.cleanup.before.start; skipped in containers)
+//                   - Browser launched through CommonFunctions.launchBrowser -> PlaywrightFactory
+//                   - URL can be overridden with -Dapp.url / BISS_APP_URL (container network names differ)
+//                   - DB herd bootstrap can be switched off with -Ddb.bootstrap=false / BISS_DB_BOOTSTRAP=false
+//                     (sheet values are used - needed for TC_01 POC and for containers without Oracle access)
+//                   - Failure screenshot is also attached to the Cucumber scenario (visible in Cucumber HTML report)
+//                   - Playwright trace zip kept for failed test cases (Test_Report/traces)
+//                   - ReportManager.setWordDocPath(...) call removed (method does not exist in ReportManager)
+//                   - All DB resolution logic (@preliminary, @tc13, markAgentExpired, blacklist) UNCHANGED
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 10-03-2026
+// Updated       : 15-09-2026 - Selenium to Playwright migration
+// Updated       : 18-09-2026 - [TIMING] line per test case: setup (DB, cleanup, browser), scenarios, teardown
+// Updated       : 17-09-2026 - Fail-fast: after a failed scenario the rest of the test case is skipped (execution.fail.fast)
+//                              Word report / ReportIndex status now follows the Cucumber result
+// ===================================================================================================================================
+
 package stepdefinitions;
 
 import commonFunctions.CommonFunctions;
@@ -8,14 +33,19 @@ import io.cucumber.java.BeforeAll;
 import io.cucumber.java.Scenario;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import reporting.ReportManager;
+import utilities.ConfigManager;
 import utilities.ExcelUtilities;
 import utilities.RetryAnalyser;
+import utilities.ScreenshotManager;
 import utilities.SoftAssertManager;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Random;
 import java.util.Set;
 
 public class Hooks
@@ -28,31 +58,35 @@ public class Hooks
     private static final StringBuilder iAccumulatedErrors  = new StringBuilder();
     private static String              iLastScreenshotPath = "";
     private static long                iScenarioStartTime  = 0L;
+    private static boolean             iAnyScenarioFailed  = false;
+    private static String              iFirstFailedScenario = "";
+    private static long                iTestCaseStartMs      = 0L;
+    private static long                iSetupMs              = 0L;
+    private static long                iScenarioMs           = 0L;
+    private boolean                    iSkippedByFailFast   = false;
 
-    private static final String iTestDataFilePath  = "src/test/resources/Test_Data/TestData.xlsx";
-    private static final String iTestDataSheetName = "Data";
+    private static final String iTestDataFilePath  = ConfigManager.getOrDefault("test.data.file.path", "src/test/resources/Test_Data/TestData.xlsx");
+    private static final String iTestDataSheetName = ConfigManager.getOrDefault("test.data.sheet.name", "Data");
     private static final String iConfigSheetName   = "Config";
     private static final String iDefaultBrowser    = "CHROME";
 
-    // ── Standard runtime herd / username (used by TC_03 through TC_17) ────────────────────────────
+    // Standard runtime herd / username (used by TC_03 through TC_17)
     public static String RUNTIME_HERD     = null;
     public static String RUNTIME_USERNAME = null;
 
-    // ── Preliminary Checks runtime data (used by TC_18, TC_19, TC_20) ────────────────────────────
+    // Preliminary Checks runtime data (used by TC_18, TC_19, TC_20)
     public static String OVERCLAIM_HERD         = null;
-    public static String OVERCLAIM_USERNAME      = null;
-    public static String DUAL_CLAIM_HERD         = null;
-    public static String DUAL_CLAIM_USERNAME     = null;
-    public static String AGRI_ACTIVITY_HERD      = null;
-    public static String AGRI_ACTIVITY_USERNAME  = null;
+    public static String OVERCLAIM_USERNAME     = null;
+    public static String DUAL_CLAIM_HERD        = null;
+    public static String DUAL_CLAIM_USERNAME    = null;
+    public static String AGRI_ACTIVITY_HERD     = null;
+    public static String AGRI_ACTIVITY_USERNAME = null;
 
-    // ── TC_13 NRCISYF runtime data ────────────────────────────────────────────────────────────────
-    // Resolved by @Before("@tc13") immediately before the scenario runs.
-    // Overrides RUNTIME_HERD and RUNTIME_USERNAME so the Background login
-    // and herd search steps automatically use the correct CISYF-eligible J-prefix herd.
+    // TC_13 NRCISYF runtime data
     public static String CISYF_HERD     = null;
     public static String CISYF_USERNAME = null;
-    // ─── Blacklisted herds — re-fetch if we land on one of these ─────────────────────────────────
+
+    // Blacklisted herds - re-fetch if we land on one of these
     public static final Set<String> BLACKLISTED_HERDS = Set.of(
             "R1230577","C2280025","C1281036","Q1060377","M1391623","M1701886","D1160614",
             "X1120993","P1261051","E209434X","D1174054","H2621144","B1240361","G1930639",
@@ -61,31 +95,40 @@ public class Hooks
             "Y1070492","Y1791564","R1040514","C1430554","C1289029","B1014078","D2450985"
     );
 
-    // ─── Expired agents — populated at runtime when "Account Expired" is detected on screen.
-//     Once added here an agent is never selected again for the rest of the test run.
-//     Populated by TC_03.theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP() via
-//     Hooks.markAgentExpired(). Checked in the INET candidate loop in beforeAllExecution()
-//     and in theAgentOpensAFarmerDashboardUsingHerdDataFromRow() herd retry loop.
+    // Expired agents - populated at runtime when "Account Expired" is detected on screen
     public static final Set<String> EXPIRED_AGENTS = new HashSet<>();
 
+    private static boolean isDbBootstrapEnabled()
+    {
+        // ENTS test cases log in with the users named in the feature file and get their herds from
+        // utilities.EntsTestData, so the BISS herd + agent lookup (DATA + INET) is skipped for them by default.
+        if (isEntsTestCase())
+        {
+            return ConfigManager.getBool("db.bootstrap.ents", false);
+        }
+        return ConfigManager.getBool("db.bootstrap", true);
+    }
+
+    // True for ENTS test case IDs, e.g. TC_01_ENTS
+    private static boolean isEntsTestCase()
+    {
+        return iTestCaseID != null && iTestCaseID.toUpperCase(java.util.Locale.ROOT).contains("_ENTS");
+    }
+
     // ***************************************************************************************************************************************************************************************
-// Function Name : markAgentExpired
-// Description   : Called from the login step when "Account Expired" is detected on screen.
-//                 Adds the agent to EXPIRED_AGENTS so it is never selected again.
-//                 Then re-resolves a fresh herd+agent pair from BISS_DATA and BISS_INET,
-//                 excluding all previously expired agents, and updates RUNTIME_HERD and
-//                 RUNTIME_USERNAME so the next login attempt uses the new valid agent.
-// Parameters    : pExpiredUsername — the agent username that showed Account Expired
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 05-05-2026
-// ***************************************************************************************************************************************************************************************
+    // Function Name : markAgentExpired
+    // Description   : Adds the agent to EXPIRED_AGENTS and re-resolves a fresh herd+agent pair (unchanged logic).
+    // Parameters    : pExpiredUsername - the agent username that showed Account Expired
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 05-05-2026
+    // ***************************************************************************************************************************************************************************************
     public static void markAgentExpired(String pExpiredUsername)
     {
         if (pExpiredUsername == null || pExpiredUsername.isBlank()) return;
 
         EXPIRED_AGENTS.add(pExpiredUsername.trim());
         CommonFunctions.log.warning("[EXPIRED-AGENT] SSO Account Expired detected for: "
-                + pExpiredUsername + " — added to EXPIRED_AGENTS. Re-resolving herd+agent.");
+                + pExpiredUsername + " - added to EXPIRED_AGENTS. Re-resolving herd+agent.");
 
         String iYear  = System.getProperty("herd.year",  "2026").trim();
         String iLimit = System.getProperty("herd.limit", "25").trim();
@@ -97,16 +140,16 @@ public class Hooks
             int iNewLimit = Integer.parseInt(iLimit) + (iAttempt * 10);
             database.DBRouter.runDB("DATA", "List of herds with no errors at all", iYear, String.valueOf(iNewLimit));
 
-            java.util.List<java.util.Map<String, Object>> iRows = database.DBRouter.getRows();
+            List<Map<String, Object>> iRows = database.DBRouter.getRows();
             if (iRows == null || iRows.isEmpty()) continue;
 
-            java.util.List<String> iCandidates = new java.util.ArrayList<>();
-            for (java.util.Map<String, Object> r : iRows)
+            List<String> iCandidates = new ArrayList<>();
+            for (Map<String, Object> r : iRows)
             {
                 String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
                 if (!h.isEmpty()) iCandidates.add(h);
             }
-            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
+            Collections.shuffle(iCandidates, new Random(System.nanoTime()));
 
             for (String iCandidate : iCandidates)
             {
@@ -120,8 +163,7 @@ public class Hooks
 
                 if (EXPIRED_AGENTS.contains(iUser))
                 {
-                    CommonFunctions.log.warning("[EXPIRED-AGENT] Candidate agent "
-                            + iUser + " is also expired — skipping.");
+                    CommonFunctions.log.warning("[EXPIRED-AGENT] Candidate agent " + iUser + " is also expired - skipping.");
                     continue;
                 }
 
@@ -129,18 +171,15 @@ public class Hooks
                 RUNTIME_USERNAME = iUser;
                 iFound = true;
 
-                CommonFunctions.log.info("[EXPIRED-AGENT] Re-resolved: Herd="
-                        + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
+                CommonFunctions.log.info("[EXPIRED-AGENT] Re-resolved: Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
                 break;
             }
         }
 
         if (!iFound)
         {
-            throw new RuntimeException(
-                    "[EXPIRED-AGENT] Could not find a replacement herd+agent after "
-                            + "marking " + pExpiredUsername + " as expired. "
-                            + "All candidates exhausted. Try -Dherd.limit=50 or check DB data.");
+            throw new RuntimeException("[EXPIRED-AGENT] Could not find a replacement herd+agent after marking "
+                    + pExpiredUsername + " as expired. All candidates exhausted. Try -Dherd.limit=50 or check DB data.");
         }
     }
 
@@ -151,20 +190,23 @@ public class Hooks
         while (RUNTIME_HERD != null && BLACKLISTED_HERDS.contains(RUNTIME_HERD) && retries < 50)
         {
             retries++;
-            CommonFunctions.log.warning("=========================================================[HOOKS] Blacklisted herd detected: " + RUNTIME_HERD + " — re-fetching (attempt " + retries + ")");
+            CommonFunctions.log.warning("[HOOKS] Blacklisted herd detected: " + RUNTIME_HERD + " - re-fetching (attempt " + retries + ")");
 
-            database.DBRouter.runDB("DATA", "List of herds with no errors at all", String.valueOf(java.time.Year.now().getValue()), String.valueOf(10 + retries)
-            );
+            database.DBRouter.runDB("DATA", "List of herds with no errors at all",
+                    String.valueOf(java.time.Year.now().getValue()), String.valueOf(10 + retries));
 
             List<Map<String, Object>> rows = database.DBRouter.getRows();
-            if (rows == null || rows.isEmpty()) {
-                throw new RuntimeException("[HOOKS] Re-fetch returned no rows — cannot find replacement herd.");
+            if (rows == null || rows.isEmpty())
+            {
+                throw new RuntimeException("[HOOKS] Re-fetch returned no rows - cannot find replacement herd.");
             }
 
             boolean replaced = false;
-            for (Map<String, Object> r : rows) {
+            for (Map<String, Object> r : rows)
+            {
                 String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
-                if (!h.isEmpty() && !BLACKLISTED_HERDS.contains(h)) {
+                if (!h.isEmpty() && !BLACKLISTED_HERDS.contains(h))
+                {
                     RUNTIME_HERD = h;
                     CommonFunctions.log.info("[HOOKS] Replacement herd selected: " + RUNTIME_HERD);
                     replaced = true;
@@ -172,26 +214,132 @@ public class Hooks
                 }
             }
 
-            if (!replaced) {
-                CommonFunctions.log.warning("[HOOKS] No non-blacklisted herd found — retrying...");
+            if (!replaced)
+            {
+                CommonFunctions.log.warning("[HOOKS] No non-blacklisted herd found - retrying...");
             }
         }
 
-        if (BLACKLISTED_HERDS.contains(RUNTIME_HERD)) {
-            throw new RuntimeException("====================================================[HOOKS] Could not resolve a non-blacklisted herd after " + retries + " retries. Last herd=" + RUNTIME_HERD);
+        if (RUNTIME_HERD != null && BLACKLISTED_HERDS.contains(RUNTIME_HERD))
+        {
+            throw new RuntimeException("[HOOKS] Could not resolve a non-blacklisted herd after " + retries + " retries. Last herd=" + RUNTIME_HERD);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : bootstrapRuntimeHerdAndUser
+    // Description   : DATA -> INET herd/username resolution (logic moved unchanged out of beforeAllExecution).
+    // Parameters    : pHerdFromSheet  - HerdNumber column from TestData.xlsx
+    //                 pUnameFromSheet - Username column from TestData.xlsx
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 10-03-2026 | Updated: 15-09-2026 (extracted method)
+    // ***************************************************************************************************************************************************************************************
+    private static void bootstrapRuntimeHerdAndUser(String pHerdFromSheet, String pUnameFromSheet)
+    {
+        String herdYear         = System.getProperty("herd.year",  "2026").trim();
+        String herdLimit        = System.getProperty("herd.limit", "25").trim();
+        String herdRetry        = System.getProperty("herd.retry", "3").trim();
+        String usernameOverride = System.getProperty("usernameOverride", "").trim();
+
+        if (!usernameOverride.isEmpty())
+        {
+            RUNTIME_USERNAME = usernameOverride;
+            RUNTIME_HERD     = pHerdFromSheet;
+            CommonFunctions.log.info("[BOOT] Using usernameOverride=" + RUNTIME_USERNAME + ", herd(sheet)=" + RUNTIME_HERD);
+            rerunIfBlacklisted();
+            return;
+        }
+
+        final int maxAttempts = Integer.parseInt(herdRetry);
+        final int limit       = Integer.parseInt(herdLimit);
+        boolean   found       = false;
+
+        for (int attempt = 1; attempt <= maxAttempts && !found; attempt++)
+        {
+            database.DBRouter.runDB("DATA", "List of herds with no errors at all", herdYear, String.valueOf(limit), "");
+            List<Map<String, Object>> rows = database.DBRouter.getRows();
+            if (rows == null || rows.isEmpty())
+            {
+                throw new RuntimeException("Runtime DB (DATA) returned no herds for year=" + herdYear + ", limit=" + limit);
+            }
+
+            List<String> candidates = new ArrayList<>();
+            for (Map<String, Object> r : rows)
+            {
+                String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
+                if (!h.isEmpty() && !candidates.contains(h)) candidates.add(h);
+            }
+            Collections.shuffle(candidates, new Random(System.nanoTime()));
+
+            CommonFunctions.log.info("[BOOT] Attempt " + attempt + "/" + maxAttempts + " - trying " + candidates.size()
+                    + " randomized candidate(s) from DATA (year=" + herdYear + ", limit=" + limit + ")");
+
+            int idx = 0;
+            for (String candidate : candidates)
+            {
+                idx++;
+                CommonFunctions.log.info("[BOOT] Candidate [" + idx + "/" + candidates.size() + "] : " + candidate);
+
+                database.DBRouter.runDB("INET", "Get Login Id for herd", candidate);
+                String candidateUser = database.DBRouter.getValue("USERNAME");
+
+                if (candidateUser != null && !candidateUser.isBlank())
+                {
+                    if (EXPIRED_AGENTS.contains(candidateUser.trim()))
+                    {
+                        CommonFunctions.log.warning("[BOOT] Agent " + candidateUser.trim()
+                                + " is in EXPIRED_AGENTS (SSO account expired) - skipping herd=" + candidate);
+                        continue;
+                    }
+
+                    RUNTIME_HERD     = candidate;
+                    RUNTIME_USERNAME = candidateUser.trim();
+                    CommonFunctions.log.info("[BOOT] SELECTED Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
+
+                    rerunIfBlacklisted();
+                    found = true;
+                    break;
+                }
+                else
+                {
+                    CommonFunctions.log.warning("[BOOT] INET: no USERNAME for herd=" + candidate + " - next candidate...");
+                }
+            }
+
+            if (!found)
+            {
+                CommonFunctions.log.warning("[BOOT] No mapped USERNAME found in attempt " + attempt
+                        + ". Re-running DATA query to get a fresh set of " + limit + " candidates...");
+            }
+        }
+
+        if (!found)
+        {
+            if (!pUnameFromSheet.isBlank())
+            {
+                RUNTIME_USERNAME = pUnameFromSheet;
+                RUNTIME_HERD     = (RUNTIME_HERD == null || RUNTIME_HERD.isBlank()) ? pHerdFromSheet : RUNTIME_HERD;
+                CommonFunctions.log.warning("[BOOT] Falling back to Username from sheet: " + RUNTIME_USERNAME + " | Herd=" + RUNTIME_HERD);
+                rerunIfBlacklisted();
+            }
+            else
+            {
+                throw new RuntimeException("Runtime DB (INET) returned no USERNAME after " + herdRetry
+                        + " attempt(s). Try -Dherd.limit=10 or set -DusernameOverride=... for this run.");
+            }
         }
     }
 
     // =================================================================================================
-// BEFORE ALL — runs once before any scenario in the test run
-// =================================================================================================
+    // BEFORE ALL - runs once before any scenario in the test run
+    // =================================================================================================
     @BeforeAll
     public static void beforeAllExecution()
     {
+        iTestCaseStartMs = System.currentTimeMillis();
+
         try
         {
-            killProcessByName("chrome");
-            killProcessByName("chromedriver");
             iTestCaseID  = System.getProperty("testcase",    "").trim();
             iEnvironment = System.getProperty("environment", "").trim();
 
@@ -200,6 +348,8 @@ public class Hooks
 
             iAccumulatedErrors.setLength(0);
             iLastScreenshotPath = "";
+            iAnyScenarioFailed  = false;
+            iFirstFailedScenario = "";
             iDocument           = null;
             iDocPath            = "";
 
@@ -213,16 +363,16 @@ public class Hooks
             int iConfigRow = iTestDataExcel.findRow(iConfigSheetName, "Env", iEnvironment);
             if (iConfigRow == -1) { throw new RuntimeException("Environment not found in Config sheet : " + iEnvironment); }
 
-            iUrl = iTestDataExcel.getCellValue(iConfigSheetName, iConfigRow, "URL").trim();
+            iUrl = ConfigManager.getOrDefault("app.url", "");
+            if (iUrl.isEmpty())
+            {
+                iUrl = iTestDataExcel.getCellValue(iConfigSheetName, iConfigRow, "URL").trim();
+            }
+            else
+            {
+                CommonFunctions.log.info("[BOOT] URL overridden by app.url : " + iUrl);
+            }
             if (iUrl.isEmpty()) { throw new RuntimeException("URL blank for environment : " + iEnvironment); }
-
-            // =====================================================================================
-            // Bootstrap runtime Herd + Username BEFORE any scenario runs (DATA → INET)
-            // =====================================================================================
-            String herdYear         = System.getProperty("herd.year",  "2026").trim();
-            String herdLimit        = System.getProperty("herd.limit", "25").trim();
-            String herdRetry        = System.getProperty("herd.retry", "3").trim();
-            String usernameOverride = System.getProperty("usernameOverride", "").trim();
 
             String herdFromSheet  = "";
             String unameFromSheet = "";
@@ -232,98 +382,41 @@ public class Hooks
             RUNTIME_HERD     = null;
             RUNTIME_USERNAME = null;
 
-            if (!usernameOverride.isEmpty()) {
-                RUNTIME_USERNAME = usernameOverride;
+            if (isDbBootstrapEnabled())
+            {
+                bootstrapRuntimeHerdAndUser(herdFromSheet, unameFromSheet);
+            }
+            else
+            {
                 RUNTIME_HERD     = herdFromSheet;
-                CommonFunctions.log.info("[BOOT] Using usernameOverride=" + RUNTIME_USERNAME + ", herd(sheet)=" + RUNTIME_HERD);
-                rerunIfBlacklisted();
-            } else {
-                final int maxAttempts = Integer.parseInt(herdRetry);
-                final int limit       = Integer.parseInt(herdLimit);
-
-                boolean found = false;
-
-                for (int attempt = 1; attempt <= maxAttempts && !found; attempt++) {
-                    database.DBRouter.runDB("DATA", "List of herds with no errors at all", herdYear, String.valueOf(limit), "");
-                    List<Map<String,Object>> rows = database.DBRouter.getRows();
-                    if (rows == null || rows.isEmpty()) {
-                        throw new RuntimeException("Runtime DB (DATA) returned no herds for year=" + herdYear + ", limit=" + limit);
-                    }
-
-                    List<String> candidates = new java.util.ArrayList<>();
-                    for (Map<String,Object> r : rows) {
-                        String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
-                        if (!h.isEmpty() && !candidates.contains(h)) candidates.add(h);
-                    }
-                    java.util.Collections.shuffle(candidates, new java.util.Random(System.nanoTime()));
-
-                    CommonFunctions.log.info("[BOOT] Attempt " + attempt + "/" + maxAttempts + " — trying " + candidates.size() + " randomized candidate(s) from DATA (year=" + herdYear + ", limit=" + limit + ")");
-
-                    int idx = 0;
-                    for (String candidate : candidates) {
-                        idx++;
-                        CommonFunctions.log.info("[BOOT] Candidate [" + idx + "/" + candidates.size() + "] : " + candidate);
-
-                        database.DBRouter.runDB("INET", "Get Login Id for herd", candidate);
-                        String candidateUser = database.DBRouter.getValue("USERNAME");
-
-                        if (candidateUser != null && !candidateUser.isBlank()) {
-
-                            // ── Skip if agent has a known expired SSO account ──────────────
-                            if (EXPIRED_AGENTS.contains(candidateUser.trim()))
-                            {
-                                CommonFunctions.log.warning("[BOOT] Agent " + candidateUser.trim()
-                                        + " is in EXPIRED_AGENTS (SSO account expired) — skipping herd="
-                                        + candidate);
-                                continue;
-                            }
-
-                            RUNTIME_HERD     = candidate;
-                            RUNTIME_USERNAME = candidateUser.trim();
-                            CommonFunctions.log.info("[BOOT] SELECTED Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
-
-                            rerunIfBlacklisted();
-                            found = true;
-                            break;
-                        } else {
-                            CommonFunctions.log.warning("[BOOT] INET: no USERNAME for herd=" + candidate + " — next candidate...");
-                        }
-                    }
-
-                    if (!found) {
-                        CommonFunctions.log.warning("[BOOT] No mapped USERNAME found in attempt " + attempt + ". Re-running DATA query to get a fresh set of " + limit + " candidates...");
-                    }
-                }
-
-                if (!found) {
-                    if (!unameFromSheet.isBlank()) {
-                        RUNTIME_USERNAME = unameFromSheet;
-                        RUNTIME_HERD     = (RUNTIME_HERD == null || RUNTIME_HERD.isBlank()) ? herdFromSheet : RUNTIME_HERD;
-                        CommonFunctions.log.warning("[BOOT] Falling back to Username from sheet: " + RUNTIME_USERNAME + " | Herd=" + RUNTIME_HERD);
-                        rerunIfBlacklisted();
-                    } else {
-                        throw new RuntimeException("Runtime DB (INET) returned no USERNAME after " + herdRetry + " attempt(s). Try -Dherd.limit=10 or set -DusernameOverride=... for this run.");
-                    }
-                }
+                RUNTIME_USERNAME = unameFromSheet;
+                CommonFunctions.log.info("[BOOT] " + (isEntsTestCase() ? "ENTS test case (db.bootstrap.ents=false)" : "db.bootstrap=false")
+                        + " - using sheet values | Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
             }
 
             System.setProperty("TD:HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
             System.setProperty("TD:Username",   RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
 
-            Hooks.RUNTIME_HERD     = RUNTIME_HERD;
-            Hooks.RUNTIME_USERNAME = RUNTIME_USERNAME;
-
-            try {
-                int dataRowIdx = iTestDataExcel.findRow(iTestDataSheetName, "TestCase_ID", iTestCaseID);
-                if (dataRowIdx != -1) {
-                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
-                    iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "Username", RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
-                    CommonFunctions.log.info("[BOOT→Excel] Data updated: HerdNumber=" + RUNTIME_HERD + ", Username=" + RUNTIME_USERNAME);
-                } else {
-                    CommonFunctions.log.warning("[BOOT→Excel] Row not found for TestCase_ID=" + iTestCaseID + " (skipped write-back)");
+            if (isDbBootstrapEnabled() && ConfigManager.getBool("testdata.writeback.enabled", true))
+            {
+                try
+                {
+                    int dataRowIdx = iTestDataExcel.findRow(iTestDataSheetName, "TestCase_ID", iTestCaseID);
+                    if (dataRowIdx != -1)
+                    {
+                        iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
+                        iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "Username", RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
+                        CommonFunctions.log.info("[BOOT->Excel] Data updated: HerdNumber=" + RUNTIME_HERD + ", Username=" + RUNTIME_USERNAME);
+                    }
+                    else
+                    {
+                        CommonFunctions.log.warning("[BOOT->Excel] Row not found for TestCase_ID=" + iTestCaseID + " (skipped write-back)");
+                    }
                 }
-            } catch (Exception e) {
-                CommonFunctions.log.warning("[BOOT→Excel] Persist failed: " + e.getMessage());
+                catch (Exception e)
+                {
+                    CommonFunctions.log.warning("[BOOT->Excel] Persist failed: " + e.getMessage());
+                }
             }
 
             String iBrowserType = System.getProperty("browser", iDefaultBrowser).trim().toUpperCase();
@@ -333,27 +426,19 @@ public class Hooks
             iDocument = (XWPFDocument) iReportObjects[0];
             iDocPath  = String.valueOf(iReportObjects[1]);
 
-            ReportManager.setWordDocPath(iDocPath);
-
-            CommonFunctions.log.info("BeforeAll complete | URL=" + iUrl + " | Report=" + iDocPath);
+            iSetupMs = System.currentTimeMillis() - iTestCaseStartMs;
+            CommonFunctions.log.info("BeforeAll complete | URL=" + iUrl + " | Report=" + iDocPath
+                    + " | Setup took " + (iSetupMs / 1000) + " s (DB bootstrap + browser cleanup + browser start)");
         }
         catch (Exception iException)
         {
-            throw new RuntimeException("BeforeAll failed for [" + iTestCaseID + "] : "
-                    + iException.getMessage(), iException);
+            throw new RuntimeException("BeforeAll failed for [" + iTestCaseID + "] : " + iException.getMessage(), iException);
         }
     }
 
     // ***************************************************************************************************************************************************************************************
-// @Before("@preliminary")
-// Description   : Resolves one valid herd+username per preliminary check type
-//                 (Overclaim, Dual claim, Agricultural Activity) for TC_18 / TC_19 / TC_20.
-//
-//                 FIX (22-04-2026) — RUNTIME_USERNAME sync:
-//                   @TC_18 / @TC_15 → RUNTIME_USERNAME = OVERCLAIM_USERNAME
-//                   @TC_19 / @TC_16 → RUNTIME_USERNAME = DUAL_CLAIM_USERNAME
-//                   @TC_20 / @TC_17 → RUNTIME_USERNAME = AGRI_ACTIVITY_USERNAME
-// ***************************************************************************************************************************************************************************************
+    // @Before("@preliminary") - unchanged logic
+    // ***************************************************************************************************************************************************************************************
     @Before("@preliminary")
     public void resolveRuntimePreliminaryHerds(Scenario pScenario)
     {
@@ -366,8 +451,7 @@ public class Hooks
 
         for (int iOffset = 0; iOffset < MAX_ATTEMPTS; iOffset++)
         {
-            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_ATTEMPTS
-                    + " — offset=" + iOffset);
+            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_ATTEMPTS + " - offset=" + iOffset);
 
             database.DBRouter.runDB("DATA", "Preliminary checks herds", YEAR, String.valueOf(iOffset));
 
@@ -393,14 +477,12 @@ public class Hooks
 
                 if (iUsername == null || iUsername.isBlank())
                 {
-                    CommonFunctions.log.warning("[PRELIM-HOOK] No INET agent for "
-                            + iLvc + " herd=" + iHerd + " — retrying next offset.");
+                    CommonFunctions.log.warning("[PRELIM-HOOK] No INET agent for " + iLvc + " herd=" + iHerd + " - retrying next offset.");
                     continue;
                 }
 
                 iUsername = iUsername.trim();
-                CommonFunctions.log.info("[PRELIM-HOOK] DB+INET resolved: "
-                        + iLvc + " → " + iHerd + " / " + iUsername);
+                CommonFunctions.log.info("[PRELIM-HOOK] DB+INET resolved: " + iLvc + " -> " + iHerd + " / " + iUsername);
 
                 switch (iLvc)
                 {
@@ -410,23 +492,21 @@ public class Hooks
                         iDualClaimHerd    = iHerd; iDualClaimUser    = iUsername; break;
                     case "Agricultural Activity":
                         iAgriActivityHerd = iHerd; iAgriActivityUser = iUsername; break;
+                    default:
+                        break;
                 }
             }
 
             if (iOverclaimHerd != null && iDualClaimHerd != null && iAgriActivityHerd != null)
             {
-                OVERCLAIM_HERD         = iOverclaimHerd;    OVERCLAIM_USERNAME     = iOverclaimUser;
-                DUAL_CLAIM_HERD        = iDualClaimHerd;    DUAL_CLAIM_USERNAME    = iDualClaimUser;
-                AGRI_ACTIVITY_HERD     = iAgriActivityHerd; AGRI_ACTIVITY_USERNAME = iAgriActivityUser;
+                OVERCLAIM_HERD     = iOverclaimHerd;    OVERCLAIM_USERNAME     = iOverclaimUser;
+                DUAL_CLAIM_HERD    = iDualClaimHerd;    DUAL_CLAIM_USERNAME    = iDualClaimUser;
+                AGRI_ACTIVITY_HERD = iAgriActivityHerd; AGRI_ACTIVITY_USERNAME = iAgriActivityUser;
 
                 CommonFunctions.log.info("[PRELIM-HOOK] All 3 resolved:");
-                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
-                CommonFunctions.log.info("[PRELIM-HOOK]  Overclaim         → " + OVERCLAIM_HERD + " / " + OVERCLAIM_USERNAME);
-                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
-                CommonFunctions.log.info("[PRELIM-HOOK]  Dual claim        → " + DUAL_CLAIM_HERD + " / " + DUAL_CLAIM_USERNAME);
-                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
-                CommonFunctions.log.info("[PRELIM-HOOK]  Agri Activity     → " + AGRI_ACTIVITY_HERD + " / " + AGRI_ACTIVITY_USERNAME);
-                CommonFunctions.log.info("--------------------------------------------------------------------------------------------------------------------------");
+                CommonFunctions.log.info("[PRELIM-HOOK]  Overclaim     -> " + OVERCLAIM_HERD + " / " + OVERCLAIM_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK]  Dual claim    -> " + DUAL_CLAIM_HERD + " / " + DUAL_CLAIM_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK]  Agri Activity -> " + AGRI_ACTIVITY_HERD + " / " + AGRI_ACTIVITY_USERNAME);
 
                 if (pScenario.getSourceTagNames().contains("@TC_18") || pScenario.getSourceTagNames().contains("@TC_15"))
                 {
@@ -441,16 +521,16 @@ public class Hooks
                     RUNTIME_USERNAME = AGRI_ACTIVITY_USERNAME;
                 }
 
-                CommonFunctions.log.info("[PRELIM-HOOK] RUNTIME_USERNAME synced → " + RUNTIME_USERNAME + " | Background login will use this agent.");
+                CommonFunctions.log.info("[PRELIM-HOOK] RUNTIME_USERNAME synced -> " + RUNTIME_USERNAME + " | Background login will use this agent.");
 
                 iAllResolved = true;
                 break;
             }
 
             CommonFunctions.log.warning("[PRELIM-HOOK] Not all 3 resolved at offset=" + iOffset
-                    + " — Overclaim=" + (iOverclaimHerd != null ? "✓" : "✗")
-                    + " DualClaim="   + (iDualClaimHerd != null ? "✓" : "✗")
-                    + " AgriAct="     + (iAgriActivityHerd != null ? "✓" : "✗"));
+                    + " - Overclaim=" + (iOverclaimHerd != null ? "Y" : "N")
+                    + " DualClaim="   + (iDualClaimHerd != null ? "Y" : "N")
+                    + " AgriAct="     + (iAgriActivityHerd != null ? "Y" : "N"));
         }
 
         if (!iAllResolved)
@@ -460,64 +540,12 @@ public class Hooks
     }
 
     // ***************************************************************************************************************************************************************************************
-// Method        : fetchPrelimUsername
-// Description   : Queries BISS_INET for the agent login ID for a given herd number.
-// Parameters    : pHerd      — herd number string e.g. "A1060204"
-//                 pCheckType — label used only for log messages e.g. "OVERCLAIM"
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 17-04-2026
-// ***************************************************************************************************************************************************************************************
-    private String fetchPrelimUsername(String pHerd, String pCheckType)
-    {
-        if (pHerd == null || pHerd.isBlank())
-        {
-            CommonFunctions.log.warning("[HOOKS] fetchPrelimUsername — herd is null/blank for " + pCheckType + " — skipping INET query.");
-            return null;
-        }
-
-        database.DBRouter.runDB("INET", "Get Login Id for herd", pHerd);
-        String iUsername = database.DBRouter.getValue("USERNAME");
-
-        if (iUsername == null || iUsername.isBlank())
-        {
-            CommonFunctions.log.warning("[HOOKS] fetchPrelimUsername — no login ID found in BISS_INET for herd: " + pHerd + " (" + pCheckType + ")");
-            return null;
-        }
-
-        return iUsername.trim();
-    }
-    //***************************************************************************************************************************************************************************************
-    // @Before("@tc13")
-    // Description   : Resolves a random CISYF-eligible J-prefix herd and its agent login
-    //                 from BISS_DATA and BISS_INET before the TC_13 NRCISYF scenario runs.
-    //
-    //                 Strategy:
-    //                   1. Query BISS_DATA using "List of individual herds with CISYF scheme"
-    //                      (J-prefix, submitted, CISYF scheme applied, no payment yet).
-    //                   2. Shuffle the result pool randomly — a different herd is picked each run.
-    //                   3. For each candidate, query BISS_INET for the agent login.
-    //                   4. Skip candidates with no INET agent or in EXPIRED_AGENTS.
-    //                   5. On success: overwrite RUNTIME_HERD and RUNTIME_USERNAME so the
-    //                      Background login step and herd search step use the correct CISYF herd.
-    //                   6. If all candidates exhausted: retry with a larger limit (up to 5 attempts).
-    //
-    //                 Why random:
-    //                   Shuffling gives a different herd on each run, avoiding repeated use of
-    //                   the same herd and making the test suite more robust across environments.
-    //
-    //                 After this hook:
-    //                   Hooks.RUNTIME_HERD     = resolved CISYF J-prefix herd
-    //                   Hooks.RUNTIME_USERNAME = agent who owns that herd in BISS_INET
-    //                   Hooks.CISYF_HERD       = same as RUNTIME_HERD (kept for clarity in logs)
-    //                   Hooks.CISYF_USERNAME   = same as RUNTIME_USERNAME
-    //
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 15-05-2026
+    // @Before("@tc13") - unchanged logic
     // ***************************************************************************************************************************************************************************************
     @Before("@tc13")
     public void resolveRuntimeCISYFHerd(Scenario pScenario)
     {
-        final String YEAR      = System.getProperty("herd.year",  "2026").trim();
+        final String YEAR      = System.getProperty("herd.year", "2026").trim();
         final int    MAX_TRIES = 50;
 
         CommonFunctions.log.info("[TC13-HOOK] Resolving random CISYF J-prefix herd for: " + pScenario.getName());
@@ -526,10 +554,9 @@ public class Hooks
 
         for (int iAttempt = 1; iAttempt <= MAX_TRIES && !iFound; iAttempt++)
         {
-            // Increase limit on each retry to surface more candidates
             int iLimit = 50 + ((iAttempt - 1) * 25);
 
-            CommonFunctions.log.info("[TC13-HOOK] Attempt " + iAttempt + "/" + MAX_TRIES + " — querying BISS_DATA (year=" + YEAR + ", limit=" + iLimit + ")");
+            CommonFunctions.log.info("[TC13-HOOK] Attempt " + iAttempt + "/" + MAX_TRIES + " - querying BISS_DATA (year=" + YEAR + ", limit=" + iLimit + ")");
 
             database.DBRouter.runDB("DATA", "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF", YEAR, String.valueOf(iLimit));
 
@@ -537,91 +564,107 @@ public class Hooks
 
             if (iRows == null || iRows.isEmpty())
             {
-                CommonFunctions.log.warning("[TC13-HOOK] BISS_DATA returned no CISYF herds " + "at limit=" + iLimit + ". Retrying...");
+                CommonFunctions.log.warning("[TC13-HOOK] BISS_DATA returned no CISYF herds at limit=" + iLimit + ". Retrying...");
                 continue;
             }
 
-            CommonFunctions.log.info("[TC13-HOOK] Candidate pool: " + iRows.size() + " herd(s).");
-
-            // ── Shuffle for random selection — different herd each run ────────────────
-            List<String> iCandidates = new java.util.ArrayList<>();
+            List<String> iCandidates = new ArrayList<>();
             for (Map<String, Object> iRow : iRows)
             {
                 String iHerd = Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
                 if (!iHerd.isEmpty()) iCandidates.add(iHerd);
             }
-            java.util.Collections.shuffle(iCandidates, new java.util.Random(System.nanoTime()));
-
-            CommonFunctions.log.info("[TC13-HOOK] Pool shuffled. Evaluating candidates...");
+            Collections.shuffle(iCandidates, new Random(System.nanoTime()));
 
             int iIdx = 0;
             for (String iCandidate : iCandidates)
             {
                 iIdx++;
 
-                // Skip blacklisted herds
                 if (BLACKLISTED_HERDS.contains(iCandidate))
                 {
-                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " is blacklisted — skipping.");
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " is blacklisted - skipping.");
                     continue;
                 }
 
-                // Query BISS_INET for agent login
                 database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
                 String iUsername = database.DBRouter.getValue("USERNAME");
 
                 if (iUsername == null || iUsername.isBlank())
                 {
-                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " — no INET agent found. Skipping.");
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " - no INET agent found. Skipping.");
                     continue;
                 }
 
                 iUsername = iUsername.trim();
 
-                // Skip agents with expired SSO accounts
                 if (EXPIRED_AGENTS.contains(iUsername))
                 {
-                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " — agent " + iUsername + " is in EXPIRED_AGENTS. Skipping.");
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " - agent " + iUsername + " is in EXPIRED_AGENTS. Skipping.");
                     continue;
                 }
 
-                // ── Valid candidate found ─────────────────────────────────────────────
-                CISYF_HERD     = iCandidate;
-                CISYF_USERNAME = iUsername;
-
-                // Overwrite RUNTIME_HERD and RUNTIME_USERNAME so Background login
-                // and herd search steps use the correct CISYF herd automatically
+                CISYF_HERD       = iCandidate;
+                CISYF_USERNAME   = iUsername;
                 RUNTIME_HERD     = iCandidate;
                 RUNTIME_USERNAME = iUsername;
-
                 iFound = true;
 
-                CommonFunctions.log.info("[TC13-HOOK] ✓ CISYF herd resolved:");
-                CommonFunctions.log.info("[TC13-HOOK]   Herd     = " + CISYF_HERD);
-                CommonFunctions.log.info("[TC13-HOOK]   Username = " + CISYF_USERNAME);
+                CommonFunctions.log.info("[TC13-HOOK] CISYF herd resolved: Herd=" + CISYF_HERD + " | Username=" + CISYF_USERNAME);
                 break;
             }
 
             if (!iFound)
             {
-                CommonFunctions.log.warning("[TC13-HOOK] No valid candidate in attempt " + iAttempt + " — retrying with larger limit.");
+                CommonFunctions.log.warning("[TC13-HOOK] No valid candidate in attempt " + iAttempt + " - retrying with larger limit.");
             }
         }
 
         if (!iFound)
         {
-            throw new RuntimeException(
-                    "[TC13-HOOK] Could not resolve a CISYF J-prefix herd after " + MAX_TRIES + " attempts for year=" + YEAR + ". " + "Verify the query 'List of individual herds with CISYF scheme' " + "returns rows in BISS_DATA for this environment.");
+            throw new RuntimeException("[TC13-HOOK] Could not resolve a CISYF J-prefix herd after " + MAX_TRIES + " attempts for year=" + YEAR
+                    + ". Verify the query returns rows in BISS_DATA for this environment.");
         }
     }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : skipRestOfTestCaseAfterFailure
+    // Description   : Fail-fast. Runs first, before every other @Before hook (order 0).
+    //                 When an earlier scenario of this test case has failed, this scenario is SKIPPED: no DB lookup,
+    //                 no steps. Cucumber then finishes the feature, AfterAll closes the browser and writes the report,
+    //                 and TestRunner marks the row FAIL and starts the next test case in ExecutionControl.xlsx.
+    //                 Inside one scenario nothing extra is needed: Cucumber already skips every step after a failed step.
+    //                 execution.fail.fast=false switches this off (all scenarios run, as before).
+    // Parameters    : pScenario (Scenario) - the scenario about to start
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 17-09-2026
+    // ***************************************************************************************************************************************************************************************
+    @Before(order = 0)
+    public void skipRestOfTestCaseAfterFailure(Scenario pScenario)
+    {
+        iSkippedByFailFast = false;
+
+        if (iAnyScenarioFailed && ConfigManager.getBool("execution.fail.fast", true))
+        {
+            iSkippedByFailFast = true;
+            CommonFunctions.log.warning("---------- Scenario SKIPPED (fail-fast) : " + pScenario.getName()
+                    + " | earlier failure in [" + iFirstFailedScenario + "] ----------");
+
+            // Cucumber reports a TestAbortedException as SKIPPED (not as another failure)
+            throw new org.opentest4j.TestAbortedException("Skipped: scenario [" + iFirstFailedScenario
+                    + "] of " + iTestCaseID + " already failed (execution.fail.fast=true)");
+        }
+    }
+
     // =================================================================================================
-// BEFORE — runs before every scenario
-// =================================================================================================
+    // BEFORE - runs before every scenario
+    // =================================================================================================
     @Before
     public void beforeScenarioExecution(Scenario pScenario)
     {
         SoftAssertManager.reset();
         RetryAnalyser.clearRetryState();
+        utilities.EntsTestData.resetScenario();
         iScenarioStartTime = System.currentTimeMillis();
         CommonFunctions.log.info("---------- Scenario START : " + pScenario.getName() + " ----------");
 
@@ -630,58 +673,88 @@ public class Hooks
     }
 
     // =================================================================================================
-// AFTER — runs after every scenario
-// =================================================================================================
+    // AFTER - runs after every scenario
+    // =================================================================================================
     @After
     public void afterScenarioExecution(Scenario pScenario)
     {
-        SoftAssertManager.assertAll();
+        if (iSkippedByFailFast)
+        {
+            // Nothing ran in this scenario - no soft assertions, screenshot or divider to write
+            iAccumulatedErrors.append("Scenario [").append(pScenario.getName()).append("] SKIPPED (fail-fast)\n");
+            return;
+        }
 
-        long iScenarioDuration = System.currentTimeMillis() - iScenarioStartTime;
-        utilities.ScreenshotManager.appendScenarioDivider(iDocument, pScenario.getName(), !pScenario.isFailed(), iScenarioDuration);
-
+        boolean iSoftAssertFailed = false;
         try
         {
-            if (pScenario.isFailed())
-            {
-                CommonFunctions.log.severe("---------- Scenario FAILED : " + pScenario.getName()
-                        + " ----------");
-
-                iAccumulatedErrors.append("Scenario [").append(pScenario.getName())
-                        .append("] FAILED. Status=").append(pScenario.getStatus().name()).append("\n");
-
-                try
-                {
-                    if (iDocument != null && !iDocPath.isEmpty())
-                    {
-                        iLastScreenshotPath = CommonFunctions.addScreenshotToReport(iDocument, iDocPath, iTestCaseID);
-                    }
-                    else
-                    {
-                        String iSafeName = iTestCaseID + "_" + pScenario.getName().replaceAll("[^a-zA-Z0-9]", "_");
-                        iLastScreenshotPath = CommonFunctions.takeScreenshot(iSafeName);
-                    }
-                }
-                catch (Exception iShotException)
-                {
-                    CommonFunctions.log.severe("Screenshot failed : " + iShotException.getMessage());
-                }
-            }
-            else
-            {
-                CommonFunctions.log.info("---------- Scenario PASSED : " + pScenario.getName()
-                        + " ----------");
-            }
+            SoftAssertManager.assertAll();
         }
-        catch (Exception iException)
+        catch (AssertionError iSoftFailure)
         {
-            CommonFunctions.log.severe("After hook error : " + iException.getMessage());
+            // Soft assertion failures fail the scenario, but Cucumber only records that after this hook ends
+            iSoftAssertFailed = true;
+            throw iSoftFailure;
+        }
+        finally
+        {
+            boolean iScenarioFailed   = pScenario.isFailed() || iSoftAssertFailed;
+            long    iScenarioDuration = System.currentTimeMillis() - iScenarioStartTime;
+            iScenarioMs += iScenarioDuration;
+            ScreenshotManager.appendScenarioDivider(iDocument, pScenario.getName(), !iScenarioFailed, iScenarioDuration);
+
+            try
+            {
+                if (iScenarioFailed)
+                {
+                    if (!iAnyScenarioFailed)
+                    {
+                        iFirstFailedScenario = pScenario.getName();
+                    }
+                    iAnyScenarioFailed = true;
+                    CommonFunctions.log.severe("---------- Scenario FAILED : " + pScenario.getName() + " ----------");
+
+                    iAccumulatedErrors.append("Scenario [").append(pScenario.getName())
+                            .append("] FAILED. Status=").append(iSoftAssertFailed ? "SOFT_ASSERTION" : pScenario.getStatus().name()).append("\n");
+
+                    byte[] iPng = ScreenshotManager.captureBytes(CommonFunctions.getPage());
+                    if (iPng != null)
+                    {
+                        pScenario.attach(iPng, "image/png", "Failure - " + pScenario.getName());
+                    }
+
+                    try
+                    {
+                        if (iDocument != null && iDocPath != null && !iDocPath.isEmpty())
+                        {
+                            iLastScreenshotPath = CommonFunctions.addScreenshotToReport(iDocument, iDocPath, iTestCaseID);
+                        }
+                        else
+                        {
+                            String iSafeName = iTestCaseID + "_" + pScenario.getName().replaceAll("[^a-zA-Z0-9]", "_");
+                            iLastScreenshotPath = CommonFunctions.takeScreenshot(iSafeName);
+                        }
+                    }
+                    catch (Exception iShotException)
+                    {
+                        CommonFunctions.log.severe("Screenshot failed : " + iShotException.getMessage());
+                    }
+                }
+                else
+                {
+                    CommonFunctions.log.info("---------- Scenario PASSED : " + pScenario.getName() + " ----------");
+                }
+            }
+            catch (Exception iException)
+            {
+                CommonFunctions.log.severe("After hook error : " + iException.getMessage());
+            }
         }
     }
 
     // =================================================================================================
-// AFTER ALL — runs once after all scenarios complete
-// =================================================================================================
+    // AFTER ALL - runs once after all scenarios complete
+    // =================================================================================================
     @AfterAll
     public static void afterAllExecution()
     {
@@ -689,8 +762,7 @@ public class Hooks
         {
             if (iAccumulatedErrors.length() > 0)
             {
-                System.setProperty("lastFailureReason." + iTestCaseID,
-                        iAccumulatedErrors.toString().trim());
+                System.setProperty("lastFailureReason." + iTestCaseID, iAccumulatedErrors.toString().trim());
             }
             if (!iLastScreenshotPath.isEmpty())
             {
@@ -699,15 +771,15 @@ public class Hooks
         }
         catch (Exception iException)
         {
-            CommonFunctions.log.severe("Failed to publish failure properties : "
-                    + iException.getMessage());
+            CommonFunctions.log.severe("Failed to publish failure properties : " + iException.getMessage());
         }
 
         try
         {
-            if (iDocument != null && !iDocPath.isEmpty())
+            if (iDocument != null && iDocPath != null && !iDocPath.isEmpty())
             {
-                CommonFunctions.finalizeWordReport(iDocument, iDocPath);
+                // Status = Cucumber result, the same PASS/FAIL the console and ExecutionControl.xlsx show
+                CommonFunctions.finalizeWordReport(iDocument, iDocPath, iAnyScenarioFailed ? "FAIL" : "PASS");
             }
         }
         catch (Exception iException)
@@ -717,50 +789,43 @@ public class Hooks
 
         try
         {
-            CommonFunctions.closeBrowser();
+            String iTrace = CommonFunctions.closeBrowser(iAnyScenarioFailed, iTestCaseID);
+            if (!iTrace.isEmpty())
+            {
+                System.setProperty("lastTracePath." + iTestCaseID, iTrace);
+            }
         }
         catch (Exception iException)
         {
             CommonFunctions.log.severe("Browser close failed : " + iException.getMessage());
         }
 
+        long iTotalMs    = System.currentTimeMillis() - iTestCaseStartMs;
+        long iTeardownMs = Math.max(0L, iTotalMs - iSetupMs - iScenarioMs);
+
+        // Where the time went. Setup = DB herd lookup + browser cleanup + Chrome start + Word report.
+        // Scenarios = the steps themselves. Teardown = report finalize + trace + closing Chrome.
+        CommonFunctions.log.info("[TIMING] " + iTestCaseID
+                + " | total=" + (iTotalMs / 1000) + "s"
+                + " | setup=" + (iSetupMs / 1000) + "s"
+                + " | scenarios=" + (iScenarioMs / 1000) + "s"
+                + " | teardown=" + (iTeardownMs / 1000) + "s");
+
+        iSetupMs    = 0L;
+        iScenarioMs = 0L;
+
         CommonFunctions.log.info("========== EXECUTION END : " + iTestCaseID + " ==========");
     }
 
-    // =================================================================================================
-// UTILITY
-// =================================================================================================
-    public static void killProcessByName(String processName)
-    {
-        String os = System.getProperty("os.name").toLowerCase();
-        String command;
-        try {
-            if (os.contains("win")) {
-                String processWithExe = processName.endsWith(".exe")
-                        ? processName : processName + ".exe";
-                command = "taskkill /F /IM " + processWithExe + " /T";
-            } else {
-                command = "pkill -f " + processName;
-            }
-            Runtime.getRuntime().exec(command);
-            CommonFunctions.log.info("Cleaned up process: " + processName);
-        } catch (Exception e) {
-            CommonFunctions.log.warning("Could not kill process " + processName
-                    + ": " + e.getMessage());
-        }
-    }
-
     // ***************************************************************************************************************************************************************************************
-// Function Name : captureStep
-// Description   : On-demand screenshot method for step definitions.
-// Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 26-03-2026
-// ***************************************************************************************************************************************************************************************
+    // Function Name : captureStep
+    // Description   : On-demand screenshot method for step definitions (unchanged call surface).
+    // Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
     public static void captureStep(String pStepLabel)
     {
         CommonFunctions.captureStepScreenshot(iDocument, iDocPath, pStepLabel);
     }
-
-
 }
