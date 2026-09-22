@@ -1,66 +1,48 @@
 // ===================================================================================================================================
 // File          : TC_04_ENTS.java
 // Package       : stepdefinitions.ENTS
-// Description   : Step definitions for TC_04_ENTS — Transfer Application E2E (Agent 4 / Cross-Agent).
+// Description   : Step definitions for TC_04_ENTS - Transfer Application E2E (Agent 4 / cross-agent).
 //
-//                 ╔═══════════════════════════════════════════════════════════════════════════╗
-//                 ║  THIS FILE CONTAINS ZERO NEW STEP DEFINITIONS.                           ║
-//                 ║                                                                           ║
-//                 ║  Every step in TC_04_ENTS.feature is already defined in existing classes. ║
-//                 ║  This file exists solely as a documentation anchor for traceability.      ║
-//                 ╚═══════════════════════════════════════════════════════════════════════════╝
+//                 THIS FILE CONTAINS NO STEP DEFINITIONS.
+//                 Every step of TC_04_ENTS.feature is already defined elsewhere; the file is kept as the traceability
+//                 anchor for the test case, and as the place for any TC_04-only step added later.
 //
-//                 Full reuse map:
-//                 ┌──────────────────────────────────────────────────────────────────┬────────────────────┐
-//                 │ Step                                                             │ Defined In         │
-//                 ├──────────────────────────────────────────────────────────────────┼────────────────────┤
-//                 │ the agent user is on the login page                              │ TC_03.java         │
-//                 │ the agent logs into the application...                           │ TC_03.java         │
-//                 │ the agent opens the {string} application                         │ TC_03.java         │
-//                 │ the agent should land on the BISS Home page                      │ TC_03.java         │
-//                 │ the agent navigates to ... Left Menu Link                        │ TC_03.java         │
-//                 │ the agent switches to the {string} tab...                        │ TC_06.java         │
-//                 │ the agent creates a transfer application with the following...   │ TC_01_ENTS.java    │
-//                 │ the agent uploads the transferor signature document              │ TC_01_ENTS.java    │
-//                 │ the agent sends the transfer for acceptance                      │ TC_01_ENTS.java    │
-//                 │ the transfer key should be captured                              │ TC_01_ENTS.java    │
-//                 │ the transfer should be submitted successfully                    │ TC_01_ENTS.java    │
-//                 │ the agent logs out and re-logs in as the transferee agent        │ TC_03_ENTS.java    │
-//                 │ the agent logs out and re-logs in as the transferor agent        │ TC_03_ENTS.java    │
-//                 │ the agent completes the cross-agent transferee acceptance flow   │ TC_03_ENTS.java    │
-//                 └──────────────────────────────────────────────────────────────────┴────────────────────┘
+//                 Reuse map (Playwright, 22-09-2026):
+//                   the agent user is on the login page                            -> stepdefinitions.TC_03
+//                   the agent logs into the application ...                        -> stepdefinitions.TC_03
+//                   the agent opens the {string} application                       -> stepdefinitions.TC_03
+//                   the agent should land on the BISS Home page                    -> stepdefinitions.TC_03
+//                   the agent navigates to ... Left Menu Link                      -> stepdefinitions.TC_03
+//                   the agent switches to the {string} tab ...                     -> stepdefinitions.TC_06
+//                   the agent creates a transfer application with the following... -> stepdefinitions.ENTS.TC_01_ENTS
+//                   the agent uploads the transferor signature document            -> stepdefinitions.ENTS.TC_01_ENTS
+//                   the agent sends the transfer for acceptance                    -> stepdefinitions.ENTS.TC_01_ENTS
+//                   the transfer key should be captured                            -> stepdefinitions.ENTS.TC_01_ENTS
+//                   the transfer should be submitted successfully                  -> stepdefinitions.ENTS.TC_01_ENTS
+//                   the agent logs out and re-logs in as the transferee agent      -> stepdefinitions.ENTS.TC_03_ENTS
+//                   the agent logs out and re-logs in as the transferor agent      -> stepdefinitions.ENTS.TC_03_ENTS
+//                   the agent completes the cross-agent transferee acceptance flow -> stepdefinitions.ENTS.TC_03_ENTS
 //
-//                 Transfer types covered (all using existing parameterised steps):
-//                   211 — Lease (+ leaseYear flag)    |  201 — Inheritance
-//                   205 — Change of Registration      |  206 — Change of Legal Entity
-//                   202 — Gift
+//                 Transfer types covered, all through the same parameterised steps:
+//                   211 Lease (with the leaseYear flag) | 201 Inheritance | 205 Change of Registration
+//                   206 Change of Legal Entity          | 202 Gift
+//                 The type is a DataTable value, and TC_01_ENTS selects it with a dynamic XPath, so no code change is
+//                 needed for a new type.
 //
-//                 The transfer type code is passed as data in the DataTable — no code change
-//                 needed regardless of which type is used. TC_01_ENTS.theAgentCreatesATransferApplication()
-//                 handles all codes via a dynamic XPath radio button click.
+//                 Runtime data: this test case is cross-agent, so each create DataTable needs a transfereeAgent row
+//                 (the login used by the "re-logs in as the transferee agent" step). The transferor herd then comes
+//                 from the logged-in agent's pool and the transferee herd from that agent's pool.
 //
-//                 If a future TC_04_ENTS scenario needs a step that doesn't exist yet,
-//                 add it to this class rather than modifying TC_01_ENTS or TC_03_ENTS.
+//                 If TC_04_ENTS ever needs a step of its own, add it here rather than to TC_01_ENTS or TC_03_ENTS.
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026
+// Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
 // ===================================================================================================================================
 
 package stepdefinitions.ENTS;
 
-// No imports needed — no step definitions in this class.
-// Kept as a placeholder for future TC_04_ENTS-specific steps if needed.
-
 public class TC_04_ENTS
 {
-    // -------------------------------------------------------------------------------------------------------------------------------
-    // All steps for TC_04_ENTS.feature are defined in:
-    //   - stepdefinitions.TC_03           (login, portal nav, BISS home)
-    //   - stepdefinitions.TC_06           (tab switching)
-    //   - stepdefinitions.TC_01_ENTS      (transferor flow, upload, send, capture key, submit)
-    //   - stepdefinitions.ENTS.TC_03_ENTS (cross-agent logout/re-login, transferee acceptance)
-    //
-    // Cucumber's glue path scans all packages and binds steps automatically.
-    // No additional step definitions are required for TC_04_ENTS.
-    // -------------------------------------------------------------------------------------------------------------------------------
+    // Cucumber scans the whole glue path, so the steps of TC_04_ENTS.feature bind from the classes listed above.
+    // No step definitions are needed here.
 }
