@@ -25,7 +25,10 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
   #   TC_05 → Section 5    TC_07 → Section 6    TC_08 → Section 7
   #
   # Notes:
-  #   1. Herd numbers are hardcoded test fixtures — update in TestData.xlsx if they expire.
+  #   1. Runtime test data (Playwright edition, 22-09-2026): {transferor.herd}, {transferee.herd} and
+  #      {transferee.name} are replaced at run time by two random, unused herds of the logged-in agent
+  #      (ENTS Agent Login query on CENTEST_ENTS_DATA). Used herds are listed in runtime-data/ents_used_herds.csv
+  #      and are not picked again. To pin a herd while debugging, type the herd number instead of the token.
   #   2. Each transfer uses 0.01 entitlement units as a minimal regression test value.
   #   3. The transferee acceptance uses the transfer key captured during the transferor flow.
   #   4. Steps are designed for reuse across TC_02_ENTS (different agent transfers) if needed.
@@ -52,9 +55,9 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
 
     # --- Transferor ---
     When the agent creates a transfer application with the following details
-      | transferorHerd | C1010091         |
-      | transfereeHerd | C1010148         |
-      | transfereeName | Thomas Costelloe |
+      | transferorHerd | {transferor.herd}         |
+      | transfereeHerd | {transferee.herd}         |
+      | transfereeName | {transferee.name} |
       | transferType   | Change of Legal Entity|
       | entitlements   | 0.01             |
       | notes          | Test Notes       |
@@ -66,7 +69,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | C1010148  |
+      | transfereeHerd | {transferee.herd}  |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -82,9 +85,9 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1010148     |
-      | transfereeHerd | C102010X     |
-      | transfereeName | John Sweeney |
+      | transferorHerd | {transferor.herd}     |
+      | transfereeHerd | {transferee.herd}     |
+      | transfereeName | {transferee.name} |
       | transferType   | Change of Registration Details|
       | entitlements   | 0.01         |
       | notes          | Test Notes   |
@@ -96,7 +99,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | C102010X  |
+      | transfereeHerd | {transferee.herd}  |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -112,9 +115,9 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C2060068         |
-      | transfereeHerd | V1421165         |
-      | transfereeName | Martin Barrett |
+      | transferorHerd | {transferor.herd}         |
+      | transfereeHerd | {transferee.herd}         |
+      | transfereeName | {transferee.name} |
       | transferType   | Inheritance of Entitlements |
       | entitlements   | 0.01             |
       | notes          | Test Notes       |
@@ -126,7 +129,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | V1421165  |
+      | transfereeHerd | {transferee.herd}  |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -142,9 +145,9 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1820026            |
-      | transfereeHerd | C1670423            |
-      | transfereeName | Patrick Gilmore |
+      | transferorHerd | {transferor.herd}            |
+      | transfereeHerd | {transferee.herd}            |
+      | transfereeName | {transferee.name} |
       | transferType   | Gift of Entitlements|
       | entitlements   | 0.01                |
       | notes          | Test Notes          |
@@ -156,7 +159,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | C1670423  |
+      | transfereeHerd | {transferee.herd}  |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -173,9 +176,9 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1880193    |
-      | transfereeHerd | G1831576    |
-      | transfereeName | Quish Mart Ltd |
+      | transferorHerd | {transferor.herd}    |
+      | transfereeHerd | {transferee.herd}    |
+      | transfereeName | {transferee.name} |
       | transferType   | Lease of Entitlements|
       | entitlements   | 0.01        |
       | leaseYear      | Yes         |
@@ -188,7 +191,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | G1831576  |
+      | transfereeHerd | {transferee.herd}  |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -204,9 +207,9 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1250483         |
-      | transfereeHerd | C1050212         |
-      | transfereeName | Padraig Costello |
+      | transferorHerd | {transferor.herd}         |
+      | transfereeHerd | {transferee.herd}         |
+      | transfereeName | {transferee.name} |
       | transferType   | Division of Entitlements (Scission)|
       | entitlements   | 0.01             |
       | notes          | Test Notes       |
@@ -218,7 +221,7 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | C1050212 |
+      | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -234,9 +237,9 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | C1380352        |
-      | transfereeHerd | T1210622        |
-      | transfereeName | Seamus Ryder |
+      | transferorHerd | {transferor.herd}        |
+      | transfereeHerd | {transferee.herd}        |
+      | transfereeName | {transferee.name} |
       | transferType   | Sale of Entitlements|
       | entitlements   | 0.01            |
       | notes          | Test Notes      |
@@ -248,6 +251,6 @@ Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agen
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | T1210622 |
+      | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
