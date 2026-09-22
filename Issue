@@ -1,406 +1,577 @@
-// ===================================================================================================================================
-// File          : EntsSession.java
-// Package       : stepdefinitions.ENTS
-// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
+package utilities;
+
+import commonFunctions.CommonFunctions;
+import database.DBRouter;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Random;
+import java.util.Set;
+
+// =====================================================================================================================================
+// File          : EntsTestData.java
+// Package       : utilities
+// Description   : Runtime test data for the ENTS (Transfer of Entitlements) test cases.
 //
-//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
-//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
-//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
-//                 themselves keep the same Gherkin text as before.
+//                 Replaces the herd numbers and names that were typed into the ENTS feature files. The feature file now
+//                 carries a token such as {transferor.herd}; the step that creates the transfer asks this class for a
+//                 fresh pair of herds, and every later step in the same section reads the same pair.
 //
-//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
+//                 How a pair is picked (same-agent transfers):
+//                   1. The Agent Login query runs ONCE per agent per run on the ENTS_DATA connection (DBRouter "ENTS").
+//                      Up to ents.pool.size rows come back in random order and are kept in memory for the whole run.
+//                   2. The rows are shuffled again, and every herd already listed in the used-herds file is skipped.
+//                   3. The first unused herd becomes the transferor, the next unused herd becomes the transferee.
+//                   4. Both herds are written to the used-herds file straight away, so a failed run does not hand the
+//                      same (possibly half-transferred) herds to the next run.
+//
+//                 Tokens understood by resolve():
+//                   {transferor.herd}  {transferor.name}  {transferor.address}
+//                   {transferee.herd}  {transferee.name}  {transferee.address}
+//                   {agent}  {transferee.agent}
+//                 Any other value is returned unchanged, so a feature file can still pin a herd for debugging.
+//
+//                 Settings (application.properties):
+//                   ents.pool.size          - rows fetched per query (default 200)
+//                   ents.skip.used.herds    - true = never reuse a herd listed in the used-herds file (default true)
+//                   ents.used.herds.file    - the used-herds file (default runtime-data/ents_used_herds.csv)
+//                   ents.scheme.year        - only herds with entitlements in this year (blank = all years)
+//                   ents.cust.type          - only herds of this customer type, e.g. Individual (blank = all types)
+//                   ents.name.two.words     - true = only herds whose DB name is exactly two words (default true)
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 22-09-2026
-// ===================================================================================================================================
+// =====================================================================================================================================
 
-package stepdefinitions.ENTS;
-
-import com.microsoft.playwright.Locator;
-import commonFunctions.CommonFunctions;
-import commonFunctions.UiHelpers;
-import stepdefinitions.Hooks;
-import utilities.ConfigManager;
-import utilities.EntsTestData;
-import utilities.ObjReader;
-
-import java.util.List;
-import java.util.logging.Logger;
-
-import static commonFunctions.CommonFunctions.iAction;
-
-final class EntsSession
+public final class EntsTestData
 {
-    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
+    private EntsTestData() { }
 
-    // How long an "if present" check waits before deciding the element is not there
-    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
+    // =================================================================================================
+    // DATA HOLDERS
+    // =================================================================================================
 
-    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
-    static final String TRANSFERS_TAB_XPATH =
-            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
-
-    private EntsSession() { }
-
-
-    // ===================================================================================================================================
-    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
-    // ===================================================================================================================================
-
-    // Locator for a raw XPath
-    static Locator xp(String pXpath)
+    // One herd returned by an ENTS query
+    public static final class Herd
     {
-        return UiHelpers.byXpath(pXpath);
+        public final String herdNumber;
+        public final String name;
+        public final String address;
+
+        Herd(String pHerdNumber, String pName, String pAddress)
+        {
+            herdNumber = pHerdNumber;
+            name       = pName;
+            address    = pAddress;
+        }
+
+        @Override
+        public String toString() { return herdNumber + " (" + name + ")"; }
     }
 
-    // True when the first match becomes visible within pSeconds - never throws
-    static boolean isVisible(String pXpath, int pSeconds)
+    // The herds used by one transfer section
+    public static final class TransferPair
     {
-        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
+        public final String agent;           // agent of the transferor (the logged-in agent when the transfer is created)
+        public final String transfereeAgent; // agent of the transferee - the same agent unless this is a cross-agent transfer
+        public final Herd   transferor;
+        public final Herd   transferee;
+
+        TransferPair(String pAgent, Herd pTransferor, Herd pTransferee)
+        {
+            this(pAgent, pAgent, pTransferor, pTransferee);
+        }
+
+        TransferPair(String pAgent, String pTransfereeAgent, Herd pTransferor, Herd pTransferee)
+        {
+            agent           = pAgent;
+            transfereeAgent = pTransfereeAgent;
+            transferor      = pTransferor;
+            transferee      = pTransferee;
+        }
+
+        public boolean isCrossAgent()
+        {
+            return !agent.equalsIgnoreCase(transfereeAgent);
+        }
     }
 
-    // Immediate count, no waiting - same as findElements(...).size()
-    static int countOf(String pXpath)
-    {
-        return xp(pXpath).count();
-    }
+    // =================================================================================================
+    // STATE
+    // =================================================================================================
 
-    // Replacement for Thread.sleep
-    static void pause(long pMilliseconds)
-    {
-        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
-    }
+    private static final String LOG_PREFIX = "[ENTS-DATA] ";
+    private static final String CSV_HEADER = "timestamp,testcase,role,herd,login,purpose";
 
+    // Agent login -> rows of the Agent Login query (fetched once per run, the query takes several seconds)
+    private static final Map<String, List<Herd>> AGENT_POOLS = new HashMap<>();
 
-    // ===================================================================================================================================
-    //  LOGIN
-    // ===================================================================================================================================
+    // Herds handed out in this run (covers ents.skip.used.herds=false, where the file is not consulted)
+    private static final Set<String> USED_THIS_RUN = new HashSet<>();
+
+    private static TransferPair iCurrentPair   = null;
+    private static String       iLoggedInUser  = "";
+
+    // =================================================================================================
+    // SCENARIO LIFECYCLE
+    // =================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : loginAs
-    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
-    //                 Same sequence as the Selenium ENTS login steps:
-    //                   username -> Continue -> password (TD:Password) -> Login
-    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
-    //                   otherwise :  OTP 111111 -> Login
-    //                 If the username box is not on screen (for example after an earlier section left the portal open),
-    //                 the base URL is opened first.
-    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
-    //
-    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
-    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
-    //                 and then logged in again as the same expired ENTS user, which could never succeed.
-    //
-    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
-    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Function Name : resetScenario
+    // Description   : Clears the pair of the previous scenario. Called from Hooks before every scenario.
+    //                 The query results stay cached for the whole run.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
+    // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    static void loginAs(String pUsername, String pLogPrefix)
+    public static synchronized void resetScenario()
     {
-        log.info(pLogPrefix + " Logging in as: " + pUsername);
+        iCurrentPair  = null;
+        iLoggedInUser = "";
+    }
 
-        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setLoggedInUser / loggedInUser
+    // Description   : The ENTS login steps record who is logged in, so a same-agent transfer knows which agent's herds
+    //                 to use without repeating the login in the feature file.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void setLoggedInUser(String pUsername)
+    {
+        iLoggedInUser = pUsername == null ? "" : pUsername.trim();
+    }
+
+    public static synchronized String loggedInUser()
+    {
+        return iLoggedInUser;
+    }
+
+    public static synchronized TransferPair currentPair()
+    {
+        return iCurrentPair;
+    }
+
+    // =================================================================================================
+    // TOKENS
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : hasToken / tableHasToken
+    // Description   : True when a value (or any value of a DataTable map) is a runtime token such as {transferor.herd}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean hasToken(String pValue)
+    {
+        if (pValue == null) return false;
+        String iValue = pValue.trim();
+        return iValue.startsWith("{") && iValue.endsWith("}");
+    }
+
+    public static boolean tableHasToken(Map<String, String> pTable)
+    {
+        if (pTable == null) return false;
+        for (String iValue : pTable.values())
         {
-            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
-            UiHelpers.navigateTo(Hooks.iUrl);
+            if (hasToken(iValue)) return true;
+        }
+        return false;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolve
+    // Description   : Replaces a runtime token with the value of the current pair. Plain values come back unchanged.
+    //                 Throws with a clear message when a token is used before any pair was picked, or is misspelt.
+    // Parameters    : pValue (String) - DataTable cell, e.g. "{transferee.herd}" or "C1010148"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized String resolve(String pValue)
+    {
+        if (pValue == null) return null;
+        if (!hasToken(pValue)) return pValue.trim();
+
+        String iToken = pValue.trim().toLowerCase(Locale.ROOT);
+
+        if (iCurrentPair == null)
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Token " + pValue.trim() + " used before a transfer pair was picked. "
+                    + "The step that creates the transfer must run first in this section.");
         }
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
-
-        // -- Account Expired -------------------------------------------------------------------------------------
-        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
-        if (isVisible(iExpiredXpath, PROBE_SECONDS))
+        switch (iToken)
         {
-            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
-                    + ". Use another login in the feature file or ask for the account to be renewed.");
+            case "{transferor.herd}":    return iCurrentPair.transferor.herdNumber;
+            case "{transferor.name}":    return iCurrentPair.transferor.name;
+            case "{transferor.address}": return iCurrentPair.transferor.address;
+            case "{transferee.herd}":    return iCurrentPair.transferee.herdNumber;
+            case "{transferee.name}":    return iCurrentPair.transferee.name;
+            case "{transferee.address}": return iCurrentPair.transferee.address;
+            case "{agent}":              return iCurrentPair.agent;
+            case "{transferee.agent}":   return iCurrentPair.transfereeAgent;
+            default:
+                throw new IllegalArgumentException(LOG_PREFIX + "Unknown token " + pValue.trim()
+                        + ". Use {transferor.herd}, {transferor.name}, {transferee.herd}, {transferee.name}, "
+                        + "{transferor.address}, {transferee.address} or {agent}.");
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolveTable
+    // Description   : Returns a copy of a DataTable map with every token replaced (keys and order kept)
+    // Parameters    : pTable (Map) - the DataTable as a key/value map
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Map<String, String> resolveTable(Map<String, String> pTable)
+    {
+        Map<String, String> iResolved = new LinkedHashMap<>();
+        for (Map.Entry<String, String> iEntry : pTable.entrySet())
+        {
+            iResolved.put(iEntry.getKey(), resolve(iEntry.getValue()));
+        }
+        return iResolved;
+    }
+
+    // =================================================================================================
+    // PAIR SELECTION
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextSameAgentPair
+    // Description   : Picks two different, unused herds of the same agent (transferor + transferee), records them in
+    //                 the used-herds file, logs them and makes them the current pair.
+    // Parameters    : pAgent   (String) - agent login, e.g. "aga6077"
+    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextSameAgentPair(String pAgent, String pPurpose)
+    {
+        if (pAgent == null || pAgent.isBlank())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take herds from. "
+                    + "The ENTS login step must run before the transfer is created.");
         }
 
-        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
-        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
+        String     iAgent     = pAgent.trim();
+        List<Herd> iPool      = agentPool(iAgent);
+        Set<String> iUsed     = usedHerds();
+        List<Herd> iAvailable = new ArrayList<>();
+
+        for (Herd iHerd : iPool)
         {
-            log.info(pLogPrefix + " PIN screen detected.");
-            fillPinSlots(pLogPrefix);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
-            log.info(pLogPrefix + " PIN login submitted.");
+            if (!iUsed.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
+        }
 
-            acceptTermsIfShown(pLogPrefix, 2);
+        if (iAvailable.size() < 2)
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query for " + iAgent + " has " + iAvailable.size()
+                    + " unused herd(s) left out of " + iPool.size() + ", and a transfer needs 2. "
+                    + "Clear or trim " + usedFile() + ", raise ents.pool.size, or use another agent.");
+        }
 
-            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
-            for (int iNext = 1; iNext <= 7; iNext++)
-            {
-                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
-                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
-            }
+        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
+        Herd iTransferor = iAvailable.get(0);
+        Herd iTransferee = iAvailable.get(1);
 
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
-            log.info(pLogPrefix + " TOTP submitted.");
+        markUsed("transferor", iTransferor.herdNumber, iAgent, pPurpose);
+        markUsed("transferee", iTransferee.herdNumber, iAgent, pPurpose);
 
-            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
+        iCurrentPair = new TransferPair(iAgent, iTransferor, iTransferee);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] | Agent=" + iAgent
+                + " | Transferor=" + iTransferor + " | Transferee=" + iTransferee
+                + " | " + (iAvailable.size() - 2) + " unused herd(s) left in the pool");
+
+        return iCurrentPair;
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextCrossAgentPair
+    // Description   : Cross-agent version of nextSameAgentPair (TC_03_ENTS / TC_04_ENTS): the transferor herd comes
+    //                 from the agent who is logged in, the transferee herd from a different agent's pool. Both are
+    //                 recorded in the used-herds file and become the current pair.
+    //                 The transferee herd is NOT in the transferor agent's Transfer Out list, so the create step only
+    //                 checks the transferor on screen. The transferee herd is checked after the login swap, when the
+    //                 acceptance step searches it in the transferee agent's own list.
+    // Parameters    : pTransferorAgent (String) - logged-in agent | pTransfereeAgent (String) - the other agent
+    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextCrossAgentPair(String pTransferorAgent, String pTransfereeAgent, String pPurpose)
+    {
+        if (pTransferorAgent == null || pTransferorAgent.isBlank())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take the transferor herd from.");
+        }
+        if (pTransfereeAgent == null || pTransfereeAgent.isBlank())
+        {
+            throw new IllegalArgumentException(LOG_PREFIX + "No transferee agent was given for a cross-agent transfer. "
+                    + "Add a transfereeAgent row to the DataTable of the create step.");
+        }
+
+        String iFrom = pTransferorAgent.trim();
+        String iTo   = pTransfereeAgent.trim();
+
+        if (iFrom.equalsIgnoreCase(iTo))
+        {
+            return nextSameAgentPair(iFrom, pPurpose);
+        }
+
+        Set<String> iUsed       = usedHerds();
+        Herd        iTransferor = pickUnused(iFrom, iUsed, "transferor");
+
+        Set<String> iUsedPlus = new HashSet<>(iUsed);
+        iUsedPlus.add(iTransferor.herdNumber);
+        Herd iTransferee = pickUnused(iTo, iUsedPlus, "transferee");
+
+        markUsed("transferor", iTransferor.herdNumber, iFrom, pPurpose);
+        markUsed("transferee", iTransferee.herdNumber, iTo,   pPurpose);
+
+        iCurrentPair = new TransferPair(iFrom, iTo, iTransferor, iTransferee);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] (cross-agent) | Transferor=" + iTransferor
+                + " of " + iFrom + " | Transferee=" + iTransferee + " of " + iTo);
+
+        return iCurrentPair;
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : pickUnused
+    // Description   : One random herd of an agent that is not in pExclude. Throws with a clear message when the pool
+    //                 has no unused herd left.
+    // Parameters    : pAgent (String) - agent login | pExclude (Set) - herds already used | pRole (String) - for the message
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static Herd pickUnused(String pAgent, Set<String> pExclude, String pRole)
+    {
+        List<Herd> iPool      = agentPool(pAgent);
+        List<Herd> iAvailable = new ArrayList<>();
+        for (Herd iHerd : iPool)
+        {
+            if (!pExclude.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
+        }
+
+        if (iAvailable.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query for " + pAgent + " has no unused herd left out of "
+                    + iPool.size() + ", and one is needed as the " + pRole + ". "
+                    + "Clear or trim " + usedFile() + ", raise ents.pool.size, or use another agent.");
+        }
+
+        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
+        return iAvailable.get(0);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : usePortalName
+    // Description   : Replaces the name of a herd of the current pair with the name shown in the portal.
+    //                 The transferee search only matches the exact portal name, and the DB name can differ from it
+    //                 (e.g. "Martin Starr" in the DB, "Martin Starr Jnr" in the portal). After this call,
+    //                 {transferor.name} / {transferee.name} return the portal name.
+    // Parameters    : pHerd (String) - herd number of the current pair | pPortalName (String) - name from the Name column
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void usePortalName(String pHerd, String pPortalName)
+    {
+        if (iCurrentPair == null || pHerd == null || pPortalName == null || pPortalName.isBlank()) return;
+
+        String iName = pPortalName.trim().replaceAll("\\s+", " ");
+        Herd   iOr   = iCurrentPair.transferor;
+        Herd   iEe   = iCurrentPair.transferee;
+
+        if (iOr.herdNumber.equalsIgnoreCase(pHerd.trim()) && !iName.equals(iOr.name))
+        {
+            CommonFunctions.log.info(LOG_PREFIX + "Transferor " + iOr.herdNumber + " name: DB='" + iOr.name + "' portal='" + iName + "' - using the portal name");
+            iOr = new Herd(iOr.herdNumber, iName, iOr.address);
+        }
+        else if (iEe.herdNumber.equalsIgnoreCase(pHerd.trim()) && !iName.equals(iEe.name))
+        {
+            CommonFunctions.log.info(LOG_PREFIX + "Transferee " + iEe.herdNumber + " name: DB='" + iEe.name + "' portal='" + iName + "' - using the portal name");
+            iEe = new Herd(iEe.herdNumber, iName, iEe.address);
         }
         else
         {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
-            log.info(pLogPrefix + " OTP login submitted.");
+            return;
         }
-
-        EntsTestData.setLoggedInUser(pUsername);
-        log.info(pLogPrefix + " Login complete: " + pUsername);
+        iCurrentPair = new TransferPair(iCurrentPair.agent, iOr, iEe);
     }
-
-    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
-    private static void fillPinSlots(String pLogPrefix)
-    {
-        for (int idx = 1; idx <= 7; idx++)
-        {
-            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
-
-            if (!isVisible(iSlotXpath, 1))
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
-                continue;
-            }
-
-            Locator iInput = xp(iSlotXpath).first();
-            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
-            {
-                iInput.fill("");
-                iInput.pressSequentially("1");
-                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
-            }
-            else
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
-            }
-        }
-    }
-
-    // Ticks and accepts Terms & Conditions when the screen is shown
-    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
-    {
-        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
-            log.info(pLogPrefix + " Terms & Conditions accepted.");
-        }
-    }
-
-
-    // ===================================================================================================================================
-    //  LOGOUT
-    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : logout
-    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
-    //                 base URL so the next login starts on a clean Keycloak page.
-    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
-    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Function Name : agentPool
+    // Description   : Rows of the Agent Login query for one agent, fetched once per run and cached
+    // Parameters    : pAgent (String) - agent login
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    static void logout()
+    private static List<Herd> agentPool(String pAgent)
     {
-        log.info("[RELOGIN] Logging out current session...");
+        String     iKey    = pAgent.toLowerCase(Locale.ROOT);
+        List<Herd> iCached = AGENT_POOLS.get(iKey);
+        if (iCached != null) return iCached;
+
+        int    iLimit = ConfigManager.getInt("ents.pool.size", 200);
+        String iYear  = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
+        String iType  = ConfigManager.getOrDefault("ents.cust.type", "").trim();
+        String iTwo   = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
+        long   iStart = System.currentTimeMillis();
+
+        CommonFunctions.log.info(LOG_PREFIX + "Running Agent Login query for " + pAgent + " (up to " + iLimit + " rows"
+                + (iYear.isEmpty() ? ", all scheme years" : ", scheme year " + iYear)
+                + (iType.isEmpty() ? ", all customer types" : ", cust_type " + iType)
+                + (iTwo.isEmpty() ? "" : ", two-word names only") + ")...");
+        DBRouter.runDB("ENTS", "ENTS Agent Login herds", pAgent, String.valueOf(iLimit), iYear, iType, iTwo);
+
+        List<Herd> iPool = new ArrayList<>();
+        for (Map<String, Object> iRow : DBRouter.getRows())
+        {
+            String iHerd = text(iRow, "HERD_NUMBER");
+            if (!iHerd.isEmpty())
+            {
+                iPool.add(new Herd(iHerd, text(iRow, "HERD_NAME"), text(iRow, "ADDRESSLINE1")));
+            }
+        }
+
+        CommonFunctions.log.info(LOG_PREFIX + "Agent Login query for " + pAgent + " returned " + iPool.size()
+                + " herd(s) in " + (System.currentTimeMillis() - iStart) / 1000 + " s");
+
+        if (iPool.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query returned no herds for " + pAgent
+                    + ". Check the agent login, or run the query in SQL Developer on CENTEST_ENTS_DATA.");
+        }
+
+        AGENT_POOLS.put(iKey, iPool);
+        return iPool;
+    }
+
+    private static String text(Map<String, Object> pRow, String pColumn)
+    {
+        return Objects.toString(pRow.get(pColumn), "").trim();
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : markNotFound
+    // Description   : Records that a picked herd could not be found on screen (for example not in the agent's
+    //                 Transfer Out list). The herd is already in the used-herds file, so it is never picked again;
+    //                 this extra line only explains why, for whoever reads the file.
+    // Parameters    : pHerd   (String) - herd number
+    //                 pReason (String) - short reason, e.g. "not in Transfer Out list"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void markNotFound(String pHerd, String pReason)
+    {
+        String iAgent = iCurrentPair == null ? iLoggedInUser : iCurrentPair.agent;
+        markUsed("not-found", pHerd, iAgent, pReason);
+        CommonFunctions.log.warning(LOG_PREFIX + "Herd " + pHerd + " skipped: " + pReason);
+    }
+
+    // =================================================================================================
+    // USED-HERDS FILE
+    // =================================================================================================
+
+    private static Path usedFile()
+    {
+        return Paths.get(ConfigManager.getOrDefault("ents.used.herds.file", "runtime-data/ents_used_herds.csv"));
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : usedHerds
+    // Description   : Herds that must not be picked: those handed out in this run, plus (when ents.skip.used.herds=true)
+    //                 every herd listed in the used-herds file from earlier runs.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static Set<String> usedHerds()
+    {
+        Set<String> iUsed = new HashSet<>(USED_THIS_RUN);
+
+        if (!ConfigManager.getBool("ents.skip.used.herds", true)) return iUsed;
+
+        Path iFile = usedFile();
+        if (!Files.exists(iFile)) return iUsed;
+
         try
         {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
-
-            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
+            for (String iLine : Files.readAllLines(iFile, StandardCharsets.UTF_8))
             {
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+                String[] iCells = iLine.split(",", -1);
+                if (iCells.length >= 4 && !iCells[3].isBlank() && !"herd".equalsIgnoreCase(iCells[3].trim()))
+                {
+                    iUsed.add(iCells[3].trim());
+                }
             }
-            log.info("[RELOGIN] Logout complete.");
         }
-        catch (Exception e)
+        catch (IOException e)
         {
-            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not read " + iFile + " (" + e.getMessage()
+                    + ") - only herds used in this run are skipped.");
         }
-
-        UiHelpers.clearCookies();
-        UiHelpers.navigateTo(Hooks.iUrl);
-        EntsTestData.setLoggedInUser("");
+        return iUsed;
     }
 
-
-    // ===================================================================================================================================
-    //  TRANSFER OUT LIST - search one herd and open it
-    // ===================================================================================================================================
-
-    // Cells of a Transfer Out row (Angular mat-table column classes, checked against the DOM on 22-09-2026)
-    static final String VIEW_LINK_XPATH    = "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']";
-    static final String NAME_CELL_XPATH    = "//td[contains(@class,'mat-column-name')]";
-    static final String EXPIRED_CELL_XPATH = "//td[contains(@class,'mat-column-expired')]";
-
     // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutAllRowsXpath
-    // Description   : XPath of EVERY Transfer Out row of one herd, expired or not: rows whose Herd No. cell is exactly
-    //                 the herd and that have a View link.
-    //                 One herd can have several rows, one per holder. Seen 22-09-2026 for D3990193: "Thomas Morris"
-    //                 (Expired icon shown) and "Jean Doolaghty" (not expired). Both rows hold the same herd number.
-    // Parameters    : pHerd (String) - herd number
+    // Function Name : markUsed
+    // Description   : Adds one line to the used-herds file. A write failure is logged, never fatal.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    static String transferOutAllRowsXpath(String pHerd)
+    private static void markUsed(String pRole, String pHerd, String pLogin, String pPurpose)
     {
-        return "//tr[." + VIEW_LINK_XPATH + "]"
-                + "[.//td[contains(@class,'mat-column-herdNo')][normalize-space()='" + pHerd + "']]";
-    }
+        USED_THIS_RUN.add(pHerd);
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutRowXpath
-    // Description   : XPath of the NOT-EXPIRED Transfer Out row(s) of one herd. The row to open, name to read and View
-    //                 link to click always come from here.
-    //                 A row is expired when its Expired cell holds the red icon
-    //                   <mat-icon aria-label="red check mark for expired"> do_not_disturb_on </mat-icon>
-    //                 and not expired when that cell is empty.
-    //                 Clicking "the first View link" is not safe either: until the search result arrives the list still
-    //                 shows unfiltered rows, including TRN rows (seen 22-09-2026: a click opened TRN 26D0957T).
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
-    // ***************************************************************************************************************************************************************************************
-    static String transferOutRowXpath(String pHerd)
-    {
-        return transferOutAllRowsXpath(pHerd) + "[not(." + EXPIRED_CELL_XPATH + "//mat-icon)]";
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : searchTransferOut
-    // Description   : Types the herd in the Transfer Out search box, clicks Search and waits until a row for THAT herd
-    //                 is shown (up to ents.search.seconds). Returns false when it never appears.
-    //                 Then goes through every row of the herd and logs Name + Expired for each, so the log shows which
-    //                 row will be used. Expired rows are not rejected here - see activeTransferOutRows.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (logs every row)
-    // ***************************************************************************************************************************************************************************************
-    static boolean searchTransferOut(String pHerd)
-    {
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
-        if (!isVisible(transferOutAllRowsXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 8)))
-        {
-            return false;
-        }
-
-        List<Locator> iRows = xp(transferOutAllRowsXpath(pHerd)).all();
-        for (int i = 0; i < iRows.size(); i++)
-        {
-            Locator iRow     = iRows.get(i);
-            boolean iExpired = iRow.locator("xpath=." + EXPIRED_CELL_XPATH + "//mat-icon").count() > 0;
-            String  iName    = "";
-            try
-            {
-                iName = iRow.locator("xpath=." + NAME_CELL_XPATH).first().innerText().trim().replaceAll("\\s+", " ");
-            }
-            catch (Exception iEx)
-            {
-                iName = "?";
-            }
-            log.info("[TRANSFER] " + pHerd + " row " + (i + 1) + "/" + iRows.size() + ": Name='" + iName + "' | "
-                    + (iExpired ? "EXPIRED - skipped" : "not expired"));
-        }
-        return true;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : activeTransferOutRows
-    // Description   : Number of NOT-expired rows of the herd currently on screen (call after searchTransferOut).
-    //                 0 means every row of the herd is expired.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static int activeTransferOutRows(String pHerd)
-    {
-        return countOf(transferOutRowXpath(pHerd));
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutName
-    // Description   : Name cell of the first NOT-expired row of the herd, or "" when there is none
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static String transferOutName(String pHerd)
-    {
-        String iCell = transferOutRowXpath(pHerd) + NAME_CELL_XPATH;
+        Path iFile = usedFile();
         try
         {
-            if (countOf(iCell) > 0) return xp(iCell).first().innerText().trim().replaceAll("\\s+", " ");
+            if (iFile.getParent() != null) Files.createDirectories(iFile.getParent());
+            if (!Files.exists(iFile))
+            {
+                Files.write(iFile, (CSV_HEADER + System.lineSeparator()).getBytes(StandardCharsets.UTF_8));
+            }
+
+            String iLine = String.join(",",
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                    csv(System.getProperty("testcase", "")),
+                    csv(pRole),
+                    csv(pHerd),
+                    csv(pLogin),
+                    csv(pPurpose)) + System.lineSeparator();
+
+            Files.write(iFile, iLine.getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
         }
-        catch (Exception iEx)
+        catch (IOException e)
         {
-            log.warning("[TRANSFER] Could not read the portal name of " + pHerd + ": " + iEx.getMessage());
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not record " + pHerd + " in " + iFile + " (" + e.getMessage() + ")");
         }
-        return "";
     }
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clickTransferOutView
-    // Description   : Clicks View in the first NOT-expired row of the herd (the list must already show it)
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void clickTransferOutView(String pHerd)
+    // Commas would break the simple CSV format - replace them
+    private static String csv(String pValue)
     {
-        if (activeTransferOutRows(pHerd) == 0)
-        {
-            throw new IllegalStateException("[TRANSFER] Every Transfer Out row of herd " + pHerd + " is marked expired - nothing to open.");
-        }
-        iAction("CLICK", "XPATH", "(" + transferOutRowXpath(pHerd) + VIEW_LINK_XPATH + ")[1]", null);
-        log.info("[TRANSFER] Opened herd " + pHerd + " ('" + transferOutName(pHerd) + "' row) from Transfer Out.");
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : openTransferOutHerd
-    // Description   : searchTransferOut + clicks View in the first NOT-expired row of that herd. Fails with the herd
-    //                 number and agent in the message when the herd is not in the list or every row is expired.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
-    // ***************************************************************************************************************************************************************************************
-    static void openTransferOutHerd(String pHerd)
-    {
-        if (!searchTransferOut(pHerd))
-        {
-            throw new IllegalStateException("[TRANSFER] Herd " + pHerd + " is not in the Transfer Out list of "
-                    + EntsTestData.loggedInUser() + " (waited " + ConfigManager.getInt("ents.search.seconds", 8) + " s).");
-        }
-        clickTransferOutView(pHerd);
-    }
-
-
-    // ===================================================================================================================================
-    //  NAVIGATION
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : openBissMyClientsTransfers
-    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
-    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void openBissMyClientsTransfers()
-    {
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
+        return pValue == null ? "" : pValue.replace(',', ' ').replace('\n', ' ').replace('\r', ' ').trim();
     }
 }
