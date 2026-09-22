@@ -1,260 +1,649 @@
-# ===================================================================================================================================
-# File          : application.properties
-# Description   : Base configuration defaults for the BISS automation framework (Playwright edition).
-#                 These values apply to ALL environments unless overridden by a profile file.
-#                 Profile files (application-dev.properties, application-docker.properties, etc.)
-#                 overlay and override these values for specific environments.
-#
-# Folder        : src/test/resources/config/application.properties
-#
-# Resolution    : -Dkey=value  >  BISS_KEY environment variable  >  application-<env>.properties  >  this file
-# Activation    : This file is always loaded. Profile overlay activated via -Denv=<profile> (default dev)
-#
-# Author        : Aniket Pathare | aniket.pathare@goverment.ie
-# Date Created  : 10-03-2026
-# Updated       : 16-09-2026 - Playwright keys added, Selenium-only keys removed
-#                 16-09-2026 - browser.zoom.percent (67), click.strategy, click.attempt.timeout.ms 5000
-#                 16-09-2026 - browser.https.upgrades, dialog handling, [BROWSER] event log
-#                 17-09-2026 - browser.cleanup.before.start, browser.cleanup.temp.folders, execution.fail.fast
-#                 18-09-2026 - browser.cleanup.scope, trace.screenshots, trace.snapshots (suite run speed)
-#                 18-09-2026 - browser.reuse: one browser for the whole run, clean session per test case
-# ===================================================================================================================================
+// ===================================================================================================================================
+// File          : TC_01_ENTS.java
+// Package       : stepdefinitions.ENTS
+// Description   : Step definitions for TC_01_ENTS — Transfer Application E2E Regression Pack (Same Agent).
+//
+//                 Covers the full Transferor → Transferee cycle for all 7 transfer types:
+//                   206 (Change of Legal Entity), 201 (Change of Registration / Inheritance),
+//                   202 (Gift), 211 (Lease), 204 (Division), 212 (Sale)
+//
+//                 Reused steps (defined elsewhere, bound automatically by Cucumber):
+//                   "the agent user is on the login page"                            → TC_03.java
+//                   "the individual logs in as transferor {string}"                  → TC_08_ENTS.java
+//                   "the agent opens the {string} application"                       → TC_03.java
+//                   "the agent should land on the BISS Home page"                    → TC_03.java
+//                   "the agent navigates to the {string} and {string} Left Menu Link"→ TC_03.java
+//                   "the agent switches to the {string} tab on the My Client(s) page"→ TC_06.java
+//                   "the ETF partner completes the transferee acceptance flow"       → TC_07_ENTS.java
+//
+//                 Playwright edition (22-09-2026):
+//                   - Same step texts, same ObjectRepository keys, same flow.
+//                   - Runtime test data: a DataTable value written as a token, e.g. {transferor.herd}, is replaced by
+//                     a random unused herd from the ENTS Agent Login query (utilities.EntsTestData). Plain values
+//                     still work, so a herd can be pinned for debugging.
+//                   - findElements / JavascriptExecutor / WebDriverWait replaced by Playwright locators (EntsSession).
+//                   - Logout uses the shared EntsSession.logout().
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
+// ===================================================================================================================================
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Browser Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Supported values: CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
-browser=CHROME
+package stepdefinitions.ENTS;
 
-# Installed browser to drive instead of Playwright's bundled Chromium: blank | chrome | msedge
-# (a value here also stops Playwright from trying to download browsers)
-browser.channel=
+import com.microsoft.playwright.Locator;
+import commonFunctions.UiHelpers;
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import org.junit.jupiter.api.Assertions;
+import stepdefinitions.Hooks;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
+import utilities.ObjReader;
 
-# false = Playwright default (--no-sandbox, needed when Chrome runs as root, e.g. in Docker). The dev profile sets true.
-browser.chromium.sandbox=false
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Logger;
 
-# true = ONE browser for the whole run. Each test case still starts clean: new tab, cookies cleared and the site's
-# storage wiped, so every test case logs in again. Saves the 8-30 s Chrome start and the 10-14 s close per test case.
-# false = a new browser per test case (the behaviour up to 17-09).
-browser.reuse=true
+import static commonFunctions.CommonFunctions.iAction;
+import static stepdefinitions.ENTS.EntsSession.PROBE_SECONDS;
+import static stepdefinitions.ENTS.EntsSession.TRANSFERS_TAB_XPATH;
+import static stepdefinitions.ENTS.EntsSession.countOf;
+import static stepdefinitions.ENTS.EntsSession.isVisible;
+import static stepdefinitions.ENTS.EntsSession.pause;
+import static stepdefinitions.ENTS.EntsSession.xp;
 
-# 0 = keep the same browser for the whole run. Set e.g. 10 to start a fresh browser every 10 test cases.
-browser.reuse.max.testcases=0
+public class TC_01_ENTS
+{
+    private static final Logger log = Logger.getLogger(TC_01_ENTS.class.getName());
 
-# Browser processes stopped before each test case starts (replaces the Selenium killProcessByName("chrome")):
-#   none       = nothing stopped
-#   automation = only browsers started by Playwright or Selenium (your own Chrome windows stay open)
-#   all        = every chrome.exe (msedge.exe for Edge), like the Selenium framework - your own Chrome windows close too
-# chromedriver.exe left over from Selenium runs is stopped by automation and all.
-browser.cleanup.before.start=automation
+    // XPath of the success message checked after "Submit Application to DAFM" (unchanged from Selenium)
+    private static final String SUBMITTED_MESSAGE_XPATH =
+            "//div[contains(@class,'success') or contains(@class,'confirmation')] | "
+                    + "//*[contains(text(),'submitted') or contains(text(),'Submitted') or contains(text(),'accepted')]";
 
-# true = on the first test case of a run, delete old Playwright temp folders (profiles, driver copies) from %TEMP%
-browser.cleanup.temp.folders=true
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Transfer key captured during the Transferor flow and consumed by the Transferee flow.
+    // Static so TC_03_ENTS / TC_07_ENTS / TC_08_ENTS can read it. Also published as the system property
+    // "lastCapturedTransferKey", which the Selenium TC_08_ENTS read but nothing ever set.
+    // -------------------------------------------------------------------------------------------------------------------------------
+    public static String iCapturedTransferKey = "";
 
-# automation mode only: run = scan process command lines once per run (fast), testcase = before every test case (slow)
-browser.cleanup.scope=run
 
-# true = never download browsers (laptops behind the department web gateway)
-playwright.skip.browser.download=false
+    // ===================================================================================================================================
+    //  TRANSFEROR FLOW — Create Transfer Application
+    // ===================================================================================================================================
 
-# Run browser in headless mode (no visible window) - set true for CI/Bamboo agents and Docker
-headless=false
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent creates a transfer application with the following details (DataTable)
+    // Description   : Executes the entire Transferor flow in one step:
+    //                 0. When the table uses tokens, picks a fresh transferor + transferee pair of the logged-in agent
+    //                 1. Search for transferor herd and click View
+    //                 2. Click "Create Transfer Application"
+    //                 3. Search for transferee by herd + name
+    //                 4. Select the transfer type
+    //                 5. Add entitlement amount on the row with the most available entitlements
+    //                 6. Select lease year if applicable (Lease only)
+    //                 7. Enter transfer notes
+    //
+    //                 DataTable keys:
+    //                   transferorHerd (String) - herd number, or {transferor.herd}
+    //                   transfereeHerd (String) - herd number, or {transferee.herd}
+    //                   transfereeName (String) - full name,   or {transferee.name}
+    //                   transferType   (String) - transfer type text, e.g. "Gift of Entitlements"
+    //                   entitlements   (String) - number of entitlements to transfer e.g. "0.01"
+    //                   leaseYear      (String) - "Yes" if lease year selection is needed (optional key)
+    //                   notes          (String) - notes to enter on the transfer summary
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent creates a transfer application with the following details")
+    public void theAgentCreatesATransferApplicationWithTheFollowingDetails(DataTable pDataTable)
+    {
+        log.info("[STEP] When the agent creates a transfer application with the following details");
 
-# Window / viewport
-browser.maximize=false
-viewport.width=1920
-viewport.height=1080
+        Map<String, String> iRaw      = pDataTable.asMap(String.class, String.class);
+        boolean             iRuntime  = EntsTestData.tableHasToken(iRaw);
+        int                 iMaxTries = iRuntime ? Math.max(1, ConfigManager.getInt("ents.pair.retries", 5)) : 1;
+        Map<String, String> iData     = null;
 
-# Locale and timezone used by every browser context
-browser.locale=en-IE
-browser.timezone=Europe/Dublin
+        // ── Steps 0-1 : pick a pair and validate both herds on screen (same checks as TC_03) ──
+        // Each herd is searched in the agent's Transfer Out list and rejected when it is
+        //   - blacklisted (Hooks.BLACKLISTED_HERDS)
+        //   - not in the list (0 rows)
+        //   - marked as expired in the Expired column
+        // A rejected herd is recorded in the used-herds file and a new pair is picked (up to ents.pair.retries).
+        // The transferee is checked first, so the last search on screen is the transferor, ready to open.
+        for (int iTry = 1; iTry <= iMaxTries; iTry++)
+        {
+            if (iRuntime)
+            {
+                EntsTestData.nextSameAgentPair(EntsTestData.loggedInUser(), iRaw.getOrDefault("transferType", "").trim());
+            }
+            iData = EntsTestData.resolveTable(iRaw);
 
-# Accept internal / self-signed certificates
-ignore.https.errors=false
+            String iRejectedHerd = null;
+            String iReason       = herdProblem(iData.get("transfereeHerd").trim(), "transferee");
+            if (iReason != null)
+            {
+                iRejectedHerd = iData.get("transfereeHerd").trim();
+            }
+            else
+            {
+                iReason = herdProblem(iData.get("transferorHerd").trim(), "transferor");
+                if (iReason != null) iRejectedHerd = iData.get("transferorHerd").trim();
+            }
 
-# Open http:// links over https:// first, exactly like normal Chrome (Chrome 'HTTPS-Upgrades').
-# Playwright turns this off by default; without it the BISS Exit link (http://agfood.icentest...) times out on port 80.
-browser.https.upgrades=true
+            if (iReason == null)
+            {
+                // herdProblem may have swapped a DB name for the portal name - resolve the tokens again
+                if (iRuntime) iData = EntsTestData.resolveTable(iRaw);
+                break;
+            }
 
-# Safety net: hosts that are always redirected from http:// to https:// (comma-separated, *.domain allowed).
-# Leave blank unless a host still times out with browser.https.upgrades=true. Example:
-# browser.https.upgrade.hosts=agfood.icentest.agriculture.gov.ie
-browser.https.upgrade.hosts=
+            if (!iRuntime || iTry == iMaxTries)
+            {
+                throw new RuntimeException("[TRANSFER] Herd " + iRejectedHerd + " is " + iReason
+                        + (iRuntime ? " (tried " + iMaxTries + " pairs - check the Agent Login query / ents.scheme.year)" : ""));
+            }
+            EntsTestData.markNotFound(iRejectedHerd, iReason);
+            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": " + iRejectedHerd + " " + iReason + " - picking another pair.");
+        }
 
-# Browser proxy (blank = use the operating system settings)
-browser.proxy.server=
-browser.proxy.bypass=
+        String iTransferorHerd = iData.get("transferorHerd").trim();
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
+        String iTransfereeName = iData.get("transfereeName").trim();
+        String iTransferType   = iData.get("transferType").trim();
+        String iEntitlements   = iData.get("entitlements").trim();
+        String iNotes          = iData.get("notes").trim();
+        boolean iHasLeaseYear  = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
 
-# Visual aids for local runs
-highlight.enabled=false
-playwright.slowmo.ms=0
+        // The last search on screen is the transferor (checked above) - click View in ITS row
+        iAction("CLICK", "XPATH", EntsSession.transferOutRowXpath(iTransferorHerd) + "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']", null);
+        log.info("Transferor herd opened: " + iTransferorHerd);
 
-# Page zoom, same as Ctrl+minus in Chrome (100 = normal). 67 matches the Selenium framework
-# (ChromeOptions profile.default_zoom_level = -2.196545). Other examples: 70, 75, 80, 90
-browser.zoom.percent=67
+        // ── Step 2 : Click "Create Transfer Application" ─────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
 
-# Extra CSS zoom on the page body only (the old per-action document.body.style.zoom='84%').
-# 100 = off. Normally leave this at 100 and use browser.zoom.percent instead.
-ui.zoom.percent=100
+        // ── Step 3 : Search for the transferee ───────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), iTransfereeHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), iTransfereeName);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
+        log.info("Transferee searched: " + iTransfereeName + " (" + iTransfereeHerd + ")");
 
-# false = first matching element (Selenium behaviour), true = Playwright strict mode
-locator.strict=false
+        // ── Step 4 : Select the transfer type ────────────────────────────────────────────
+        pause(1000);
+        iAction("CLICK", "XPATH",
+                "//mat-radio-button[contains(.,'" + iTransferType + "')] | "
+                        + "//tr[contains(.,'" + iTransferType + "')]//input | "
+                        + "//*[@value='" + iTransferType + "']",
+                null);
+        pause(1000);
+        log.info("Transfer type selected: " + iTransferType);
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Wait Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Maximum seconds for any element action (click, fill, visible ...)
-explicit.wait.seconds=20
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
 
-# Maximum seconds for page navigation
-page.load.timeout.seconds=30
+        // ── Step 5 : Click Add on the row with the highest Available Entitlements value ───
+        // The value cells and the Add buttons are parallel lists - index N in one is index N in the other.
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferEntitlementValues"), null);
+        List<Locator> iEntitlementCells = xp(ObjReader.getLocator("iTransferEntitlementValues")).all();
+        List<Locator> iAddButtons       = xp(ObjReader.getLocator("iTransferAddEntitlementBtns")).all();
 
-# Polling interval for custom waits (milliseconds)
-wait.polling.interval.ms=250
+        if (iEntitlementCells.isEmpty())
+        {
+            throw new RuntimeException("[TRANSFER] No entitlement rows found in 'Entitlements available to transfer' table.");
+        }
 
-# Click strategy for CLICK, RADIOBUTTON, CHECKBOX, LIST ...
-#   auto   = normal click; JavaScript click if the normal click is blocked (Selenium ElementClickIntercepted behaviour)
-#   js     = always JavaScript click (arguments[0].click())
-#   native = normal click only, no JavaScript fallback
-# The JSCLICK action always uses a JavaScript click, whatever this is set to.
-click.strategy=auto
+        int    iMaxIndex = 0;
+        double iMaxValue = -1.0;
 
-# How long a normal click may be blocked (overlay, spinner) before the JavaScript click is used (milliseconds)
-click.attempt.timeout.ms=5000
+        for (int i = 0; i < iEntitlementCells.size(); i++)
+        {
+            String iRawValue = iEntitlementCells.get(i).innerText().trim();
+            try
+            {
+                double iVal = Double.parseDouble(iRawValue);
+                log.info("[TRANSFER] Row " + (i + 1) + " entitlements: " + iVal);
+                if (iVal > iMaxValue)
+                {
+                    iMaxValue = iVal;
+                    iMaxIndex = i;
+                }
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[TRANSFER] Could not parse entitlement value at row " + (i + 1) + ": '" + iRawValue + "' - skipping.");
+            }
+        }
 
-# Browser pop-up dialogs (alert / confirm / prompt): accept = click OK, dismiss = click Cancel.
-# 'Leave site?' pop-ups are always accepted. UiHelpers.acceptNextDialog() / dismissNextDialog() override one dialog.
-dialog.default.action=accept
+        if (iMaxIndex >= iAddButtons.size())
+        {
+            throw new RuntimeException("[TRANSFER] " + iEntitlementCells.size() + " entitlement row(s) but only "
+                    + iAddButtons.size() + " Add button(s) - check iTransferAddEntitlementBtns.");
+        }
 
-# [BROWSER] lines in the run log: page changes, new tabs, dialogs, failed requests, HTTP 4xx/5xx, console errors
-log.browser.events=true
-log.browser.console.errors=true
+        log.info("[TRANSFER] Highest entitlement: " + iMaxValue + " at row " + (iMaxIndex + 1) + " - clicking Add.");
 
-# How long an "if present" / "if applicable" step looks for an optional element before deciding it is absent.
-# This wait is paid every time such an element is NOT there, so keep it small (the action timeout above is not used).
-probe.timeout.seconds=3
+        // Selenium: scrollIntoView + JavaScript click
+        Locator iTargetAddBtn = iAddButtons.get(iMaxIndex);
+        iTargetAddBtn.scrollIntoViewIfNeeded();
+        UiHelpers.jsClick(iTargetAddBtn);
+        log.info("[TRANSFER] Add clicked for entitlement value: " + iMaxValue);
 
-# WAITVISIBLE / VERIFYELEMENT / LIST option timeouts (seconds)
-wait.visible.seconds=30
-verify.element.timeout.seconds=20
-list.option.timeout.seconds=30
+        // Enter the entitlement amount
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), iEntitlements);
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Retry Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Number of times to retry a failed test case (0 = no retry)
-retry.count=1
+        // ── Step 5a : Lease year selection (Lease only) ──────────────────────────────────
+        if (iHasLeaseYear)
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearDropdown"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearFirstOption"), null);
+            log.info("Lease year selected.");
+        }
 
-# Exception types that trigger a retry (comma-separated simple class names) - Playwright names
-retry.on.exceptions=TimeoutError,PlaywrightException
+        // Confirm the entitlement, then go to the summary / notes page
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogAddBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Test Data
-# -----------------------------------------------------------------------------------------------------------------------------------
-test.data.file.path=src/test/resources/Test_Data/TestData.xlsx
-test.data.sheet.name=Data
+        // ── Step 6 : Enter transfer notes ────────────────────────────────────────────────
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
 
-# Write the runtime HerdNumber / Username back into TestData.xlsx
-testdata.writeback.enabled=true
+        log.info("Transfer application created | Type=" + iTransferType + " | Transferor=" + iTransferorHerd
+                + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
+    }
 
-# Oracle herd/agent bootstrap before each test case (false = use the sheet values)
-db.bootstrap=true
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Execution Control
-# -----------------------------------------------------------------------------------------------------------------------------------
-execution.control.path=src/test/resources/Execution_Control_File/ExecutionControl.xlsx
-execution.control.sheet=Sheet1
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : herdProblem
+    // Description   : Searches a herd in the agent's Transfer Out list and applies the TC_03 herd checks.
+    //                 Uses EntsSession.searchTransferOut, which waits for the row of THIS herd (not the first row).
+    //                 Returns null when the herd is usable, otherwise the reason it is not:
+    //                   - "blacklisted"                              herd is in Hooks.BLACKLISTED_HERDS
+    //                   - "not in the Transfer Out list of <agent>"  the search returns no row for this herd
+    //                   - "marked expired (<text>)"                  the Expired column says expired / Yes
+    //                 The Expired column text is always logged, so the rule can be tightened once we see real values.
+    //                 For a usable herd, the Name column text replaces the DB name (see portalName / ents.name.from.portal).
+    // Parameters    : pHerd (String) - herd number | pRole (String) - "transferor" or "transferee" (for the log)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static String herdProblem(String pHerd, String pRole)
+    {
+        if (Hooks.BLACKLISTED_HERDS.contains(pHerd))
+        {
+            return "blacklisted";
+        }
 
-# Write PASS / FAIL back into the Status column
-execution.control.writeback=true
+        if (!EntsSession.searchTransferOut(pHerd))
+        {
+            return "not in the Transfer Out list of " + EntsTestData.loggedInUser();
+        }
 
-# Comma-separated IDs to run regardless of the Execution flag (blank = Execution=Y rows)
-testcase.ids=
+        String iRowXpath = EntsSession.transferOutRowXpath(pHerd);
 
-# true  = when a scenario fails, the remaining scenarios of that test case are skipped and the runner moves on to the
-#         next test case in ExecutionControl.xlsx (a failed step already stops its own scenario)
-# false = every scenario of the test case still runs
-execution.fail.fast=true
+        String iExpiredCell = iRowXpath + "//td[contains(@class,'expired')]";
+        String iExpiredText = countOf(iExpiredCell) > 0 ? xp(iExpiredCell).first().innerText().trim() : "";
+        log.info("[TRANSFER] " + pRole + " " + pHerd + " found in Transfer Out | Expired column='" + iExpiredText + "'");
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Object Repository
-# -----------------------------------------------------------------------------------------------------------------------------------
-object.repository.path=src/test/resources/Object_Repository/ObjectRepository.properties
+        String iLower = iExpiredText.toLowerCase(java.util.Locale.ROOT);
+        if (iLower.contains("expired") || iLower.equals("yes") || iLower.equals("y"))
+        {
+            return "marked expired (" + iExpiredText + ")";
+        }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Feature Files
-# -----------------------------------------------------------------------------------------------------------------------------------
-feature.directory.path=src/test/resources/Test_Cases/
-glue.package=stepdefinitions
+        // Name check (22-09-2026): the transferee search needs the exact portal name, which can differ from the DB
+        // name (D3930387: DB "Martin Starr", portal "Martin Starr Jnr"). The portal name from this row replaces the
+        // DB name, so {transferee.name} is what the dialog expects. Only runtime herds are changed.
+        if (ConfigManager.getBool("ents.name.from.portal", true))
+        {
+            String iPortalName = portalName(iRowXpath);
+            log.info("[TRANSFER] " + pRole + " " + pHerd + " portal name='" + iPortalName + "'");
+            EntsTestData.usePortalName(pHerd, iPortalName);
+        }
+        return null;
+    }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Reporting
-# -----------------------------------------------------------------------------------------------------------------------------------
-report.docs.path=Test_Report/docs
-report.screenshots.path=Test_Report/screenshots
-report.html.path=Test_Report/html/
-report.traces.path=Test_Report/traces
-report.downloads.path=Test_Report/downloads
-junit.xml.path=target/surefire-reports/
 
-# Playwright trace: off | on | retain-on-failure
-trace.mode=retain-on-failure
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : portalName
+    // Description   : Text of the Name cell in a Transfer Out row. Uses the mat-column-name cell, or the first cell of
+    //                 the row when that class is not there (Name is the first column). Returns "" when nothing is found.
+    // Parameters    : pRowXpath (String) - XPath of the herd row (EntsSession.transferOutRowXpath)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static String portalName(String pRowXpath)
+    {
+        String iNameCell  = pRowXpath + "//td[contains(@class,'mat-column-name')]";
+        String iFirstCell = "(" + pRowXpath + "//td)[1]";
+        try
+        {
+            if (countOf(iNameCell) > 0)  return xp(iNameCell).first().innerText().trim().replaceAll("\\s+", " ");
+            if (countOf(iFirstCell) > 0) return xp(iFirstCell).first().innerText().trim().replaceAll("\\s+", " ");
+        }
+        catch (Exception iEx)
+        {
+            log.warning("[TRANSFER] Could not read the portal name: " + iEx.getMessage());
+        }
+        return "";
+    }
 
-# Screencast inside the trace: false keeps every action fast, true records a filmstrip of the run
-trace.screenshots=false
-# DOM snapshot per action - this is what the trace viewer replays. Keep true.
-trace.snapshots=true
 
-# Screenshot on PASS as well (true = capture every step, false = failure only)
-screenshot.on.pass=false
+    // ===================================================================================================================================
+    //  TRANSFEROR — DOCUMENT UPLOAD
+    // ===================================================================================================================================
 
-# Auto-delete screenshots older than N days (0 = never delete)
-screenshot.retention.days=30
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent uploads the transferor signature document
+    // Description   : Opens the upload dialog, selects "Transferor Signature Confirmation" as the document type
+    //                 (falls back to "Companies Registrations Office (Company Printout)" when that option is not
+    //                 offered), attaches the sample PDF and confirms the upload.
+    //                 Change from Selenium: the option list is given PROBE_SECONDS to render before the fallback
+    //                 is chosen (Selenium checked immediately after opening the dropdown).
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent uploads the transferor signature document")
+    public void theAgentUploadsTheTransferorSignatureDocument()
+    {
+        log.info("[STEP] And the agent uploads the transferor signature document");
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Email Notification
-# -----------------------------------------------------------------------------------------------------------------------------------
-notify.email.enabled=false
-notify.email.smtp.host=smtp.office365.com
-notify.email.smtp.port=587
-notify.email.smtp.starttls=true
-notify.email.from=automation@biss.ie
-notify.email.to=qa-team@biss.ie
-# notify.email.password - set via Bamboo plan variable or BISS_NOTIFY_EMAIL_PASSWORD, never store here
+        String iFilePath = System.getProperty("transfer.upload.path",
+                System.getProperty("user.dir")
+                        + java.io.File.separator + "src"
+                        + java.io.File.separator + "test"
+                        + java.io.File.separator + "resources"
+                        + java.io.File.separator + "Test_Data"
+                        + java.io.File.separator + "Cover_Letter.pdf");
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Database (optional - leave blank if not used)
-# -----------------------------------------------------------------------------------------------------------------------------------
-db.enabled=false
-db.driver=oracle.jdbc.OracleDriver
-db.url=
-db.username=
-# db.password - set via Bamboo plan variable or BISS_DB_PASSWORD, never store here
-db.connection.pool.size=5
-db.query.timeout.seconds=30
+        // ── Click "Upload Document" on the summary card ───────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------------------------------------------------------------
-log.level=INFO
-log.output.path=target/logs/
+        // ── Wait for dialog to open ───────────────────────────────────────────────────
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
 
-# ---- ENTS runtime test data (utilities.EntsTestData) ----
-# Rows fetched per ENTS query (random order). The Agent Login query runs once per agent per run.
-ents.pool.size=200
-# true = a herd listed in the used-herds file is never picked again
-ents.skip.used.herds=true
-# One line per herd handed out: timestamp,testcase,role,herd,login,purpose. Delete the file to start again.
-ents.used.herds.file=runtime-data/ents_used_herds.csv
-# Agent Login query: only herds holding entitlements in this scheme year (blank = all years, as on Confluence)
-ents.scheme.year=2026
-# Agent Login query: only herds of this customer type (vwco_ents_herd_abls_rpt.cust_type). Blank = all types.
-# Joint Venture herds (e.g. D3900895) are not in the agent's Transfer Out list.
-ents.cust.type=Individual
-# When a picked transferor is not in the agent's Transfer Out list, try this many pairs before failing
-ents.pair.retries=5
-# How long to wait for the Transfer Out search result before treating the herd as not found
-ents.search.seconds=8
-# ENTS test cases skip the BISS herd + agent DB lookup (they get their data from the ENTS queries)
-db.bootstrap.ents=false
+        // ── Select document type ──────────────────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
+
+        String iPreferredOption = "//mat-option//span[normalize-space()='Transferor Signature Confirmation']";
+        String iSelectedType;
+
+        if (isVisible(iPreferredOption, PROBE_SECONDS))
+        {
+            xp(iPreferredOption).first().click();
+            iSelectedType = "Transferor Signature Confirmation";
+        }
+        else
+        {
+            iSelectedType = "Companies Registrations Office (Company Printout)";
+            iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), iSelectedType);
+        }
+        log.info("[TRANSFER] Document type selected: " + iSelectedType);
+
+        // ── Attach PDF ────────────────────────────────────────────────────────────────
+        iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iTransferFileUploadInput"), iFilePath);
+
+        // ── Confirm upload ────────────────────────────────────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+
+        // ── Wait for dialog to close ──────────────────────────────────────────────────
+        iAction("WAITINVISIBLE", "XPATH", "//app-supporting-doc-upload-transfer-application-popup", null);
+    }
+
+
+    // ===================================================================================================================================
+    //  TRANSFEROR — SEND FOR ACCEPTANCE
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent sends the transfer for acceptance
+    // Description   : Clicks "Send to Transferee for Acceptance", accepts T&C, and confirms.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent sends the transfer for acceptance")
+    public void theAgentSendsTheTransferForAcceptance()
+    {
+        log.info("[STEP] And the agent sends the transfer for acceptance");
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSendForAcceptanceBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSendForAcceptanceBtn"), null);
+
+        log.info("Transfer sent for acceptance.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the transfer key should be captured
+    // Description   : Reads the transfer key from the summary screen and keeps it for the Transferee flow.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (also published as lastCapturedTransferKey)
+    // ***************************************************************************************************************************************************************************************
+    @Then("the transfer key should be captured")
+    public void theTransferKeyShouldBeCaptured()
+    {
+        log.info("[STEP] Then the transfer key should be captured");
+
+        String iKey = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iTransferKeySummaryField"), null);
+        iCapturedTransferKey = iKey == null ? "" : iKey.trim();
+
+        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key should be visible on the summary screen.");
+
+        System.setProperty("lastCapturedTransferKey", iCapturedTransferKey);
+        log.info("Transfer key captured: " + iCapturedTransferKey);
+    }
+
+
+    // ===================================================================================================================================
+    //  TRANSFEREE FLOW — Accept and Submit
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent navigates to the transferee acceptance flow (DataTable)
+    // Description   : My Clients → Transfers tab, searches for the transferee herd, clicks View, then clicks View on the
+    //                 transferee dashboard row for that herd.
+    //                 DataTable keys: transfereeHerd (String) - herd number, or {transferee.herd}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent navigates to the transferee acceptance flow")
+    public void theAgentNavigatesToTheTransfereeAcceptanceFlow(DataTable pDataTable)
+    {
+        log.info("[STEP] When the agent navigates to the transferee acceptance flow");
+
+        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
+
+        EntsSession.openTransferOutHerd(iTransfereeHerd);
+
+        iAction("CLICK", "XPATH", "//tr[contains(.,'" + iTransfereeHerd + "')]//button[contains(text(),'View')] | "
+                + "//button[contains(text(),'View')]", null);
+
+        log.info("Navigated to transferee acceptance flow for herd: " + iTransfereeHerd);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent enters the transfer key and views the application
+    // Description   : Enters the captured transfer key and clicks "View Transfer Application".
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent enters the transfer key and views the application")
+    public void theAgentEntersTheTransferKeyAndViewsTheApplication()
+    {
+        log.info("[STEP] And the agent enters the transfer key and views the application");
+
+        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key must have been captured before entering it on the transferee side.");
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey.trim());
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+
+        log.info("Transfer key entered and application loaded: " + iCapturedTransferKey);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent submits the transfer to DAFM with notes {string}
+    // Description   : Enters the transferee notes, clicks "Submit Application to DAFM", accepts T&C, confirms, and
+    //                 checks that a success message is shown.
+    // Parameters    : pNotes (String) - notes to enter e.g. "Approved Test"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent submits the transfer to DAFM with notes {string}")
+    public void theAgentSubmitsTheTransferToDAFMWithNotes(String pNotes)
+    {
+        log.info("[STEP] And the agent submits the transfer to DAFM with notes: " + pNotes);
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), pNotes);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+
+        log.info("Transfer submitted to DAFM.");
+
+        String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+        Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+        log.info("Transfer submitted successfully: " + iConfirmation);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the transfer should be submitted successfully
+    // Description   : Looks for the success message after submission, then logs out so the next section starts with
+    //                 a fresh login.
+    //
+    //                 Kept from Selenium ON PURPOSE (one-to-one): when no success message is found the step still
+    //                 PASSES - it only writes a warning. Tell us if it should fail instead.
+    //                 Change from Selenium: the logout now always runs (finally). Selenium skipped the logout when the
+    //                 message was missing, so the next section's login found no username box and failed.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright, logout in finally)
+    // ***************************************************************************************************************************************************************************************
+    @Then("the transfer should be submitted successfully")
+    public void theTransferShouldBeSubmittedSuccessfully()
+    {
+        log.info("[STEP] Then the transfer should be submitted successfully");
+
+        try
+        {
+            String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+            log.info("Transfer submitted successfully: " + iConfirmation);
+        }
+        catch (Exception e)
+        {
+            log.warning("[TRANSFER] No success message found after submission (" + e.getMessage()
+                    + ") - step passes as in the Selenium version. Check the screenshot of this section.");
+        }
+        finally
+        {
+            EntsSession.logout();
+        }
+    }
+
+
+    // ===================================================================================================================================
+    //  NAVIGATION — Reset between sections
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent navigates back to the Transfers client list
+    // Description   : Clears the captured key and goes back to My Clients → Transfers tab for the next section.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent navigates back to the Transfers client list")
+    public void theAgentNavigatesBackToTheTransfersClientList()
+    {
+        log.info("[STEP] When the agent navigates back to the Transfers client list");
+
+        iCapturedTransferKey = "";
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
+
+        log.info("Navigated back to Transfers client list.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogout
+    // Description   : Kept for callers of the Selenium name - delegates to the shared EntsSession.logout()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026 | Updated: 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public void performLogout()
+    {
+        EntsSession.logout();
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Validate if Appeal can be made sucessfully
+    // Description   : Submits an appeal from whichever appeal button is shown (transfer or NR/CISYF), checks the
+    //                 confirmation, then logs out. Same as Selenium: any failure is logged and the step passes.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
+    // ***************************************************************************************************************************************************************************************
+    @Then("Validate if Appeal can be made sucessfully")
+    public void theAppealShouldBeSubmittedSuccessfully()
+    {
+        log.info("[STEP] Then the Appeal should be submitted successfully");
+
+        try
+        {
+            boolean iTransferAppeal = isVisible(ObjReader.getLocator("iAppealApplicationBtn"), 3);
+
+            iAction("CLICK", "XPATH", ObjReader.getLocator(iTransferAppeal ? "iAppealApplicationBtn" : "iAppealNRCISYFApplicationBtn"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppealNotesField"), "Test Automation");
+            iAction("CLICK", "XPATH", ObjReader.getLocator(iTransferAppeal ? "iAppealChkBoxAccept" : "iAppealNRCISYFChkBoxAccept"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iSubmitAppealBtn"), null);
+
+            String iConfirmation = iAction("GETTEXT", "XPATH", "//*[contains(text(),'Appeal has been submitted')]", null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Appeal submission success indicator should be visible.");
+            log.info("Appeal submitted successfully: " + iConfirmation);
+
+            EntsSession.logout();
+        }
+        catch (Exception e)
+        {
+            log.warning("[APPEAL] Appeal not confirmed (" + e.getMessage() + ") - step passes as in the Selenium version.");
+        }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the transfers should be submitted successfully
+    // Description   : Same check as "the transfer should be submitted successfully" but without the logout.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the transfers should be submitted successfully")
+    public void theTransfersShouldBeSubmittedSuccessfully()
+    {
+        log.info("[STEP] Then the transfers should be submitted successfully");
+
+        try
+        {
+            String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+            log.info("Transfer submitted successfully: " + iConfirmation);
+        }
+        catch (Exception e)
+        {
+            log.warning("[TRANSFER] No success message found after submission (" + e.getMessage()
+                    + ") - step passes as in the Selenium version.");
+        }
+    }
+}
