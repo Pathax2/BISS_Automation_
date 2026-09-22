@@ -13,7 +13,7 @@ WITH herd_numbers AS (
 ),
 herd_number_status AS (
     SELECT t.herd_number,
-           MAX(CASE WHEN t.death_indicator = 'Y' THEN 1 ELSE 0 END) has_y
+           MAX(CASE WHEN t.death_indicator = 'N' THEN 1 ELSE 0 END) has_n
     FROM vwco_ems_client_details t
     JOIN herd_numbers i
       ON i.app_from_herd = t.herd_number
@@ -29,8 +29,7 @@ FROM (
                PARTITION BY t.herd_number
                ORDER BY
                    CASE
-                       WHEN s.has_y = 1 AND t.death_indicator IS NULL THEN 1
-                       WHEN s.has_y = 0 AND t.death_indicator = 'N' THEN 1
+                       WHEN s.has_n = 1 AND t.death_indicator = 'N' THEN 1
                        ELSE 2
                    END,
                    t.start_date DESC
@@ -42,86 +41,4 @@ FROM (
       ON s.herd_number = t.herd_number
 )
 WHERE rn = 1
---AND herd_number IN ('D1074220','D2700981','D2361427');
---------------------------------------------------------------------
-WITH herd_numbers AS (
-    SELECT vr.herd_ols_login Login_ID,
-           vr.herd_id app_from_herd
-    FROM vwco_ents_herd_abls_rpt vr
-    WHERE vr.herd_ols_login IS NOT NULL
-      AND vr.start_date > '31-DEC-22'
-),
-herd_number_status AS (
-    SELECT t.herd_number,
-           MAX(CASE WHEN t.death_indicator = 'Y' THEN 1 ELSE 0 END) has_y
-    FROM vwco_ems_client_details t
-    JOIN herd_numbers i
-      ON i.app_from_herd = t.herd_number
-    GROUP BY t.herd_number
-)
-SELECT Login_ID,
-       initcap(payee_name) Name,
-       herd_number,
-       initcap(addr1) Address
-FROM (
-    SELECT t.*,
-           i.Login_ID,
-           ROW_NUMBER() OVER (
-               PARTITION BY t.herd_number
-               ORDER BY
-                   CASE
-                       WHEN s.has_y = 1 AND t.death_indicator IS NULL THEN 1
-                       WHEN s.has_y = 0 AND t.death_indicator = 'N' THEN 1
-                       ELSE 2
-                   END,
-                   t.start_date DESC
-           ) rn
-    FROM vwco_ems_client_details t
-    JOIN herd_numbers i
-      ON i.app_from_herd = t.herd_number
-    JOIN herd_number_status s
-      ON s.herd_number = t.herd_number
-)
-WHERE rn = 1
---AND herd_number IN ('G1740503','Q1201540','L1582159');
---------------------------------------------------------------------
-SELECT t.individual_login,
-       t.herd_number,
-       t.herd_name,
-       (
-           SELECT username
-           FROM tden_herd_etf_link, vw_sso_roles_for_user_ents
-           WHERE hel_scheme_year = 2026
-             AND hel_txor_ents_allowed > 10
-             AND businessid = hel_etf_no
-             AND hel_herd_no NOT LIKE '2%'
-             AND hel_etf_no = t.etf_no
-             AND ROWNUM = 1
-       ) AS ETF_Username
-       --,t.etf_no
-FROM (
-    SELECT ve.herd_ols_login individual_login,
-           ve.herd_id        herd_number,
-           (
-               SELECT initcap(cd.payee_name)
-               FROM vwco_ems_client_details cd
-               WHERE cd.herd_number = ve.herd_id
-                 AND ROWNUM = 1
-           ) AS herd_name,
-           (
-               SELECT hel_etf_no
-               FROM tden_herd_etf_link
-               WHERE hel_herd_no = ve.herd_id
-                 AND ROWNUM = 1
-           ) AS etf_no
-    FROM vwco_ents_herd_abls_rpt ve
-    WHERE 1 = 1
-      AND ve.cust_type = 'Individual'
-      AND ve.herd_ols_login IS NOT NULL
-      --AND ve.herd_id IN ('H2311293', 'H2590656')
-      AND ve.herd_id IN (
-          SELECT DISTINCT hel_herd_no
-          FROM tden_herd_etf_link
-          WHERE hel_grantor_type = 1
-      )
-) t;
+ 
