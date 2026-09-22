@@ -1,162 +1,406 @@
-    @When("the agent creates a transfer application with the following details")
-    public void theAgentCreatesATransferApplicationWithTheFollowingDetails(DataTable pDataTable)
+// ===================================================================================================================================
+// File          : EntsSession.java
+// Package       : stepdefinitions.ENTS
+// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
+//
+//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
+//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
+//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
+//                 themselves keep the same Gherkin text as before.
+//
+//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 22-09-2026
+// ===================================================================================================================================
+
+package stepdefinitions.ENTS;
+
+import com.microsoft.playwright.Locator;
+import commonFunctions.CommonFunctions;
+import commonFunctions.UiHelpers;
+import stepdefinitions.Hooks;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
+import utilities.ObjReader;
+
+import java.util.List;
+import java.util.logging.Logger;
+
+import static commonFunctions.CommonFunctions.iAction;
+
+final class EntsSession
+{
+    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
+
+    // How long an "if present" check waits before deciding the element is not there
+    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
+
+    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
+    static final String TRANSFERS_TAB_XPATH =
+            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
+
+    private EntsSession() { }
+
+
+    // ===================================================================================================================================
+    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
+    // ===================================================================================================================================
+
+    // Locator for a raw XPath
+    static Locator xp(String pXpath)
     {
-        log.info("[STEP] When the agent creates a transfer application with the following details");
+        return UiHelpers.byXpath(pXpath);
+    }
 
-        Map<String, String> iRaw      = pDataTable.asMap(String.class, String.class);
-        boolean             iRuntime  = EntsTestData.tableHasToken(iRaw);
-        int                 iMaxTries = iRuntime ? Math.max(1, ConfigManager.getInt("ents.pair.retries", 5)) : 1;
-        Map<String, String> iData     = null;
+    // True when the first match becomes visible within pSeconds - never throws
+    static boolean isVisible(String pXpath, int pSeconds)
+    {
+        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
+    }
 
-        // ── Steps 0-1 : pick a pair and validate both herds on screen (same checks as TC_03) ──
-        // Each herd is searched in the agent's Transfer Out list and rejected when it is
-        //   - blacklisted (Hooks.BLACKLISTED_HERDS)
-        //   - not in the list (0 rows)
-        //   - marked as expired in the Expired column
-        // A rejected herd is recorded in the used-herds file and a new pair is picked (up to ents.pair.retries).
-        // The transferee is checked first, so the last search on screen is the transferor, ready to open.
-        for (int iTry = 1; iTry <= iMaxTries; iTry++)
-        {
-            if (iRuntime)
-            {
-                EntsTestData.nextSameAgentPair(EntsTestData.loggedInUser(), iRaw.getOrDefault("transferType", "").trim());
-            }
-            iData = EntsTestData.resolveTable(iRaw);
+    // Immediate count, no waiting - same as findElements(...).size()
+    static int countOf(String pXpath)
+    {
+        return xp(pXpath).count();
+    }
 
-            String iRejectedHerd = null;
-            String iReason       = herdProblem(iData.get("transfereeHerd").trim(), "transferee");
-            if (iReason != null)
-            {
-                iRejectedHerd = iData.get("transfereeHerd").trim();
-            }
-            else
-            {
-                iReason = herdProblem(iData.get("transferorHerd").trim(), "transferor");
-                if (iReason != null) iRejectedHerd = iData.get("transferorHerd").trim();
-            }
-
-            if (iReason == null)
-            {
-                // herdProblem may have swapped a DB name for the portal name - resolve the tokens again
-                if (iRuntime) iData = EntsTestData.resolveTable(iRaw);
-                break;
-            }
-
-            if (!iRuntime || iTry == iMaxTries)
-            {
-                throw new RuntimeException("[TRANSFER] Herd " + iRejectedHerd + " is " + iReason
-                        + (iRuntime ? " (tried " + iMaxTries + " pairs - check the Agent Login query / ents.scheme.year)" : ""));
-            }
-            EntsTestData.markNotFound(iRejectedHerd, iReason);
-            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": " + iRejectedHerd + " " + iReason + " - picking another pair.");
-        }
-
-        String iTransferorHerd = iData.get("transferorHerd").trim();
-        String iTransfereeHerd = iData.get("transfereeHerd").trim();
-        String iTransfereeName = iData.get("transfereeName").trim();
-        String iTransferType   = iData.get("transferType").trim();
-        String iEntitlements   = iData.get("entitlements").trim();
-        String iNotes          = iData.get("notes").trim();
-        boolean iHasLeaseYear  = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
-
-        // The last search on screen is the transferor (checked above) - click View in ITS row
-        iAction("CLICK", "XPATH", EntsSession.transferOutRowXpath(iTransferorHerd) + "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']", null);
-        log.info("Transferor herd opened: " + iTransferorHerd);
-
-        // ── Step 2 : Click "Create Transfer Application" ─────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
-
-        // ── Step 3 : Search for the transferee ───────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), iTransfereeHerd);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), iTransfereeName);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
-        log.info("Transferee searched: " + iTransfereeName + " (" + iTransfereeHerd + ")");
-
-        // ── Step 4 : Select the transfer type ────────────────────────────────────────────
-        pause(1000);
-        iAction("CLICK", "XPATH",
-                "//mat-radio-button[contains(.,'" + iTransferType + "')] | "
-                        + "//tr[contains(.,'" + iTransferType + "')]//input | "
-                        + "//*[@value='" + iTransferType + "']",
-                null);
-        pause(1000);
-        log.info("Transfer type selected: " + iTransferType);
-
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
-
-        // ── Step 5 : Click Add on the row with the highest Available Entitlements value ───
-        // The value cells and the Add buttons are parallel lists - index N in one is index N in the other.
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferEntitlementValues"), null);
-        List<Locator> iEntitlementCells = xp(ObjReader.getLocator("iTransferEntitlementValues")).all();
-        List<Locator> iAddButtons       = xp(ObjReader.getLocator("iTransferAddEntitlementBtns")).all();
-
-        if (iEntitlementCells.isEmpty())
-        {
-            throw new RuntimeException("[TRANSFER] No entitlement rows found in 'Entitlements available to transfer' table.");
-        }
-
-        int    iMaxIndex = 0;
-        double iMaxValue = -1.0;
-
-        for (int i = 0; i < iEntitlementCells.size(); i++)
-        {
-            String iRawValue = iEntitlementCells.get(i).innerText().trim();
-            try
-            {
-                double iVal = Double.parseDouble(iRawValue);
-                log.info("[TRANSFER] Row " + (i + 1) + " entitlements: " + iVal);
-                if (iVal > iMaxValue)
-                {
-                    iMaxValue = iVal;
-                    iMaxIndex = i;
-                }
-            }
-            catch (NumberFormatException e)
-            {
-                log.warning("[TRANSFER] Could not parse entitlement value at row " + (i + 1) + ": '" + iRawValue + "' - skipping.");
-            }
-        }
-
-        if (iMaxIndex >= iAddButtons.size())
-        {
-            throw new RuntimeException("[TRANSFER] " + iEntitlementCells.size() + " entitlement row(s) but only " + iAddButtons.size() + " Add button(s) - check iTransferAddEntitlementBtns.");
-        }
-
-        log.info("[TRANSFER] Highest entitlement: " + iMaxValue + " at row " + (iMaxIndex + 1) + " - clicking Add.");
-
-        // Selenium: scrollIntoView + JavaScript click
-        Locator iTargetAddBtn = iAddButtons.get(iMaxIndex);
-        iTargetAddBtn.scrollIntoViewIfNeeded();
-        UiHelpers.jsClick(iTargetAddBtn);
-        log.info("[TRANSFER] Add clicked for entitlement value: " + iMaxValue);
-
-        // Enter the entitlement amount
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), iEntitlements);
-
-        // ── Step 5a : Lease year selection (Lease only) ──────────────────────────────────
-        if (iHasLeaseYear)
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearDropdown"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearFirstOption"), null);
-            log.info("Lease year selected.");
-        }
-
-        // Confirm the entitlement, then go to the summary / notes page
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogAddBtn"), null);
-        //Add force wait
-        pause(1000);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
-
-        // ── Step 6 : Enter transfer notes ────────────────────────────────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
-
-        log.info("Transfer application created | Type=" + iTransferType + " | Transferor=" + iTransferorHerd
-                + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
+    // Replacement for Thread.sleep
+    static void pause(long pMilliseconds)
+    {
+        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
     }
 
 
-for some reason the expired herd is not getting picked up when a heard is looked up is there a way we can iterate though rows and find a row which is not expired and click on view button/hyperlink , below is the dom stucture for your reference.
+    // ===================================================================================================================================
+    //  LOGIN
+    // ===================================================================================================================================
 
-<mat-card _ngcontent-ng-c467887954="" appearance="outlined" class="mat-mdc-card mdc-card clients-table-container mat-mdc-card-outlined mdc-card--outlined"><mat-card-content _ngcontent-ng-c467887954="" class="mat-mdc-card-content"><table _ngcontent-ng-c467887954="" mat-table="" multitemplatedatarows="" aria-label="Table that displays list of agents transfers out" matsort="" class="mat-mdc-table mdc-data-table__table cdk-table mat-sort" role="table"><!----><thead role="rowgroup" class="ng-star-inserted"><tr _ngcontent-ng-c467887954="" role="row" mat-header-row="" class="mat-mdc-header-row mdc-data-table__header-row cdk-header-row ng-star-inserted"><th _ngcontent-ng-c467887954="" role="columnheader" mat-header-cell="" mat-sort-header="" sortactiondescription="Sort by name" class="mat-sort-header mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell column-name text-header cdk-column-name mat-column-name ng-star-inserted" aria-sort="none"><div class="mat-sort-header-container mat-focus-indicator mat-sort-header-ascending" aria-describedby="cdk-describedby-message-ng-1-13" cdk-describedby-host="ng-1" tabindex="0" role="button"><div class="mat-sort-header-content"> Name </div><div class="mat-sort-header-arrow ng-star-inserted"><svg viewBox="0 -960 960 960" focusable="false" aria-hidden="true" class="ng-star-inserted"><path d="M440-240v-368L296-464l-56-56 240-240 240 240-56 56-144-144v368h-80Z"></path></svg><!----></div><!----></div></th><th _ngcontent-ng-c467887954="" role="columnheader" mat-header-cell="" mat-sort-header="" sortactiondescription="Sort by address" class="mat-sort-header mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell text-header cdk-column-address mat-column-address ng-star-inserted" aria-sort="ascending"><div class="mat-sort-header-container mat-focus-indicator mat-sort-header-sorted mat-sort-header-ascending" aria-describedby="cdk-describedby-message-ng-1-14" cdk-describedby-host="ng-1" tabindex="0" role="button"><div class="mat-sort-header-content"> Address </div><div class="mat-sort-header-arrow ng-star-inserted"><svg viewBox="0 -960 960 960" focusable="false" aria-hidden="true" class="ng-star-inserted"><path d="M440-240v-368L296-464l-56-56 240-240 240 240-56 56-144-144v368h-80Z"></path></svg><!----></div><!----></div></th><th _ngcontent-ng-c467887954="" role="columnheader" mat-header-cell="" mat-sort-header="" sortactiondescription="Sort by transferee herd" arrowposition="before" class="mat-sort-header mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell digit-header cdk-column-herdNo mat-column-herdNo ng-star-inserted" aria-sort="none"><div class="mat-sort-header-container mat-focus-indicator mat-sort-header-position-before mat-sort-header-ascending" aria-describedby="cdk-describedby-message-ng-1-15" cdk-describedby-host="ng-1" tabindex="0" role="button"><div class="mat-sort-header-content"> Herd No. </div><div class="mat-sort-header-arrow ng-star-inserted"><svg viewBox="0 -960 960 960" focusable="false" aria-hidden="true" class="ng-star-inserted"><path d="M440-240v-368L296-464l-56-56 240-240 240 240-56 56-144-144v368h-80Z"></path></svg><!----></div><!----></div></th><th _ngcontent-ng-c467887954="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell icon-number-cell column-width text-header cdk-column-expired mat-column-expired ng-star-inserted"> Expired </th><th _ngcontent-ng-c467887954="" role="columnheader" mat-header-cell="" class="mat-mdc-header-cell mdc-data-table__header-cell cdk-header-cell icon-number-cell cdk-column-transfers mat-column-transfers ng-star-inserted"> Transfers </th><!----></tr><!----></thead><tbody role="rowgroup" class="mdc-data-table__content ng-star-inserted"><tr _ngcontent-ng-c467887954="" role="row" mat-row="" class="mat-mdc-row mdc-data-table__row cdk-row example-element-row ng-star-inserted"><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell column-name text-header cdk-column-name mat-column-name ng-star-inserted" role="cell">Thomas Morris</td><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell long-text text-header cdk-column-address mat-column-address ng-star-inserted" role="cell" title="Errarooey Meadows, Kildare, Ballinasloe, Co Galway, H60 C4vt"> Errarooey Meadows, Kildare, Ballinasloe, Co Galway, H60 C4vt</td><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell digit-header cdk-column-herdNo mat-column-herdNo ng-star-inserted" role="cell">D3990193</td><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell icon-number-cell text-header cdk-column-expired mat-column-expired ng-star-inserted" role="cell"><mat-icon _ngcontent-ng-c467887954="" role="img" aria-hidden="false" aria-label="red check mark for expired" class="mat-icon notranslate red material-icon-outline material-icons mat-ligature-font mat-icon-no-color ng-star-inserted" data-mat-icon-type="font"> do_not_disturb_on </mat-icon><!----></td><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell icon-number-cell cdk-column-transfers mat-column-transfers ng-star-inserted" role="cell"><a _ngcontent-ng-c467887954="" href="https://ents-agfood-ui-ents-sit.apps.services1.agriculture.gov.ie/#/transfer-of-entitlements/overview/68275/21557/2026">View</a></td><!----></tr><tr _ngcontent-ng-c467887954="" role="row" mat-row="" class="mat-mdc-row mdc-data-table__row cdk-row example-element-row ng-star-inserted"><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell column-name text-header cdk-column-name mat-column-name ng-star-inserted" role="cell">Jean Doolaghty</td><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell long-text text-header cdk-column-address mat-column-address ng-star-inserted" role="cell" title="Home Avenue, Ballyfarna, Co Wexford, K16 4r6t"> Home Avenue, Ballyfarna, Co Wexford, K16 4r6t</td><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell digit-header cdk-column-herdNo mat-column-herdNo ng-star-inserted" role="cell">D3990193</td><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell icon-number-cell text-header cdk-column-expired mat-column-expired ng-star-inserted" role="cell"><!----></td><td _ngcontent-ng-c467887954="" mat-cell="" class="mat-mdc-cell mdc-data-table__cell cdk-cell icon-number-cell cdk-column-transfers mat-column-transfers ng-star-inserted" role="cell"><a _ngcontent-ng-c467887954="" href="https://ents-agfood-ui-ents-sit.apps.services1.agriculture.gov.ie/#/transfer-of-entitlements/overview/4772440/2192374/2026">View</a></td><!----></tr><!----><!----></tbody><tfoot role="rowgroup" style="display: none; bottom: 0px; z-index: 10;" class="ng-star-inserted mat-mdc-table-sticky"><!----></tfoot><!----><!----></table><lib-biss-paginator _ngcontent-ng-c467887954="" _nghost-ng-c556915271=""><div _ngcontent-ng-c556915271=""><mat-paginator _ngcontent-ng-c556915271="" role="group" class="mat-mdc-paginator biss-paginator"><div class="mat-mdc-paginator-outer-container"><div class="mat-mdc-paginator-container"><div class="mat-mdc-paginator-page-size ng-star-inserted"><div aria-hidden="true" class="mat-mdc-paginator-page-size-label" id="mat-paginator-page-size-label-2"> Items per page: </div><mat-form-field class="mat-mdc-form-field mat-mdc-paginator-page-size-select mat-mdc-form-field-type-mat-select mat-form-field-appearance-outline mat-primary ng-star-inserted mat-form-field-animations-enabled"><!----><div class="mat-mdc-text-field-wrapper mdc-text-field mdc-text-field--outlined mdc-text-field--no-label"><!----><div class="mat-mdc-form-field-flex"><div matformfieldnotchedoutline="" class="mdc-notched-outline mdc-notched-outline--no-label ng-star-inserted"><div class="mat-mdc-notch-piece mdc-notched-outline__leading"></div><div class="mat-mdc-notch-piece mdc-notched-outline__notch"><!----><!----><!----></div><div class="mat-mdc-notch-piece mdc-notched-outline__trailing"></div></div><!----><!----><!----><div class="mat-mdc-form-field-infix"><!----><mat-select role="combobox" aria-haspopup="listbox" hidesingleselectionindicator="" class="mat-mdc-select" aria-labelledby=" mat-paginator-page-size-label-2" id="mat-select-1" tabindex="0" aria-expanded="false" aria-required="false" aria-disabled="false" aria-invalid="false"><div cdk-overlay-origin="" class="mat-mdc-select-trigger"><div class="mat-mdc-select-value" id="mat-select-value-1"><!----><span class="mat-mdc-select-value-text ng-star-inserted"><!----><span class="mat-mdc-select-min-line ng-star-inserted">10</span><!----></span><!----></div><div class="mat-mdc-select-arrow-wrapper"><div class="mat-mdc-select-arrow"><svg viewBox="0 0 24 24" width="24px" height="24px" focusable="false" aria-hidden="true"><path d="M7 10l5 5 5-5z"></path></svg></div></div></div><!----></mat-select><div class="mat-mdc-paginator-touch-target"></div></div><!----><!----></div><!----></div><div aria-atomic="true" aria-live="polite" class="mat-mdc-form-field-subscript-wrapper mat-mdc-form-field-bottom-align"><!----><div class="mat-mdc-form-field-hint-wrapper ng-star-inserted"><!----><div class="mat-mdc-form-field-hint-spacer"></div></div><!----></div></mat-form-field><!----><!----></div><!----><div class="mat-mdc-paginator-range-actions"><div aria-atomic="true" aria-live="polite" role="status" class="mat-mdc-paginator-range-label"> 1 – 2 of 2 </div><button maticonbutton="" type="button" mattooltipposition="above" disabledinteractive="" class="mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger mat-mdc-paginator-navigation-first mat-mdc-button-disabled mat-mdc-button-disabled-interactive mat-unthemed mat-mdc-tooltip-disabled ng-star-inserted" mat-ripple-loader-class-name="mat-mdc-button-ripple" mat-ripple-loader-centered="" mat-ripple-loader-disabled="" aria-label="First page" aria-disabled="true" tabindex="-1"><span class="mat-mdc-button-persistent-ripple mdc-icon-button__ripple"></span><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" class="mat-mdc-paginator-icon"><path d="M18.41 16.59L13.82 12l4.59-4.59L17 6l-6 6 6 6zM6 6h2v12H6z"></path></svg><!----><span class="mat-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span><span class="mat-ripple mat-mdc-button-ripple"></span></button><!----><!----><button maticonbutton="" type="button" mattooltipposition="above" disabledinteractive="" class="mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger mat-mdc-paginator-navigation-previous mat-mdc-button-disabled mat-mdc-button-disabled-interactive mat-unthemed mat-mdc-tooltip-disabled" mat-ripple-loader-uninitialized="" mat-ripple-loader-class-name="mat-mdc-button-ripple" mat-ripple-loader-centered="" mat-ripple-loader-disabled="" aria-label="Previous page" aria-disabled="true" tabindex="-1"><span class="mat-mdc-button-persistent-ripple mdc-icon-button__ripple"></span><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" class="mat-mdc-paginator-icon"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"></path></svg><!----><span class="mat-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span></button><!----><button maticonbutton="" type="button" mattooltipposition="above" disabledinteractive="" class="mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger mat-mdc-paginator-navigation-next mat-mdc-button-disabled-interactive mat-unthemed mat-mdc-button-disabled mat-mdc-tooltip-disabled" mat-ripple-loader-uninitialized="" mat-ripple-loader-class-name="mat-mdc-button-ripple" mat-ripple-loader-centered="" aria-label="Next page" mat-ripple-loader-disabled="" aria-disabled="true" tabindex="-1"><span class="mat-mdc-button-persistent-ripple mdc-icon-button__ripple"></span><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" class="mat-mdc-paginator-icon"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"></path></svg><!----><span class="mat-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span></button><!----><button maticonbutton="" type="button" mattooltipposition="above" disabledinteractive="" class="mdc-icon-button mat-mdc-icon-button mat-mdc-button-base mat-mdc-tooltip-trigger mat-mdc-paginator-navigation-last mat-mdc-button-disabled-interactive mat-unthemed ng-star-inserted mat-mdc-button-disabled mat-mdc-tooltip-disabled" mat-ripple-loader-uninitialized="" mat-ripple-loader-class-name="mat-mdc-button-ripple" mat-ripple-loader-centered="" aria-label="Last page" mat-ripple-loader-disabled="" aria-disabled="true" tabindex="-1"><span class="mat-mdc-button-persistent-ripple mdc-icon-button__ripple"></span><svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" class="mat-mdc-paginator-icon"><path d="M5.59 7.41L10.18 12l-4.59 4.59L7 18l6-6-6-6zM16 6h2v12h-2z"></path></svg><!----><span class="mat-focus-indicator"></span><span class="mat-mdc-button-touch-target"></span></button><!----><!----></div></div></div></mat-paginator></div></lib-biss-paginator></mat-card-content></mat-card>
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : loginAs
+    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
+    //                 Same sequence as the Selenium ENTS login steps:
+    //                   username -> Continue -> password (TD:Password) -> Login
+    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
+    //                   otherwise :  OTP 111111 -> Login
+    //                 If the username box is not on screen (for example after an earlier section left the portal open),
+    //                 the base URL is opened first.
+    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
+    //
+    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
+    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
+    //                 and then logged in again as the same expired ENTS user, which could never succeed.
+    //
+    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
+    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
+    // ***************************************************************************************************************************************************************************************
+    static void loginAs(String pUsername, String pLogPrefix)
+    {
+        log.info(pLogPrefix + " Logging in as: " + pUsername);
+
+        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
+        {
+            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
+            UiHelpers.navigateTo(Hooks.iUrl);
+        }
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
+
+        // -- Account Expired -------------------------------------------------------------------------------------
+        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
+        if (isVisible(iExpiredXpath, PROBE_SECONDS))
+        {
+            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
+                    + ". Use another login in the feature file or ask for the account to be renewed.");
+        }
+
+        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
+        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
+        {
+            log.info(pLogPrefix + " PIN screen detected.");
+            fillPinSlots(pLogPrefix);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+            log.info(pLogPrefix + " PIN login submitted.");
+
+            acceptTermsIfShown(pLogPrefix, 2);
+
+            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
+            for (int iNext = 1; iNext <= 7; iNext++)
+            {
+                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
+            }
+
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info(pLogPrefix + " TOTP submitted.");
+
+            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
+        }
+        else
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info(pLogPrefix + " OTP login submitted.");
+        }
+
+        EntsTestData.setLoggedInUser(pUsername);
+        log.info(pLogPrefix + " Login complete: " + pUsername);
+    }
+
+    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
+    private static void fillPinSlots(String pLogPrefix)
+    {
+        for (int idx = 1; idx <= 7; idx++)
+        {
+            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+            if (!isVisible(iSlotXpath, 1))
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
+                continue;
+            }
+
+            Locator iInput = xp(iSlotXpath).first();
+            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+            {
+                iInput.fill("");
+                iInput.pressSequentially("1");
+                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
+            }
+            else
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
+            }
+        }
+    }
+
+    // Ticks and accepts Terms & Conditions when the screen is shown
+    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
+    {
+        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info(pLogPrefix + " Terms & Conditions accepted.");
+        }
+    }
+
+
+    // ===================================================================================================================================
+    //  LOGOUT
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : logout
+    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
+    //                 base URL so the next login starts on a clean Keycloak page.
+    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
+    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // ***************************************************************************************************************************************************************************************
+    static void logout()
+    {
+        log.info("[RELOGIN] Logging out current session...");
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            }
+            log.info("[RELOGIN] Logout complete.");
+        }
+        catch (Exception e)
+        {
+            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
+        }
+
+        UiHelpers.clearCookies();
+        UiHelpers.navigateTo(Hooks.iUrl);
+        EntsTestData.setLoggedInUser("");
+    }
+
+
+    // ===================================================================================================================================
+    //  TRANSFER OUT LIST - search one herd and open it
+    // ===================================================================================================================================
+
+    // Cells of a Transfer Out row (Angular mat-table column classes, checked against the DOM on 22-09-2026)
+    static final String VIEW_LINK_XPATH    = "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']";
+    static final String NAME_CELL_XPATH    = "//td[contains(@class,'mat-column-name')]";
+    static final String EXPIRED_CELL_XPATH = "//td[contains(@class,'mat-column-expired')]";
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transferOutAllRowsXpath
+    // Description   : XPath of EVERY Transfer Out row of one herd, expired or not: rows whose Herd No. cell is exactly
+    //                 the herd and that have a View link.
+    //                 One herd can have several rows, one per holder. Seen 22-09-2026 for D3990193: "Thomas Morris"
+    //                 (Expired icon shown) and "Jean Doolaghty" (not expired). Both rows hold the same herd number.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String transferOutAllRowsXpath(String pHerd)
+    {
+        return "//tr[." + VIEW_LINK_XPATH + "]"
+                + "[.//td[contains(@class,'mat-column-herdNo')][normalize-space()='" + pHerd + "']]";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transferOutRowXpath
+    // Description   : XPath of the NOT-EXPIRED Transfer Out row(s) of one herd. The row to open, name to read and View
+    //                 link to click always come from here.
+    //                 A row is expired when its Expired cell holds the red icon
+    //                   <mat-icon aria-label="red check mark for expired"> do_not_disturb_on </mat-icon>
+    //                 and not expired when that cell is empty.
+    //                 Clicking "the first View link" is not safe either: until the search result arrives the list still
+    //                 shows unfiltered rows, including TRN rows (seen 22-09-2026: a click opened TRN 26D0957T).
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
+    // ***************************************************************************************************************************************************************************************
+    static String transferOutRowXpath(String pHerd)
+    {
+        return transferOutAllRowsXpath(pHerd) + "[not(." + EXPIRED_CELL_XPATH + "//mat-icon)]";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : searchTransferOut
+    // Description   : Types the herd in the Transfer Out search box, clicks Search and waits until a row for THAT herd
+    //                 is shown (up to ents.search.seconds). Returns false when it never appears.
+    //                 Then goes through every row of the herd and logs Name + Expired for each, so the log shows which
+    //                 row will be used. Expired rows are not rejected here - see activeTransferOutRows.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (logs every row)
+    // ***************************************************************************************************************************************************************************************
+    static boolean searchTransferOut(String pHerd)
+    {
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        if (!isVisible(transferOutAllRowsXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 8)))
+        {
+            return false;
+        }
+
+        List<Locator> iRows = xp(transferOutAllRowsXpath(pHerd)).all();
+        for (int i = 0; i < iRows.size(); i++)
+        {
+            Locator iRow     = iRows.get(i);
+            boolean iExpired = iRow.locator("xpath=." + EXPIRED_CELL_XPATH + "//mat-icon").count() > 0;
+            String  iName    = "";
+            try
+            {
+                iName = iRow.locator("xpath=." + NAME_CELL_XPATH).first().innerText().trim().replaceAll("\\s+", " ");
+            }
+            catch (Exception iEx)
+            {
+                iName = "?";
+            }
+            log.info("[TRANSFER] " + pHerd + " row " + (i + 1) + "/" + iRows.size() + ": Name='" + iName + "' | "
+                    + (iExpired ? "EXPIRED - skipped" : "not expired"));
+        }
+        return true;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : activeTransferOutRows
+    // Description   : Number of NOT-expired rows of the herd currently on screen (call after searchTransferOut).
+    //                 0 means every row of the herd is expired.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static int activeTransferOutRows(String pHerd)
+    {
+        return countOf(transferOutRowXpath(pHerd));
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transferOutName
+    // Description   : Name cell of the first NOT-expired row of the herd, or "" when there is none
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String transferOutName(String pHerd)
+    {
+        String iCell = transferOutRowXpath(pHerd) + NAME_CELL_XPATH;
+        try
+        {
+            if (countOf(iCell) > 0) return xp(iCell).first().innerText().trim().replaceAll("\\s+", " ");
+        }
+        catch (Exception iEx)
+        {
+            log.warning("[TRANSFER] Could not read the portal name of " + pHerd + ": " + iEx.getMessage());
+        }
+        return "";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : clickTransferOutView
+    // Description   : Clicks View in the first NOT-expired row of the herd (the list must already show it)
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void clickTransferOutView(String pHerd)
+    {
+        if (activeTransferOutRows(pHerd) == 0)
+        {
+            throw new IllegalStateException("[TRANSFER] Every Transfer Out row of herd " + pHerd + " is marked expired - nothing to open.");
+        }
+        iAction("CLICK", "XPATH", "(" + transferOutRowXpath(pHerd) + VIEW_LINK_XPATH + ")[1]", null);
+        log.info("[TRANSFER] Opened herd " + pHerd + " ('" + transferOutName(pHerd) + "' row) from Transfer Out.");
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openTransferOutHerd
+    // Description   : searchTransferOut + clicks View in the first NOT-expired row of that herd. Fails with the herd
+    //                 number and agent in the message when the herd is not in the list or every row is expired.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
+    // ***************************************************************************************************************************************************************************************
+    static void openTransferOutHerd(String pHerd)
+    {
+        if (!searchTransferOut(pHerd))
+        {
+            throw new IllegalStateException("[TRANSFER] Herd " + pHerd + " is not in the Transfer Out list of "
+                    + EntsTestData.loggedInUser() + " (waited " + ConfigManager.getInt("ents.search.seconds", 8) + " s).");
+        }
+        clickTransferOutView(pHerd);
+    }
+
+
+    // ===================================================================================================================================
+    //  NAVIGATION
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openBissMyClientsTransfers
+    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
+    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void openBissMyClientsTransfers()
+    {
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
+    }
+}
