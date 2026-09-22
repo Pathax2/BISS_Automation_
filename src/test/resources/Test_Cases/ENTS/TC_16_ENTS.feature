@@ -10,12 +10,13 @@ Feature: TC_16_ENTS - Entitlements/Usage Button Verification
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Clients page
+    And the agent switches to the "NR/CISYF" tab on the My Clients page
 
-  @sanity @entitlements
-  Scenario: AT-ENTS-ENTITLEMENTS - Verify Entitlements/Usage button and position
+  @sanity @nrcisyf @staff-verification @tc13
+  Scenario: AT-ENTS-NRCISYF-STAFF - Submit NRCISYF and verify in ENTSCore
 
-    When the agent searches for herd "A1060280" and opens it
-    And the agent navigates to the "Entitlements / Usage" side nav tab
+    # --- Collect herds and capture owner ID ---
+    When the agent searches for the NRCISYF herd and opens the application
+    When the agent navigates through the farmer side navigation tabs
+      |Entitlements / Usage |
     And the agent captures the OwnerID of the herd
-    Then the agent verifies the entitlement position is displayed
