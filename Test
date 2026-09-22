@@ -1,122 +1,260 @@
-// ===================================================================================================================================
-// File          : TC_07_ENTS.java
-// Package       : stepdefinitions.ENTS
-// Description   : Step definitions for TC_07_ENTS — Transfer Application E2E (Agent to ETF Partner).
-//
-//                 Steps in this file (2):
-//                   1. the agent logs out and re-logs in as the ETF partner {string}
-//                   2. the ETF partner completes the transferee acceptance flow (DataTable)
-//
-//                 Step 2 is also used by TC_01_ENTS (same agent): when the ETF button is not on the dashboard, the
-//                 standard "View Transfer Application" route is taken, which is the agent's own acceptance screen.
-//
-//                 Playwright edition (22-09-2026):
-//                   - Same step texts, same ObjectRepository keys, same flow.
-//                   - transfereeHerd may be a runtime token such as {transferee.herd} (utilities.EntsTestData).
-//                   - Login / logout use the shared EntsSession helpers.
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
-// ===================================================================================================================================
+# ===================================================================================================================================
+# File          : application.properties
+# Description   : Base configuration defaults for the BISS automation framework (Playwright edition).
+#                 These values apply to ALL environments unless overridden by a profile file.
+#                 Profile files (application-dev.properties, application-docker.properties, etc.)
+#                 overlay and override these values for specific environments.
+#
+# Folder        : src/test/resources/config/application.properties
+#
+# Resolution    : -Dkey=value  >  BISS_KEY environment variable  >  application-<env>.properties  >  this file
+# Activation    : This file is always loaded. Profile overlay activated via -Denv=<profile> (default dev)
+#
+# Author        : Aniket Pathare | aniket.pathare@goverment.ie
+# Date Created  : 10-03-2026
+# Updated       : 16-09-2026 - Playwright keys added, Selenium-only keys removed
+#                 16-09-2026 - browser.zoom.percent (67), click.strategy, click.attempt.timeout.ms 5000
+#                 16-09-2026 - browser.https.upgrades, dialog handling, [BROWSER] event log
+#                 17-09-2026 - browser.cleanup.before.start, browser.cleanup.temp.folders, execution.fail.fast
+#                 18-09-2026 - browser.cleanup.scope, trace.screenshots, trace.snapshots (suite run speed)
+#                 18-09-2026 - browser.reuse: one browser for the whole run, clean session per test case
+# ===================================================================================================================================
 
-package stepdefinitions.ENTS;
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Browser Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Supported values: CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
+browser=CHROME
 
-import io.cucumber.datatable.DataTable;
-import io.cucumber.java.en.*;
-import org.junit.jupiter.api.Assertions;
-import utilities.EntsTestData;
-import utilities.ObjReader;
+# Installed browser to drive instead of Playwright's bundled Chromium: blank | chrome | msedge
+# (a value here also stops Playwright from trying to download browsers)
+browser.channel=
 
-import java.util.Map;
-import java.util.logging.Logger;
+# false = Playwright default (--no-sandbox, needed when Chrome runs as root, e.g. in Docker). The dev profile sets true.
+browser.chromium.sandbox=false
 
-import static commonFunctions.CommonFunctions.iAction;
-import static stepdefinitions.ENTS.EntsSession.isVisible;
-import static stepdefinitions.ENTS.EntsSession.pause;
+# true = ONE browser for the whole run. Each test case still starts clean: new tab, cookies cleared and the site's
+# storage wiped, so every test case logs in again. Saves the 8-30 s Chrome start and the 10-14 s close per test case.
+# false = a new browser per test case (the behaviour up to 17-09).
+browser.reuse=true
 
-public class TC_07_ENTS
-{
-    private static final Logger log = Logger.getLogger(TC_07_ENTS.class.getName());
+# 0 = keep the same browser for the whole run. Set e.g. 10 to start a fresh browser every 10 test cases.
+browser.reuse.max.testcases=0
 
+# Browser processes stopped before each test case starts (replaces the Selenium killProcessByName("chrome")):
+#   none       = nothing stopped
+#   automation = only browsers started by Playwright or Selenium (your own Chrome windows stay open)
+#   all        = every chrome.exe (msedge.exe for Edge), like the Selenium framework - your own Chrome windows close too
+# chromedriver.exe left over from Selenium runs is stopped by automation and all.
+browser.cleanup.before.start=automation
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent logs out and re-logs in as the ETF partner {string}
-    // Description   : Logs out of the current session and logs in as the ETF partner.
-    // Parameters    : pPartnerUsername (String) - Partner login e.g. "agr15594", "agr15678", "agr15512"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent logs out and re-logs in as the ETF partner {string}")
-    public void theAgentLogsOutAndReLogsInAsTheETFPartner(String pPartnerUsername)
-    {
-        log.info("[STEP] When the agent logs out and re-logs in as the ETF partner: " + pPartnerUsername);
+# true = on the first test case of a run, delete old Playwright temp folders (profiles, driver copies) from %TEMP%
+browser.cleanup.temp.folders=true
 
-        EntsSession.logout();
-        EntsSession.loginAs(pPartnerUsername, "[ETF-LOGIN]");
+# automation mode only: run = scan process command lines once per run (fast), testcase = before every test case (slow)
+browser.cleanup.scope=run
 
-        log.info("Re-logged in as ETF partner: " + pPartnerUsername);
-    }
+# true = never download browsers (laptops behind the department web gateway)
+playwright.skip.browser.download=false
 
+# Run browser in headless mode (no visible window) - set true for CI/Bamboo agents and Docker
+headless=false
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the ETF partner completes the transferee acceptance flow (DataTable)
-    // Description   : 1. Searches for the transferee herd and clicks View
-    //                 2. ETF button shown (ETF partner): ETF -> transfer key -> View Transfer Application
-    //                    otherwise (agent)             : View Transfer Application (2) -> transfer key -> View
-    //                 3. Enters notes, Submit Application to DAFM, accepts T&C, confirms
-    //
-    //                 DataTable keys:
-    //                   transfereeHerd (String) - herd number, or {transferee.herd}
-    //                   notes          (String) - transferee notes e.g. "Approved Test"
-    //
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
-    // ***************************************************************************************************************************************************************************************
-    @And("the ETF partner completes the transferee acceptance flow")
-    public void theETFPartnerCompletesTheTransfereeAcceptanceFlow(DataTable pDataTable)
-    {
-        log.info("[STEP] And the ETF partner completes the transferee acceptance flow");
+# Window / viewport
+browser.maximize=false
+viewport.width=1920
+viewport.height=1080
 
-        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+# Locale and timezone used by every browser context
+browser.locale=en-IE
+browser.timezone=Europe/Dublin
 
-        String iTransfereeHerd = iData.get("transfereeHerd").trim();
-        String iNotes          = iData.get("notes").trim();
-        String iTransferKey    = TC_01_ENTS.iCapturedTransferKey;
+# Accept internal / self-signed certificates
+ignore.https.errors=false
 
-        Assertions.assertFalse(iTransferKey == null || iTransferKey.isEmpty(),
-                "Transfer key must have been captured in the Transferor flow before the transferee can accept.");
+# Open http:// links over https:// first, exactly like normal Chrome (Chrome 'HTTPS-Upgrades').
+# Playwright turns this off by default; without it the BISS Exit link (http://agfood.icentest...) times out on port 80.
+browser.https.upgrades=true
 
-        // ── Search for the transferee herd ───────────────────────────────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iTransfereeHerd);
-        pause(2000);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
-        log.info("Transferee herd opened: " + iTransfereeHerd);
+# Safety net: hosts that are always redirected from http:// to https:// (comma-separated, *.domain allowed).
+# Leave blank unless a host still times out with browser.https.upgrades=true. Example:
+# browser.https.upgrade.hosts=agfood.icentest.agriculture.gov.ie
+browser.https.upgrade.hosts=
 
-        if (isVisible(ObjReader.getLocator("iETFBtn"), 3))
-        {
-            // ETF partner dashboard - dedicated ETF button
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
-            log.info("ETF button clicked.");
-        }
-        else
-        {
-            // Agent dashboard - standard View Transfer Application button
-            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
-            iAction("CLICK",       "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
-        }
+# Browser proxy (blank = use the operating system settings)
+browser.proxy.server=
+browser.proxy.bypass=
 
-        // ── Enter the captured transfer key and open the application ─────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iTransferKey);
-        log.info("Transfer key entered: " + iTransferKey);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+# Visual aids for local runs
+highlight.enabled=false
+playwright.slowmo.ms=0
 
-        // ── Notes, Submit to DAFM, T&C, confirm ─────────────────────────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+# Page zoom, same as Ctrl+minus in Chrome (100 = normal). 67 matches the Selenium framework
+# (ChromeOptions profile.default_zoom_level = -2.196545). Other examples: 70, 75, 80, 90
+browser.zoom.percent=67
 
-        log.info("Transferee acceptance completed for herd: " + iTransfereeHerd);
-    }
-}
+# Extra CSS zoom on the page body only (the old per-action document.body.style.zoom='84%').
+# 100 = off. Normally leave this at 100 and use browser.zoom.percent instead.
+ui.zoom.percent=100
+
+# false = first matching element (Selenium behaviour), true = Playwright strict mode
+locator.strict=false
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Wait Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Maximum seconds for any element action (click, fill, visible ...)
+explicit.wait.seconds=20
+
+# Maximum seconds for page navigation
+page.load.timeout.seconds=30
+
+# Polling interval for custom waits (milliseconds)
+wait.polling.interval.ms=250
+
+# Click strategy for CLICK, RADIOBUTTON, CHECKBOX, LIST ...
+#   auto   = normal click; JavaScript click if the normal click is blocked (Selenium ElementClickIntercepted behaviour)
+#   js     = always JavaScript click (arguments[0].click())
+#   native = normal click only, no JavaScript fallback
+# The JSCLICK action always uses a JavaScript click, whatever this is set to.
+click.strategy=auto
+
+# How long a normal click may be blocked (overlay, spinner) before the JavaScript click is used (milliseconds)
+click.attempt.timeout.ms=5000
+
+# Browser pop-up dialogs (alert / confirm / prompt): accept = click OK, dismiss = click Cancel.
+# 'Leave site?' pop-ups are always accepted. UiHelpers.acceptNextDialog() / dismissNextDialog() override one dialog.
+dialog.default.action=accept
+
+# [BROWSER] lines in the run log: page changes, new tabs, dialogs, failed requests, HTTP 4xx/5xx, console errors
+log.browser.events=true
+log.browser.console.errors=true
+
+# How long an "if present" / "if applicable" step looks for an optional element before deciding it is absent.
+# This wait is paid every time such an element is NOT there, so keep it small (the action timeout above is not used).
+probe.timeout.seconds=3
+
+# WAITVISIBLE / VERIFYELEMENT / LIST option timeouts (seconds)
+wait.visible.seconds=30
+verify.element.timeout.seconds=20
+list.option.timeout.seconds=30
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Retry Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Number of times to retry a failed test case (0 = no retry)
+retry.count=1
+
+# Exception types that trigger a retry (comma-separated simple class names) - Playwright names
+retry.on.exceptions=TimeoutError,PlaywrightException
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Test Data
+# -----------------------------------------------------------------------------------------------------------------------------------
+test.data.file.path=src/test/resources/Test_Data/TestData.xlsx
+test.data.sheet.name=Data
+
+# Write the runtime HerdNumber / Username back into TestData.xlsx
+testdata.writeback.enabled=true
+
+# Oracle herd/agent bootstrap before each test case (false = use the sheet values)
+db.bootstrap=true
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Execution Control
+# -----------------------------------------------------------------------------------------------------------------------------------
+execution.control.path=src/test/resources/Execution_Control_File/ExecutionControl.xlsx
+execution.control.sheet=Sheet1
+
+# Write PASS / FAIL back into the Status column
+execution.control.writeback=true
+
+# Comma-separated IDs to run regardless of the Execution flag (blank = Execution=Y rows)
+testcase.ids=
+
+# true  = when a scenario fails, the remaining scenarios of that test case are skipped and the runner moves on to the
+#         next test case in ExecutionControl.xlsx (a failed step already stops its own scenario)
+# false = every scenario of the test case still runs
+execution.fail.fast=true
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Object Repository
+# -----------------------------------------------------------------------------------------------------------------------------------
+object.repository.path=src/test/resources/Object_Repository/ObjectRepository.properties
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Feature Files
+# -----------------------------------------------------------------------------------------------------------------------------------
+feature.directory.path=src/test/resources/Test_Cases/
+glue.package=stepdefinitions
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Reporting
+# -----------------------------------------------------------------------------------------------------------------------------------
+report.docs.path=Test_Report/docs
+report.screenshots.path=Test_Report/screenshots
+report.html.path=Test_Report/html/
+report.traces.path=Test_Report/traces
+report.downloads.path=Test_Report/downloads
+junit.xml.path=target/surefire-reports/
+
+# Playwright trace: off | on | retain-on-failure
+trace.mode=retain-on-failure
+
+# Screencast inside the trace: false keeps every action fast, true records a filmstrip of the run
+trace.screenshots=false
+# DOM snapshot per action - this is what the trace viewer replays. Keep true.
+trace.snapshots=true
+
+# Screenshot on PASS as well (true = capture every step, false = failure only)
+screenshot.on.pass=false
+
+# Auto-delete screenshots older than N days (0 = never delete)
+screenshot.retention.days=30
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Email Notification
+# -----------------------------------------------------------------------------------------------------------------------------------
+notify.email.enabled=false
+notify.email.smtp.host=smtp.office365.com
+notify.email.smtp.port=587
+notify.email.smtp.starttls=true
+notify.email.from=automation@biss.ie
+notify.email.to=qa-team@biss.ie
+# notify.email.password - set via Bamboo plan variable or BISS_NOTIFY_EMAIL_PASSWORD, never store here
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Database (optional - leave blank if not used)
+# -----------------------------------------------------------------------------------------------------------------------------------
+db.enabled=false
+db.driver=oracle.jdbc.OracleDriver
+db.url=
+db.username=
+# db.password - set via Bamboo plan variable or BISS_DB_PASSWORD, never store here
+db.connection.pool.size=5
+db.query.timeout.seconds=30
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------------------------------------------------------------
+log.level=INFO
+log.output.path=target/logs/
+
+# ---- ENTS runtime test data (utilities.EntsTestData) ----
+# Rows fetched per ENTS query (random order). The Agent Login query runs once per agent per run.
+ents.pool.size=200
+# true = a herd listed in the used-herds file is never picked again
+ents.skip.used.herds=true
+# One line per herd handed out: timestamp,testcase,role,herd,login,purpose. Delete the file to start again.
+ents.used.herds.file=runtime-data/ents_used_herds.csv
+# Agent Login query: only herds holding entitlements in this scheme year (blank = all years, as on Confluence)
+ents.scheme.year=2026
+# Agent Login query: only herds of this customer type (vwco_ents_herd_abls_rpt.cust_type). Blank = all types.
+# Joint Venture herds (e.g. D3900895) are not in the agent's Transfer Out list.
+ents.cust.type=Individual
+# When a picked transferor is not in the agent's Transfer Out list, try this many pairs before failing
+ents.pair.retries=5
+# How long to wait for the Transfer Out search result before treating the herd as not found
+ents.search.seconds=8
+# ENTS test cases skip the BISS herd + agent DB lookup (they get their data from the ENTS queries)
+db.bootstrap.ents=false
