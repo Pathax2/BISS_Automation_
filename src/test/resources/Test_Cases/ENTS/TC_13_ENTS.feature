@@ -598,7 +598,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
       | hasQualification   | Yes                                                                |
       | dateOfCompletion   | 01/01/2026                                                         |
       | certificateAwarded | Yes                                                                |
-      | college            | The educational institution I attended does not appear in this list |
+      | college            | The educational institution I attended does not appear in this list|
       | customCollege      | Dublin Institute of Technology                                     |
       | qualification      | FETAC Certificate in Farming                                       |
     And the agent proceeds to the summary step
@@ -679,7 +679,7 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent proceeds to the qualification step
     When the agent completes the qualification details
       | hasQualification   | Yes                             |
-      | dateOfCompletion   | 01/01/2026                               |
+      | dateOfCompletion   | 01/01/2026                      |
       | certificateAwarded | Yes                             |
       | college            | Athlone Institute of Technology |
       | qualification      | FETAC Certificate in Farming    |
@@ -696,6 +696,8 @@ Feature: TC_13 - NRCISYF End-to-End Regression Pack
     And the agent switches to the "NR/CISYF" tab on the My Clients page
     And the agent searches for the NRCISYF herd and opens the application
     And the agent views the submitted NRCISYF application
+    When the agent navigates through the farmer side navigation tabs
+      | My Correspondence                 |
     Then the uploaded documents should be accessible in correspondence
     And the agent clicks on the "Education Documentation" document link
     Then the document should open or download successfully
