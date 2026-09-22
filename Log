@@ -1,256 +1,482 @@
-Feature: TC_01_ENTS - Transfer Application End-to-End Regression Pack (Same Agent)
+package utilities;
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Single end-to-end regression journey covering all Transfer of Entitlements flows
-  #   within the same agent in the BISS Application Portal.
-  #
-  #   Each section performs the full Transferor → Transferee cycle:
-  #     Transferor : Search herd → Create Transfer → Search transferee → Select type →
-  #                  Add entitlement → Notes → Upload document → Send for acceptance
-  #     Transferee : Navigate to Transfers → Search herd → View → Enter transfer key →
-  #                  Notes → Submit to DAFM
-  #
-  #   Transfer types covered:
-  #     Section 1 : Change of Legal Entity  (code 206)
-  #     Section 2 : Change of Registration  (code 201)
-  #     Section 3 : Inheritance             (code 201)
-  #     Section 4 : Gift                    (code 202)
-  #     Section 5 : Lease                   (code 211) — includes lease year selection
-  #     Section 6 : Division                (code 204)
-  #     Section 7 : Sale                    (code 212)
-  #
-  # Migrated from: TC_01_ENTS.feature (legacy 8 separate scenarios)
-  #   TC_01 → Section 1    TC_02 → Section 2    TC_03 → Section 3    TC_04 → Section 4
-  #   TC_05 → Section 5    TC_07 → Section 6    TC_08 → Section 7
-  #
-  # Notes:
-  #   1. Runtime test data (Playwright edition, 22-09-2026): {transferor.herd}, {transferee.herd} and
-  #      {transferee.name} are replaced at run time by two random, unused herds of the logged-in agent
-  #      (ENTS Agent Login query on CENTEST_ENTS_DATA). Used herds are listed in runtime-data/ents_used_herds.csv
-  #      and are not picked again. To pin a herd while debugging, type the herd number instead of the token.
-  #   2. Each transfer uses 0.01 entitlement units as a minimal regression test value.
-  #   3. The transferee acceptance uses the transfer key captured during the transferor flow.
-  #   4. Steps are designed for reuse across TC_02_ENTS (different agent transfers) if needed.
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 31-03-2026
-  # --------------------------------------------------------------------------------------------------------------------
+import commonFunctions.CommonFunctions;
+import database.DBRouter;
 
-  Background:
-    Given the agent user is on the login page
-    When the individual logs in as transferor "aga6525"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Random;
+import java.util.Set;
 
-  @regression @transfers @e2e
-  Scenario: AT-ENTS-TRANSFERS-E2E - Agent completes all transfer types within the same agent
+// =====================================================================================================================================
+// File          : EntsTestData.java
+// Package       : utilities
+// Description   : Runtime test data for the ENTS (Transfer of Entitlements) test cases.
+//
+//                 Replaces the herd numbers and names that were typed into the ENTS feature files. The feature file now
+//                 carries a token such as {transferor.herd}; the step that creates the transfer asks this class for a
+//                 fresh pair of herds, and every later step in the same section reads the same pair.
+//
+//                 How a pair is picked (same-agent transfers):
+//                   1. The Agent Login query runs ONCE per agent per run on the ENTS_DATA connection (DBRouter "ENTS").
+//                      Up to ents.pool.size rows come back in random order and are kept in memory for the whole run.
+//                   2. The rows are shuffled again, and every herd already listed in the used-herds file is skipped.
+//                   3. The first unused herd becomes the transferor, the next unused herd becomes the transferee.
+//                   4. Both herds are written to the used-herds file straight away, so a failed run does not hand the
+//                      same (possibly half-transferred) herds to the next run.
+//
+//                 Tokens understood by resolve():
+//                   {transferor.herd}  {transferor.name}  {transferor.address}
+//                   {transferee.herd}  {transferee.name}  {transferee.address}
+//                   {agent}
+//                 Any other value is returned unchanged, so a feature file can still pin a herd for debugging.
+//
+//                 Settings (application.properties):
+//                   ents.pool.size          - rows fetched per query (default 200)
+//                   ents.skip.used.herds    - true = never reuse a herd listed in the used-herds file (default true)
+//                   ents.used.herds.file    - the used-herds file (default runtime-data/ents_used_herds.csv)
+//                   ents.scheme.year        - only herds with entitlements in this year (blank = all years)
+//                   ents.cust.type          - only herds of this customer type, e.g. Individual (blank = all types)
+//                   ents.name.two.words     - true = only herds whose DB name is exactly two words (default true)
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 22-09-2026
+// =====================================================================================================================================
 
-    # ===========================================
-    # SECTION 1 : Change of Legal Entity (206)
-    # Covers: TC_01
-    # ===========================================
+public final class EntsTestData
+{
+    private EntsTestData() { }
 
-    # --- Transferor ---
-    When the agent creates a transfer application with the following details
-      | transferorHerd | {transferor.herd}         |
-      | transfereeHerd | {transferee.herd}         |
-      | transfereeName | {transferee.name} |
-      | transferType   | Change of Legal Entity|
-      | entitlements   | 0.01             |
-      | notes          | Test Notes       |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    // =================================================================================================
+    // DATA HOLDERS
+    // =================================================================================================
 
-    # --- Transferee ---
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd}  |
-      | notes          | Approved Test |
-    Then the transfer should be submitted successfully
+    // One herd returned by an ENTS query
+    public static final class Herd
+    {
+        public final String herdNumber;
+        public final String name;
+        public final String address;
 
-    # ===========================================
-    # SECTION 2 : Change of Registration (201)
-    # Covers: TC_02
-    # ===========================================
+        Herd(String pHerdNumber, String pName, String pAddress)
+        {
+            herdNumber = pHerdNumber;
+            name       = pName;
+            address    = pAddress;
+        }
 
-    # --- Transferor
-    When the individual logs in as transferor "aga6525"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd | {transferor.herd}     |
-      | transfereeHerd | {transferee.herd}     |
-      | transfereeName | {transferee.name} |
-      | transferType   | Change of Registration Details|
-      | entitlements   | 0.01         |
-      | notes          | Test Notes   |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        @Override
+        public String toString() { return herdNumber + " (" + name + ")"; }
+    }
 
-    # --- Transferee ---
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd}  |
-      | notes          | Approved Test |
-    Then the transfer should be submitted successfully
+    // The herds used by one transfer section
+    public static final class TransferPair
+    {
+        public final String agent;
+        public final Herd   transferor;
+        public final Herd   transferee;
 
-    # ===========================================
-    # SECTION 3 : Inheritance of Entitlements (201)
-    # Covers: TC_03
-    # ===========================================
+        TransferPair(String pAgent, Herd pTransferor, Herd pTransferee)
+        {
+            agent      = pAgent;
+            transferor = pTransferor;
+            transferee = pTransferee;
+        }
+    }
 
-    # --- Transferor ---
-    When the individual logs in as transferor "aga6525"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd | {transferor.herd}         |
-      | transfereeHerd | {transferee.herd}         |
-      | transfereeName | {transferee.name} |
-      | transferType   | Inheritance of Entitlements |
-      | entitlements   | 0.01             |
-      | notes          | Test Notes       |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    // =================================================================================================
+    // STATE
+    // =================================================================================================
 
-    # --- Transferee ---
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd}  |
-      | notes          | Approved Test |
-    Then the transfer should be submitted successfully
+    private static final String LOG_PREFIX = "[ENTS-DATA] ";
+    private static final String CSV_HEADER = "timestamp,testcase,role,herd,login,purpose";
 
-    # ===========================================
-    # SECTION 4 : Gift of Entitlements (202)
-    # Covers: TC_04
-    # ===========================================
+    // Agent login -> rows of the Agent Login query (fetched once per run, the query takes several seconds)
+    private static final Map<String, List<Herd>> AGENT_POOLS = new HashMap<>();
 
-    # --- Transferor ---
-    When the individual logs in as transferor "aga6525"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd | {transferor.herd}            |
-      | transfereeHerd | {transferee.herd}            |
-      | transfereeName | {transferee.name} |
-      | transferType   | Gift of Entitlements|
-      | entitlements   | 0.01                |
-      | notes          | Test Notes          |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    // Herds handed out in this run (covers ents.skip.used.herds=false, where the file is not consulted)
+    private static final Set<String> USED_THIS_RUN = new HashSet<>();
 
-    # --- Transferee ---
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd}  |
-      | notes          | Approved Test |
-    Then the transfer should be submitted successfully
+    private static TransferPair iCurrentPair   = null;
+    private static String       iLoggedInUser  = "";
 
-    # ===========================================
-    # SECTION 5 : Lease of Entitlements (211)
-    # Covers: TC_05
-    # NOTE: Lease requires an additional lease year selection step
-    # ===========================================
+    // =================================================================================================
+    // SCENARIO LIFECYCLE
+    // =================================================================================================
 
-    # --- Transferor ---
-    When the individual logs in as transferor "aga6525"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd | {transferor.herd}    |
-      | transfereeHerd | {transferee.herd}    |
-      | transfereeName | {transferee.name} |
-      | transferType   | Lease of Entitlements|
-      | entitlements   | 0.01        |
-      | leaseYear      | Yes         |
-      | notes          | Test Notes  |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resetScenario
+    // Description   : Clears the pair of the previous scenario. Called from Hooks before every scenario.
+    //                 The query results stay cached for the whole run.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void resetScenario()
+    {
+        iCurrentPair  = null;
+        iLoggedInUser = "";
+    }
 
-    # --- Transferee ---
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd}  |
-      | notes          | Approved Test |
-    Then the transfer should be submitted successfully
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setLoggedInUser / loggedInUser
+    // Description   : The ENTS login steps record who is logged in, so a same-agent transfer knows which agent's herds
+    //                 to use without repeating the login in the feature file.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void setLoggedInUser(String pUsername)
+    {
+        iLoggedInUser = pUsername == null ? "" : pUsername.trim();
+    }
 
-    # ===========================================
-    # SECTION 6 : Division of Entitlements (204)
-    # Covers: TC_07
-    # ===========================================
+    public static synchronized String loggedInUser()
+    {
+        return iLoggedInUser;
+    }
 
-    # --- Transferor ---
-    When the individual logs in as transferor "aga6525"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd | {transferor.herd}         |
-      | transfereeHerd | {transferee.herd}         |
-      | transfereeName | {transferee.name} |
-      | transferType   | Division of Entitlements (Scission)|
-      | entitlements   | 0.01             |
-      | notes          | Test Notes       |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    public static synchronized TransferPair currentPair()
+    {
+        return iCurrentPair;
+    }
 
-    # --- Transferee ---
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test |
-    Then the transfer should be submitted successfully
+    // =================================================================================================
+    // TOKENS
+    // =================================================================================================
 
-    # ===========================================
-    # SECTION 7 : Sale of Entitlements (212)
-    # Covers: TC_08
-    # ===========================================
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : hasToken / tableHasToken
+    // Description   : True when a value (or any value of a DataTable map) is a runtime token such as {transferor.herd}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean hasToken(String pValue)
+    {
+        if (pValue == null) return false;
+        String iValue = pValue.trim();
+        return iValue.startsWith("{") && iValue.endsWith("}");
+    }
 
-    # --- Transferor ---
-    When the individual logs in as transferor "aga6525"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd | {transferor.herd}        |
-      | transfereeHerd | {transferee.herd}        |
-      | transfereeName | {transferee.name} |
-      | transferType   | Sale of Entitlements|
-      | entitlements   | 0.01            |
-      | notes          | Test Notes      |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    public static boolean tableHasToken(Map<String, String> pTable)
+    {
+        if (pTable == null) return false;
+        for (String iValue : pTable.values())
+        {
+            if (hasToken(iValue)) return true;
+        }
+        return false;
+    }
 
-    # --- Transferee ---
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test |
-    Then the transfer should be submitted successfully
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolve
+    // Description   : Replaces a runtime token with the value of the current pair. Plain values come back unchanged.
+    //                 Throws with a clear message when a token is used before any pair was picked, or is misspelt.
+    // Parameters    : pValue (String) - DataTable cell, e.g. "{transferee.herd}" or "C1010148"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized String resolve(String pValue)
+    {
+        if (pValue == null) return null;
+        if (!hasToken(pValue)) return pValue.trim();
+
+        String iToken = pValue.trim().toLowerCase(Locale.ROOT);
+
+        if (iCurrentPair == null)
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Token " + pValue.trim() + " used before a transfer pair was picked. "
+                    + "The step that creates the transfer must run first in this section.");
+        }
+
+        switch (iToken)
+        {
+            case "{transferor.herd}":    return iCurrentPair.transferor.herdNumber;
+            case "{transferor.name}":    return iCurrentPair.transferor.name;
+            case "{transferor.address}": return iCurrentPair.transferor.address;
+            case "{transferee.herd}":    return iCurrentPair.transferee.herdNumber;
+            case "{transferee.name}":    return iCurrentPair.transferee.name;
+            case "{transferee.address}": return iCurrentPair.transferee.address;
+            case "{agent}":              return iCurrentPair.agent;
+            default:
+                throw new IllegalArgumentException(LOG_PREFIX + "Unknown token " + pValue.trim()
+                        + ". Use {transferor.herd}, {transferor.name}, {transferee.herd}, {transferee.name}, "
+                        + "{transferor.address}, {transferee.address} or {agent}.");
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolveTable
+    // Description   : Returns a copy of a DataTable map with every token replaced (keys and order kept)
+    // Parameters    : pTable (Map) - the DataTable as a key/value map
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Map<String, String> resolveTable(Map<String, String> pTable)
+    {
+        Map<String, String> iResolved = new LinkedHashMap<>();
+        for (Map.Entry<String, String> iEntry : pTable.entrySet())
+        {
+            iResolved.put(iEntry.getKey(), resolve(iEntry.getValue()));
+        }
+        return iResolved;
+    }
+
+    // =================================================================================================
+    // PAIR SELECTION
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextSameAgentPair
+    // Description   : Picks two different, unused herds of the same agent (transferor + transferee), records them in
+    //                 the used-herds file, logs them and makes them the current pair.
+    // Parameters    : pAgent   (String) - agent login, e.g. "aga6077"
+    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextSameAgentPair(String pAgent, String pPurpose)
+    {
+        if (pAgent == null || pAgent.isBlank())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take herds from. "
+                    + "The ENTS login step must run before the transfer is created.");
+        }
+
+        String     iAgent     = pAgent.trim();
+        List<Herd> iPool      = agentPool(iAgent);
+        Set<String> iUsed     = usedHerds();
+        List<Herd> iAvailable = new ArrayList<>();
+
+        for (Herd iHerd : iPool)
+        {
+            if (!iUsed.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
+        }
+
+        if (iAvailable.size() < 2)
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query for " + iAgent + " has " + iAvailable.size()
+                    + " unused herd(s) left out of " + iPool.size() + ", and a transfer needs 2. "
+                    + "Clear or trim " + usedFile() + ", raise ents.pool.size, or use another agent.");
+        }
+
+        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
+        Herd iTransferor = iAvailable.get(0);
+        Herd iTransferee = iAvailable.get(1);
+
+        markUsed("transferor", iTransferor.herdNumber, iAgent, pPurpose);
+        markUsed("transferee", iTransferee.herdNumber, iAgent, pPurpose);
+
+        iCurrentPair = new TransferPair(iAgent, iTransferor, iTransferee);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] | Agent=" + iAgent
+                + " | Transferor=" + iTransferor + " | Transferee=" + iTransferee
+                + " | " + (iAvailable.size() - 2) + " unused herd(s) left in the pool");
+
+        return iCurrentPair;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : usePortalName
+    // Description   : Replaces the name of a herd of the current pair with the name shown in the portal.
+    //                 The transferee search only matches the exact portal name, and the DB name can differ from it
+    //                 (e.g. "Martin Starr" in the DB, "Martin Starr Jnr" in the portal). After this call,
+    //                 {transferor.name} / {transferee.name} return the portal name.
+    // Parameters    : pHerd (String) - herd number of the current pair | pPortalName (String) - name from the Name column
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void usePortalName(String pHerd, String pPortalName)
+    {
+        if (iCurrentPair == null || pHerd == null || pPortalName == null || pPortalName.isBlank()) return;
+
+        String iName = pPortalName.trim().replaceAll("\\s+", " ");
+        Herd   iOr   = iCurrentPair.transferor;
+        Herd   iEe   = iCurrentPair.transferee;
+
+        if (iOr.herdNumber.equalsIgnoreCase(pHerd.trim()) && !iName.equals(iOr.name))
+        {
+            CommonFunctions.log.info(LOG_PREFIX + "Transferor " + iOr.herdNumber + " name: DB='" + iOr.name + "' portal='" + iName + "' - using the portal name");
+            iOr = new Herd(iOr.herdNumber, iName, iOr.address);
+        }
+        else if (iEe.herdNumber.equalsIgnoreCase(pHerd.trim()) && !iName.equals(iEe.name))
+        {
+            CommonFunctions.log.info(LOG_PREFIX + "Transferee " + iEe.herdNumber + " name: DB='" + iEe.name + "' portal='" + iName + "' - using the portal name");
+            iEe = new Herd(iEe.herdNumber, iName, iEe.address);
+        }
+        else
+        {
+            return;
+        }
+        iCurrentPair = new TransferPair(iCurrentPair.agent, iOr, iEe);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : agentPool
+    // Description   : Rows of the Agent Login query for one agent, fetched once per run and cached
+    // Parameters    : pAgent (String) - agent login
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static List<Herd> agentPool(String pAgent)
+    {
+        String     iKey    = pAgent.toLowerCase(Locale.ROOT);
+        List<Herd> iCached = AGENT_POOLS.get(iKey);
+        if (iCached != null) return iCached;
+
+        int    iLimit = ConfigManager.getInt("ents.pool.size", 200);
+        String iYear  = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
+        String iType  = ConfigManager.getOrDefault("ents.cust.type", "").trim();
+        String iTwo   = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
+        long   iStart = System.currentTimeMillis();
+
+        CommonFunctions.log.info(LOG_PREFIX + "Running Agent Login query for " + pAgent + " (up to " + iLimit + " rows"
+                + (iYear.isEmpty() ? ", all scheme years" : ", scheme year " + iYear)
+                + (iType.isEmpty() ? ", all customer types" : ", cust_type " + iType)
+                + (iTwo.isEmpty() ? "" : ", two-word names only") + ")...");
+        DBRouter.runDB("ENTS", "ENTS Agent Login herds", pAgent, String.valueOf(iLimit), iYear, iType, iTwo);
+
+        List<Herd> iPool = new ArrayList<>();
+        for (Map<String, Object> iRow : DBRouter.getRows())
+        {
+            String iHerd = text(iRow, "HERD_NUMBER");
+            if (!iHerd.isEmpty())
+            {
+                iPool.add(new Herd(iHerd, text(iRow, "HERD_NAME"), text(iRow, "ADDRESSLINE1")));
+            }
+        }
+
+        CommonFunctions.log.info(LOG_PREFIX + "Agent Login query for " + pAgent + " returned " + iPool.size()
+                + " herd(s) in " + (System.currentTimeMillis() - iStart) / 1000 + " s");
+
+        if (iPool.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query returned no herds for " + pAgent
+                    + ". Check the agent login, or run the query in SQL Developer on CENTEST_ENTS_DATA.");
+        }
+
+        AGENT_POOLS.put(iKey, iPool);
+        return iPool;
+    }
+
+    private static String text(Map<String, Object> pRow, String pColumn)
+    {
+        return Objects.toString(pRow.get(pColumn), "").trim();
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : markNotFound
+    // Description   : Records that a picked herd could not be found on screen (for example not in the agent's
+    //                 Transfer Out list). The herd is already in the used-herds file, so it is never picked again;
+    //                 this extra line only explains why, for whoever reads the file.
+    // Parameters    : pHerd   (String) - herd number
+    //                 pReason (String) - short reason, e.g. "not in Transfer Out list"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void markNotFound(String pHerd, String pReason)
+    {
+        String iAgent = iCurrentPair == null ? iLoggedInUser : iCurrentPair.agent;
+        markUsed("not-found", pHerd, iAgent, pReason);
+        CommonFunctions.log.warning(LOG_PREFIX + "Herd " + pHerd + " skipped: " + pReason);
+    }
+
+    // =================================================================================================
+    // USED-HERDS FILE
+    // =================================================================================================
+
+    private static Path usedFile()
+    {
+        return Paths.get(ConfigManager.getOrDefault("ents.used.herds.file", "runtime-data/ents_used_herds.csv"));
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : usedHerds
+    // Description   : Herds that must not be picked: those handed out in this run, plus (when ents.skip.used.herds=true)
+    //                 every herd listed in the used-herds file from earlier runs.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static Set<String> usedHerds()
+    {
+        Set<String> iUsed = new HashSet<>(USED_THIS_RUN);
+
+        if (!ConfigManager.getBool("ents.skip.used.herds", true)) return iUsed;
+
+        Path iFile = usedFile();
+        if (!Files.exists(iFile)) return iUsed;
+
+        try
+        {
+            for (String iLine : Files.readAllLines(iFile, StandardCharsets.UTF_8))
+            {
+                String[] iCells = iLine.split(",", -1);
+                if (iCells.length >= 4 && !iCells[3].isBlank() && !"herd".equalsIgnoreCase(iCells[3].trim()))
+                {
+                    iUsed.add(iCells[3].trim());
+                }
+            }
+        }
+        catch (IOException e)
+        {
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not read " + iFile + " (" + e.getMessage()
+                    + ") - only herds used in this run are skipped.");
+        }
+        return iUsed;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : markUsed
+    // Description   : Adds one line to the used-herds file. A write failure is logged, never fatal.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void markUsed(String pRole, String pHerd, String pLogin, String pPurpose)
+    {
+        USED_THIS_RUN.add(pHerd);
+
+        Path iFile = usedFile();
+        try
+        {
+            if (iFile.getParent() != null) Files.createDirectories(iFile.getParent());
+            if (!Files.exists(iFile))
+            {
+                Files.write(iFile, (CSV_HEADER + System.lineSeparator()).getBytes(StandardCharsets.UTF_8));
+            }
+
+            String iLine = String.join(",",
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                    csv(System.getProperty("testcase", "")),
+                    csv(pRole),
+                    csv(pHerd),
+                    csv(pLogin),
+                    csv(pPurpose)) + System.lineSeparator();
+
+            Files.write(iFile, iLine.getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+        }
+        catch (IOException e)
+        {
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not record " + pHerd + " in " + iFile + " (" + e.getMessage() + ")");
+        }
+    }
+
+    // Commas would break the simple CSV format - replace them
+    private static String csv(String pValue)
+    {
+        return pValue == null ? "" : pValue.replace(',', ' ').replace('\n', ' ').replace('\r', ' ').trim();
+    }
+}
