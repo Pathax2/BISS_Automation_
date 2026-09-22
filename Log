@@ -1,154 +1,253 @@
-SQL Query Reference for Automation Testing
+// ===================================================================================================================================
+// File          : EntsSession.java
+// Package       : stepdefinitions.ENTS
+// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
+//
+//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
+//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
+//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
+//                 themselves keep the same Gherkin text as before.
+//
+//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 22-09-2026
+// ===================================================================================================================================
+
+package stepdefinitions.ENTS;
+
+import com.microsoft.playwright.Locator;
+import commonFunctions.CommonFunctions;
+import commonFunctions.UiHelpers;
+import stepdefinitions.Hooks;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
+import utilities.ObjReader;
+
+import java.util.logging.Logger;
+
+import static commonFunctions.CommonFunctions.iAction;
+
+final class EntsSession
+{
+    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
+
+    // How long an "if present" check waits before deciding the element is not there
+    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
+
+    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
+    static final String TRANSFERS_TAB_XPATH =
+            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
+
+    private EntsSession() { }
 
 
+    // ===================================================================================================================================
+    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
+    // ===================================================================================================================================
 
-By Ruchi Malik
+    // Locator for a raw XPath
+    static Locator xp(String pXpath)
+    {
+        return UiHelpers.byXpath(pXpath);
+    }
 
-2 min
+    // True when the first match becomes visible within pSeconds - never throws
+    static boolean isVisible(String pXpath, int pSeconds)
+    {
+        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
+    }
 
-2
+    // Immediate count, no waiting - same as findElements(...).size()
+    static int countOf(String pXpath)
+    {
+        return xp(pXpath).count();
+    }
 
-Add a reaction
- Agent Login-
+    // Replacement for Thread.sleep
+    static void pause(long pMilliseconds)
+    {
+        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
+    }
 
-WITH herd_numbers AS (
-SELECT DISTINCT ohs_herd app_from_herd
-FROM tden_owner_history,
-vwen_ent_sets,
-vwco_ents_herd_abls_rpt
-WHERE ohs_scheme_year = ent_scheme_year
-AND ohs_own_id = ent_own_id
-AND ohs_hist_no = ent_hist_no
---AND ent_scheme_year = 2026
-AND ent_num_ents > 10
-AND ohs_herd = herd_id
-AND herd_agt LIKE '%aga6525%'
-),
-herd_number_status AS (
-SELECT t.herd_number,
-MAX(CASE WHEN t.death_indicator = 'Y' THEN 1 ELSE 0 END) has_y
-FROM vwco_ems_client_details t
-JOIN herd_numbers i
-ON i.app_from_herd = t.herd_number
-GROUP BY t.herd_number
-)
-SELECT herd_number,
-initcap(payee_name) Herd_Name,
-initcap(addr1) AddressLine1,
-'aga6525' Agent_Login
-FROM
-(
-SELECT t.*,
-ROW_NUMBER() OVER (
-PARTITION BY t.herd_number
-ORDER BY
-CASE
-WHEN s.has_y = 1
-AND t.death_indicator IS NULL THEN 1
-WHEN s.has_y = 0
-AND t.death_indicator = 'N' THEN 1
-ELSE 2
-END,
-t.start_date DESC
-) rn
-FROM vwco_ems_client_details t
-JOIN herd_numbers i
-ON i.app_from_herd = t.herd_number
-JOIN herd_number_status s
-ON s.herd_number = t.herd_number
-)
-WHERE rn = 1
-//AND herd_number in ('D1074220','D2700981','D2361427');
 
-Remove this line herd_number in ('D1074220','D2700981','D2361427')“ to see all other cases
+    // ===================================================================================================================================
+    //  LOGIN
+    // ===================================================================================================================================
 
- 
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : loginAs
+    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
+    //                 Same sequence as the Selenium ENTS login steps:
+    //                   username -> Continue -> password (TD:Password) -> Login
+    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
+    //                   otherwise :  OTP 111111 -> Login
+    //                 If the username box is not on screen (for example after an earlier section left the portal open),
+    //                 the base URL is opened first.
+    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
+    //
+    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
+    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
+    //                 and then logged in again as the same expired ENTS user, which could never succeed.
+    //
+    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
+    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
+    // ***************************************************************************************************************************************************************************************
+    static void loginAs(String pUsername, String pLogPrefix)
+    {
+        log.info(pLogPrefix + " Logging in as: " + pUsername);
 
-Individual Login
+        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
+        {
+            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
+            UiHelpers.navigateTo(Hooks.iUrl);
+        }
 
-WITH herd_numbers AS (
-SELECT vr.herd_ols_login Login_ID,
-vr.herd_id app_from_herd
-FROM vwco_ents_herd_abls_rpt vr
-WHERE vr.herd_ols_login IS NOT NULL
-AND vr.start_date > '31-DEC-22'
-),
-herd_number_status AS (
-SELECT t.herd_number,
-MAX(CASE WHEN t.death_indicator = 'Y' THEN 1 ELSE 0 END) has_y
-FROM vwco_ems_client_details t
-JOIN herd_numbers i
-ON i.app_from_herd = t.herd_number
-GROUP BY t.herd_number
-)
-SELECT Login_ID,
-initcap(payee_name) Name,
-herd_number,
-initcap(addr1) Address
-FROM
-(
-SELECT t.*,
-i.Login_ID,
-ROW_NUMBER() OVER (
-PARTITION BY t.herd_number
-ORDER BY
-CASE
-WHEN s.has_y = 1
-AND t.death_indicator IS NULL THEN 1
-WHEN s.has_y = 0
-AND t.death_indicator = 'N' THEN 1
-ELSE 2
-END,
-t.start_date DESC
-) rn
-FROM vwco_ems_client_details t
-JOIN herd_numbers i
-ON i.app_from_herd = t.herd_number
-JOIN herd_number_status s
-ON s.herd_number = t.herd_number
-)
-WHERE rn = 1
-//AND herd_number in ('G1740503','Q1201540','L1582159');
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
 
-Remove or comment the line “AND herd_number in ('G1740503','Q1201540','L1582159')“ to see other cases.
+        // -- Account Expired -------------------------------------------------------------------------------------
+        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
+        if (isVisible(iExpiredXpath, PROBE_SECONDS))
+        {
+            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
+                    + ". Use another login in the feature file or ask for the account to be renewed.");
+        }
 
-ETF Login
+        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
+        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
+        {
+            log.info(pLogPrefix + " PIN screen detected.");
+            fillPinSlots(pLogPrefix);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+            log.info(pLogPrefix + " PIN login submitted.");
 
-SELECT t.individual_login, t.herd_number, t.herd_name,
-(
-SELECT username
-FROM tden_herd_etf_link, vw_sso_roles_for_user_ents
-WHERE hel_scheme_year = 2026
-AND hel_txor_ents_allowed > 10
-AND businessid = hel_etf_no
-AND hel_herd_no NOT LIKE '2%'
-AND hel_etf_no = t.etf_no
-AND ROWNUM = 1
-) AS ETF_Username
---,t.etf_no
-FROM (
-SELECT
-ve.herd_ols_login individual_login,
-ve.herd_id        herd_number,
-(
-SELECT initcap(cd.payee_name)
-FROM vwco_ems_client_details cd
-WHERE cd.herd_number = ve.herd_id
-AND ROWNUM = 1
-) AS herd_name,
-(
-SELECT hel_etf_no
-FROM tden_herd_etf_link
-WHERE hel_herd_no = ve.herd_id
-AND ROWNUM = 1
-) AS etf_no
-FROM vwco_ents_herd_abls_rpt ve
-WHERE 1 = 1
-AND ve.cust_type = 'Individual'
-AND ve.herd_ols_login IS NOT NULL
---AND ve.herd_id in ('H2311293', 'H2590656')
-AND ve.herd_id IN (
-SELECT DISTINCT hel_herd_no
-FROM tden_herd_etf_link
-WHERE hel_grantor_type = 1)
-) t;
+            acceptTermsIfShown(pLogPrefix, 2);
+
+            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
+            for (int iNext = 1; iNext <= 7; iNext++)
+            {
+                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
+            }
+
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info(pLogPrefix + " TOTP submitted.");
+
+            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
+        }
+        else
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info(pLogPrefix + " OTP login submitted.");
+        }
+
+        EntsTestData.setLoggedInUser(pUsername);
+        log.info(pLogPrefix + " Login complete: " + pUsername);
+    }
+
+    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
+    private static void fillPinSlots(String pLogPrefix)
+    {
+        for (int idx = 1; idx <= 7; idx++)
+        {
+            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+            if (!isVisible(iSlotXpath, 1))
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
+                continue;
+            }
+
+            Locator iInput = xp(iSlotXpath).first();
+            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+            {
+                iInput.fill("");
+                iInput.pressSequentially("1");
+                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
+            }
+            else
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
+            }
+        }
+    }
+
+    // Ticks and accepts Terms & Conditions when the screen is shown
+    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
+    {
+        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info(pLogPrefix + " Terms & Conditions accepted.");
+        }
+    }
+
+
+    // ===================================================================================================================================
+    //  LOGOUT
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : logout
+    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
+    //                 base URL so the next login starts on a clean Keycloak page.
+    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
+    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // ***************************************************************************************************************************************************************************************
+    static void logout()
+    {
+        log.info("[RELOGIN] Logging out current session...");
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            }
+            log.info("[RELOGIN] Logout complete.");
+        }
+        catch (Exception e)
+        {
+            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
+        }
+
+        UiHelpers.clearCookies();
+        UiHelpers.navigateTo(Hooks.iUrl);
+        EntsTestData.setLoggedInUser("");
+    }
+
+
+    // ===================================================================================================================================
+    //  NAVIGATION
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openBissMyClientsTransfers
+    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
+    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void openBissMyClientsTransfers()
+    {
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
+    }
+}
