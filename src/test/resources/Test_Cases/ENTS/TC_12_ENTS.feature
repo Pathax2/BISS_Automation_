@@ -16,160 +16,210 @@ Feature: TC_12_ENTS - Transfer Application E2E (ETF Partner to Individual)
 
     # SECTION 1 : CLE (206)
     When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd   | J1350147                 |
+      | transferorHerd   | C2057024                 |
       | transfereeHerd   | Y104069X                 |
       | transfereeName   | Daniel Mulvany           |
       | transfereeAddress| Carrickedmond Heights    |
-      | transferType     | 206                      |
+      | transferType     | Change of Legal Entity|
       | entitlements     | 0.01                     |
       | entitlementType  | BISS                     |
       | netUV            | 1                        |
       | notes            | Test Notes               |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
+
     When the agent logs out and re-logs in as the individual transferee "PAUDYFROG"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
-      | transfereeHerd | Y104069X |
+      | transfereeHerd | Y104069X      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
-    When the ETF partner logs back in as transferor
 
     # SECTION 2 : Change of Registration (205)
+    Given the ETF partner logs in as transferor "agr15512"
+    And the agent opens the "Basic Income Support for Sustainability" application
     When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd   | J1350457                 |
+      | transferorHerd   | C2057024                 |
       | transfereeHerd   | Y1041344                 |
       | transfereeName   | Felim Sullivan           |
       | transfereeAddress| Drumhoe Avenue           |
-      | transferType     | 205                      |
+      | transferType     | Change of Registration Details|
       | entitlements     | 0.01                     |
       | entitlementType  | BISS                     |
       | netUV            | 1                        |
       | notes            | Test Notes               |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
+
     When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
-      | transfereeHerd | Y1041344 |
+      | transfereeHerd | Y1041344      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
-    When the ETF partner logs back in as transferor
 
     # SECTION 3 : Lease (211)
+    Given the ETF partner logs in as transferor "agr15512"
+    And the agent opens the "Basic Income Support for Sustainability" application
     When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd   | J1691122                 |
+      | transferorHerd   | C2057024                 |
       | transfereeHerd   | Y1041344                 |
       | transfereeName   | Felim Sullivan           |
       | transfereeAddress| Drumhoe Avenue           |
-      | transferType     | 211                      |
+      | transferType     | Lease of Entitlements|
       | entitlements     | 0.01                     |
       | entitlementType  | BISS                     |
       | netUV            | 1                        |
       | notes            | Test Notes               |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
+
+
     When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
-      | transfereeHerd | Y1041344 |
+      | transfereeHerd | Y1041344      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
-    When the ETF partner logs back in as transferor
 
     # SECTION 4 : Gift (202)
+    Given the ETF partner logs in as transferor "agr15512"
+    And the agent opens the "Basic Income Support for Sustainability" application
     When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd   | J1350457                 |
+      | transferorHerd   | C2057024                 |
       | transfereeHerd   | Y1310159                 |
       | transfereeName   | Seamus Carolan           |
       | transfereeAddress| Unit Grove               |
-      | transferType     | 202                      |
+      | transferType     | Gift of Entitlements     |
       | entitlements     | 0.01                     |
       | entitlementType  | BISS                     |
       | netUV            | 1                        |
       | notes            | Test Notes               |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
+
     When the agent logs out and re-logs in as the individual transferee "DANIELPAUL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1310159 |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
-    When the ETF partner logs back in as transferor
+
 
     # SECTION 5 : Merger (203)
+    Given the ETF partner logs in as transferor "agr15512"
+    And the agent opens the "Basic Income Support for Sustainability" application
     When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd   | J1691122                 |
+      | transferorHerd   | C2057024                 |
       | transfereeHerd   | Y104069X                 |
       | transfereeName   | Daniel Mulvany           |
       | transfereeAddress| Carrickedmond Heights    |
-      | transferType     | 203                      |
+      | transferType     | Merger of 2 or more holdings (forming an unregistered Farm Partnership)|
       | entitlements     | 0.01                     |
       | entitlementType  | BISS                     |
       | netUV            | 1                        |
       | notes            | Test Notes               |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
+
     When the agent logs out and re-logs in as the individual transferee "PAUDYFROG"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
-      | transfereeHerd | Y104069X |
+      | transfereeHerd | Y104069X      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
-    When the ETF partner logs back in as transferor
 
     # SECTION 6 : Division (204)
+    Given the ETF partner logs in as transferor "agr15512"
+    And the agent opens the "Basic Income Support for Sustainability" application
     When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd   | V2631112                 |
+      | transferorHerd   | C2057024                 |
       | transfereeHerd   | Y1041344                 |
       | transfereeName   | Felim Sullivan           |
       | transfereeAddress| Drumhoe Avenue           |
-      | transferType     | 204                      |
+      | transferType     | Division of Entitlements (Scission)|
       | entitlements     | 0.01                     |
       | entitlementType  | BISS                     |
       | netUV            | 1                        |
       | notes            | Test Notes               |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
+
     When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1041344 |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
-    When the ETF partner logs back in as transferor
+
 
     # SECTION 7 : Inheritance (201)
+    Given the ETF partner logs in as transferor "agr15512"
+    And the agent opens the "Basic Income Support for Sustainability" application
     When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd   | J1691122                 |
+      | transferorHerd   | C2057024                 |
       | transfereeHerd   | Y1041344                 |
       | transfereeName   | Felim Sullivan           |
       | transfereeAddress| Drumhoe Avenue           |
-      | transferType     | 201                      |
+      | transferType     | Inheritance of Entitlements|
       | entitlements     | 0.01                     |
       | entitlementType  | BISS                     |
       | netUV            | 1                        |
       | notes            | Test Notes               |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
+
     When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1041344 |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
-    When the ETF partner logs back in as transferor
+
 
     # SECTION 8 : Sale (212)
+    Given the ETF partner logs in as transferor "agr15512"
+    And the agent opens the "Basic Income Support for Sustainability" application
     When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd   | V2631112                 |
+      | transferorHerd   | C2057024                 |
       | transfereeHerd   | Y1310159                 |
       | transfereeName   | Seamus Carolan           |
       | transfereeAddress| Unit Grove               |
-      | transferType     | 212                      |
+      | transferType     | Sale of Entitlements     |
       | entitlements     | 0.01                     |
       | entitlementType  | BISS                     |
       | netUV            | 1                        |
       | notes            | Test Notes               |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
+
     When the agent logs out and re-logs in as the individual transferee "DANIELPAUL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual completes the transferee acceptance flow
       | transfereeHerd | Y1310159 |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
-    When the ETF partner logs back in as transferor
