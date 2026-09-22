@@ -10,6 +10,13 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
   #
   # Author: Aniket Pathare | Created: 31-03-2026
 
+  Background:
+    Given the agent user is on the login page
+    When the individual logs in as transferor "FARMBLUE"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
   @regression @transfers @individual-to-agent @e2e
   Scenario: AT-ENTS-TRANSFERS-E2E-08 - Individual completes all transfer types to Agent
 
@@ -18,18 +25,22 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
     # ===========================================
 
     # --- Transferor (Individual) ---
-    When the individual logs in as transferor "FARMBLUE"
+
     And the individual creates a transfer application with the following details
       | transfereeHerd | Z1114042       |
       | transfereeName | Owens Mart Ltd       |
-      | transferType   | 206            |
+      | transferType   | Change of Legal Entity |
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
+    And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
     # --- Transferee (Agent) ---
-    When the agent logs in as transferee agent "aga6325"
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | Z1114042 |
       | notes          | Approved Test |
@@ -41,17 +52,24 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
 
     # --- Transferor (Individual) ---
     When the individual logs in as transferor "JAMESSKEHILL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | Z2170744       |
       | transfereeName | Hugh Patrick Gore    |
-      | transferType   | 201            |
+      | transferType   | Inheritance of Entitlements |
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
     # --- Transferee (Agent) ---
-    When the agent logs in as transferee agent "aga6325"
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | Z2170744 |
       | notes          | Approved Test |
@@ -63,17 +81,24 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
 
     # --- Transferor (Individual) ---
     When the individual logs in as transferor "EUGENECARR"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | Z1180657       |
       | transfereeName | Patrick Keenan       |
-      | transferType   | 202            |
+      | transferType   | Gift of Entitlements|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
     # --- Transferee (Agent) ---
-    When the agent logs in as transferee agent "aga6325"
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | Z1180657 |
       | notes          | Approved Test |
@@ -85,10 +110,14 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
 
     # --- Transferor (Individual) ---
     When the individual logs in as transferor "CATHERINEMORAN2"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | Z1190016       |
       | transfereeName | Brendan Fitzjohn     |
-      | transferType   | 211            |
+      | transferType   | Lease of Entitlements|
       | entitlements   | 0.01           |
       | leaseYear      | Yes            |
       | notes          | Test Notes     |
@@ -96,7 +125,10 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
     Then the transfer key should be captured
 
     # --- Transferee (Agent) ---
-    When the agent logs in as transferee agent "aga6325"
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | Z1190016 |
       | notes          | Approved Test |
@@ -108,17 +140,24 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
 
     # --- Transferor (Individual) ---
     When the individual logs in as transferor "HNOW1280483"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | Z1270559       |
-      | transfereeName | Thomas Cooke         |
-      | transferType   | 203            |
+      | transfereeName | Thomas Cooke   |
+      | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership)|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
     # --- Transferee (Agent) ---
-    When the agent logs in as transferee agent "aga6325"
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | Z1270559 |
       | notes          | Approved Test |
@@ -130,17 +169,24 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
 
     # --- Transferor (Individual) ---
     When the individual logs in as transferor "ANGELAMCGLYNN"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | Z1330942       |
       | transfereeName | Joanne Moroney       |
-      | transferType   | 204            |
+      | transferType   | Division of Entitlements (Scission)|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
     # --- Transferee (Agent) ---
-    When the agent logs in as transferee agent "aga6325"
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | Z1330942 |
       | notes          | Approved Test |
@@ -152,17 +198,24 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
 
     # --- Transferor (Individual) ---
     When the individual logs in as transferor "JHARKIN1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | Z1334069       |
       | transfereeName | Ronan O'Neill        |
-      | transferType   | 212            |
+      | transferType   | Sale of Entitlements |
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
     # --- Transferee (Agent) ---
-    When the agent logs in as transferee agent "aga6325"
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | Z1334069 |
       | notes          | Approved Test |
@@ -173,18 +226,25 @@ Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
     # ===========================================
 
     # --- Transferor (Individual) ---
-    When the individual logs in as transferor "B1090840"
+    When the individual logs in as transferor "SOUTHVIEW1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
     And the individual creates a transfer application with the following details
       | transfereeHerd | Z2120933       |
       | transfereeName | Richard Keenan       |
-      | transferType   | 205            |
+      | transferType   | Change of Registration Details|
       | entitlements   | 0.01           |
       | notes          | Test Notes     |
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
     # --- Transferee (Agent) ---
-    When the agent logs in as transferee agent "aga6325"
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
     And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | Z2120933 |
       | notes          | Approved Test |
