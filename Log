@@ -1,482 +1,621 @@
-package utilities;
-
-import commonFunctions.CommonFunctions;
-import database.DBRouter;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Random;
-import java.util.Set;
-
-// =====================================================================================================================================
-// File          : EntsTestData.java
-// Package       : utilities
-// Description   : Runtime test data for the ENTS (Transfer of Entitlements) test cases.
+// ===================================================================================================================================
+// File          : TC_01_ENTS.java
+// Package       : stepdefinitions.ENTS
+// Description   : Step definitions for TC_01_ENTS — Transfer Application E2E Regression Pack (Same Agent).
 //
-//                 Replaces the herd numbers and names that were typed into the ENTS feature files. The feature file now
-//                 carries a token such as {transferor.herd}; the step that creates the transfer asks this class for a
-//                 fresh pair of herds, and every later step in the same section reads the same pair.
+//                 Covers the full Transferor → Transferee cycle for all 7 transfer types:
+//                   206 (Change of Legal Entity), 201 (Change of Registration / Inheritance),
+//                   202 (Gift), 211 (Lease), 204 (Division), 212 (Sale)
 //
-//                 How a pair is picked (same-agent transfers):
-//                   1. The Agent Login query runs ONCE per agent per run on the ENTS_DATA connection (DBRouter "ENTS").
-//                      Up to ents.pool.size rows come back in random order and are kept in memory for the whole run.
-//                   2. The rows are shuffled again, and every herd already listed in the used-herds file is skipped.
-//                   3. The first unused herd becomes the transferor, the next unused herd becomes the transferee.
-//                   4. Both herds are written to the used-herds file straight away, so a failed run does not hand the
-//                      same (possibly half-transferred) herds to the next run.
+//                 Reused steps (defined elsewhere, bound automatically by Cucumber):
+//                   "the agent user is on the login page"                            → TC_03.java
+//                   "the individual logs in as transferor {string}"                  → TC_08_ENTS.java
+//                   "the agent opens the {string} application"                       → TC_03.java
+//                   "the agent should land on the BISS Home page"                    → TC_03.java
+//                   "the agent navigates to the {string} and {string} Left Menu Link"→ TC_03.java
+//                   "the agent switches to the {string} tab on the My Client(s) page"→ TC_06.java
+//                   "the ETF partner completes the transferee acceptance flow"       → TC_07_ENTS.java
 //
-//                 Tokens understood by resolve():
-//                   {transferor.herd}  {transferor.name}  {transferor.address}
-//                   {transferee.herd}  {transferee.name}  {transferee.address}
-//                   {agent}
-//                 Any other value is returned unchanged, so a feature file can still pin a herd for debugging.
-//
-//                 Settings (application.properties):
-//                   ents.pool.size          - rows fetched per query (default 200)
-//                   ents.skip.used.herds    - true = never reuse a herd listed in the used-herds file (default true)
-//                   ents.used.herds.file    - the used-herds file (default runtime-data/ents_used_herds.csv)
-//                   ents.scheme.year        - only herds with entitlements in this year (blank = all years)
-//                   ents.cust.type          - only herds of this customer type, e.g. Individual (blank = all types)
-//                   ents.name.two.words     - true = only herds whose DB name is exactly two words (default true)
+//                 Playwright edition (22-09-2026):
+//                   - Same step texts, same ObjectRepository keys, same flow.
+//                   - Runtime test data: a DataTable value written as a token, e.g. {transferor.herd}, is replaced by
+//                     a random unused herd from the ENTS Agent Login query (utilities.EntsTestData). Plain values
+//                     still work, so a herd can be pinned for debugging.
+//                   - findElements / JavascriptExecutor / WebDriverWait replaced by Playwright locators (EntsSession).
+//                   - Logout uses the shared EntsSession.logout().
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 22-09-2026
-// =====================================================================================================================================
+// Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
+// ===================================================================================================================================
 
-public final class EntsTestData
+package stepdefinitions.ENTS;
+
+import com.microsoft.playwright.Locator;
+import commonFunctions.UiHelpers;
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import org.junit.jupiter.api.Assertions;
+import stepdefinitions.Hooks;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
+import utilities.ObjReader;
+
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Logger;
+
+import static commonFunctions.CommonFunctions.iAction;
+import static stepdefinitions.ENTS.EntsSession.PROBE_SECONDS;
+import static stepdefinitions.ENTS.EntsSession.TRANSFERS_TAB_XPATH;
+import static stepdefinitions.ENTS.EntsSession.countOf;
+import static stepdefinitions.ENTS.EntsSession.isVisible;
+import static stepdefinitions.ENTS.EntsSession.pause;
+import static stepdefinitions.ENTS.EntsSession.xp;
+
+public class TC_01_ENTS
 {
-    private EntsTestData() { }
+    private static final Logger log = Logger.getLogger(TC_01_ENTS.class.getName());
 
-    // =================================================================================================
-    // DATA HOLDERS
-    // =================================================================================================
+    // XPath of the success message checked after "Submit Application to DAFM" (unchanged from Selenium)
+    private static final String SUBMITTED_MESSAGE_XPATH =
+            "//div[contains(@class,'success') or contains(@class,'confirmation')] | "
+                    + "//*[contains(text(),'submitted') or contains(text(),'Submitted') or contains(text(),'accepted')]";
 
-    // One herd returned by an ENTS query
-    public static final class Herd
-    {
-        public final String herdNumber;
-        public final String name;
-        public final String address;
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Transfer key captured during the Transferor flow and consumed by the Transferee flow.
+    // Static so TC_03_ENTS / TC_07_ENTS / TC_08_ENTS can read it. Also published as the system property
+    // "lastCapturedTransferKey", which the Selenium TC_08_ENTS read but nothing ever set.
+    // -------------------------------------------------------------------------------------------------------------------------------
+    public static String iCapturedTransferKey = "";
 
-        Herd(String pHerdNumber, String pName, String pAddress)
-        {
-            herdNumber = pHerdNumber;
-            name       = pName;
-            address    = pAddress;
-        }
 
-        @Override
-        public String toString() { return herdNumber + " (" + name + ")"; }
-    }
-
-    // The herds used by one transfer section
-    public static final class TransferPair
-    {
-        public final String agent;
-        public final Herd   transferor;
-        public final Herd   transferee;
-
-        TransferPair(String pAgent, Herd pTransferor, Herd pTransferee)
-        {
-            agent      = pAgent;
-            transferor = pTransferor;
-            transferee = pTransferee;
-        }
-    }
-
-    // =================================================================================================
-    // STATE
-    // =================================================================================================
-
-    private static final String LOG_PREFIX = "[ENTS-DATA] ";
-    private static final String CSV_HEADER = "timestamp,testcase,role,herd,login,purpose";
-
-    // Agent login -> rows of the Agent Login query (fetched once per run, the query takes several seconds)
-    private static final Map<String, List<Herd>> AGENT_POOLS = new HashMap<>();
-
-    // Herds handed out in this run (covers ents.skip.used.herds=false, where the file is not consulted)
-    private static final Set<String> USED_THIS_RUN = new HashSet<>();
-
-    private static TransferPair iCurrentPair   = null;
-    private static String       iLoggedInUser  = "";
-
-    // =================================================================================================
-    // SCENARIO LIFECYCLE
-    // =================================================================================================
+    // ===================================================================================================================================
+    //  TRANSFEROR FLOW — Create Transfer Application
+    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : resetScenario
-    // Description   : Clears the pair of the previous scenario. Called from Hooks before every scenario.
-    //                 The query results stay cached for the whole run.
+    // Step          : the agent creates a transfer application with the following details (DataTable)
+    // Description   : Executes the entire Transferor flow in one step:
+    //                 0. When the table uses tokens, picks a fresh transferor + transferee pair of the logged-in agent
+    //                 1. Search for transferor herd and click View
+    //                 2. Click "Create Transfer Application"
+    //                 3. Search for transferee by herd + name
+    //                 4. Select the transfer type
+    //                 5. Add entitlement amount on the row with the most available entitlements
+    //                 6. Select lease year if applicable (Lease only)
+    //                 7. Enter transfer notes
+    //
+    //                 DataTable keys:
+    //                   transferorHerd (String) - herd number, or {transferor.herd}
+    //                   transfereeHerd (String) - herd number, or {transferee.herd}
+    //                   transfereeName (String) - full name,   or {transferee.name}
+    //                   transferType   (String) - transfer type text, e.g. "Gift of Entitlements"
+    //                   entitlements   (String) - number of entitlements to transfer e.g. "0.01"
+    //                   leaseYear      (String) - "Yes" if lease year selection is needed (optional key)
+    //                   notes          (String) - notes to enter on the transfer summary
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent creates a transfer application with the following details")
+    public void theAgentCreatesATransferApplicationWithTheFollowingDetails(DataTable pDataTable)
+    {
+        log.info("[STEP] When the agent creates a transfer application with the following details");
+
+        Map<String, String> iRaw      = pDataTable.asMap(String.class, String.class);
+        boolean             iRuntime  = EntsTestData.tableHasToken(iRaw);
+        int                 iMaxTries = iRuntime ? Math.max(1, ConfigManager.getInt("ents.pair.retries", 5)) : 1;
+        Map<String, String> iData     = null;
+
+        // ── Steps 0-1 : pick a pair and validate both herds on screen (same checks as TC_03) ──
+        // Each herd is searched in the agent's Transfer Out list and rejected when it is
+        //   - blacklisted (Hooks.BLACKLISTED_HERDS)
+        //   - not in the list (0 rows)
+        //   - marked as expired in the Expired column
+        // A rejected herd is recorded in the used-herds file and a new pair is picked (up to ents.pair.retries).
+        // The transferee is checked first, so the last search on screen is the transferor, ready to open.
+        for (int iTry = 1; iTry <= iMaxTries; iTry++)
+        {
+            if (iRuntime)
+            {
+                EntsTestData.nextSameAgentPair(EntsTestData.loggedInUser(), iRaw.getOrDefault("transferType", "").trim());
+            }
+            iData = EntsTestData.resolveTable(iRaw);
+
+            String iRejectedHerd = null;
+            String iReason       = herdProblem(iData.get("transfereeHerd").trim(), "transferee");
+            if (iReason != null)
+            {
+                iRejectedHerd = iData.get("transfereeHerd").trim();
+            }
+            else
+            {
+                iReason = herdProblem(iData.get("transferorHerd").trim(), "transferor");
+                if (iReason != null) iRejectedHerd = iData.get("transferorHerd").trim();
+            }
+
+            if (iReason == null)
+            {
+                // herdProblem may have swapped a DB name for the portal name - resolve the tokens again
+                if (iRuntime) iData = EntsTestData.resolveTable(iRaw);
+                break;
+            }
+
+            if (!iRuntime || iTry == iMaxTries)
+            {
+                throw new RuntimeException("[TRANSFER] Herd " + iRejectedHerd + " is " + iReason
+                        + (iRuntime ? " (tried " + iMaxTries + " pairs - check the Agent Login query / ents.scheme.year)" : ""));
+            }
+            EntsTestData.markNotFound(iRejectedHerd, iReason);
+            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": " + iRejectedHerd + " " + iReason + " - picking another pair.");
+        }
+
+        String iTransferorHerd = iData.get("transferorHerd").trim();
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
+        String iTransfereeName = iData.get("transfereeName").trim();
+        String iTransferType   = iData.get("transferType").trim();
+        String iEntitlements   = iData.get("entitlements").trim();
+        String iNotes          = iData.get("notes").trim();
+        boolean iHasLeaseYear  = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
+
+        // The last search on screen is the transferor (checked above) - click View in ITS row
+        // (first NOT-expired row of that herd - expired rows are skipped)
+        EntsSession.clickTransferOutView(iTransferorHerd);
+        log.info("Transferor herd opened: " + iTransferorHerd);
+
+        // ── Step 2 : Click "Create Transfer Application" ─────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
+
+        // ── Step 3 : Search for the transferee ───────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), iTransfereeHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), iTransfereeName);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
+        log.info("Transferee searched: " + iTransfereeName + " (" + iTransfereeHerd + ")");
+
+        // ── Step 4 : Select the transfer type ────────────────────────────────────────────
+        pause(1000);
+        iAction("CLICK", "XPATH",
+                "//mat-radio-button[contains(.,'" + iTransferType + "')] | "
+                        + "//tr[contains(.,'" + iTransferType + "')]//input | "
+                        + "//*[@value='" + iTransferType + "']",
+                null);
+        pause(1000);
+        log.info("Transfer type selected: " + iTransferType);
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+
+        // ── Step 5 : Click Add on the row with the highest Available Entitlements value ───
+        // The value cells and the Add buttons are parallel lists - index N in one is index N in the other.
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferEntitlementValues"), null);
+        List<Locator> iEntitlementCells = xp(ObjReader.getLocator("iTransferEntitlementValues")).all();
+        List<Locator> iAddButtons       = xp(ObjReader.getLocator("iTransferAddEntitlementBtns")).all();
+
+        if (iEntitlementCells.isEmpty())
+        {
+            throw new RuntimeException("[TRANSFER] No entitlement rows found in 'Entitlements available to transfer' table.");
+        }
+
+        int    iMaxIndex = 0;
+        double iMaxValue = -1.0;
+
+        for (int i = 0; i < iEntitlementCells.size(); i++)
+        {
+            String iRawValue = iEntitlementCells.get(i).innerText().trim();
+            try
+            {
+                double iVal = Double.parseDouble(iRawValue);
+                log.info("[TRANSFER] Row " + (i + 1) + " entitlements: " + iVal);
+                if (iVal > iMaxValue)
+                {
+                    iMaxValue = iVal;
+                    iMaxIndex = i;
+                }
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[TRANSFER] Could not parse entitlement value at row " + (i + 1) + ": '" + iRawValue + "' - skipping.");
+            }
+        }
+
+        if (iMaxIndex >= iAddButtons.size())
+        {
+            throw new RuntimeException("[TRANSFER] " + iEntitlementCells.size() + " entitlement row(s) but only "
+                    + iAddButtons.size() + " Add button(s) - check iTransferAddEntitlementBtns.");
+        }
+
+        log.info("[TRANSFER] Highest entitlement: " + iMaxValue + " at row " + (iMaxIndex + 1) + " - clicking Add.");
+
+        // Selenium: scrollIntoView + JavaScript click
+        Locator iTargetAddBtn = iAddButtons.get(iMaxIndex);
+        iTargetAddBtn.scrollIntoViewIfNeeded();
+        UiHelpers.jsClick(iTargetAddBtn);
+        log.info("[TRANSFER] Add clicked for entitlement value: " + iMaxValue);
+
+        // Enter the entitlement amount
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), iEntitlements);
+
+        // ── Step 5a : Lease year selection (Lease only) ──────────────────────────────────
+        if (iHasLeaseYear)
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearDropdown"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearFirstOption"), null);
+            log.info("Lease year selected.");
+        }
+
+        // Confirm the entitlement, then go to the summary / notes page
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogAddBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+
+        // ── Step 6 : Enter transfer notes ────────────────────────────────────────────────
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+
+        log.info("Transfer application created | Type=" + iTransferType + " | Transferor=" + iTransferorHerd
+                + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : herdProblem
+    // Description   : Searches a herd in the agent's Transfer Out list and applies the TC_03 herd checks.
+    //                 Uses EntsSession.searchTransferOut, which waits for the row of THIS herd (not the first row).
+    //                 Returns null when the herd is usable, otherwise the reason it is not:
+    //                   - "blacklisted"                              herd is in Hooks.BLACKLISTED_HERDS
+    //                   - "not in the Transfer Out list of <agent>"  the search returns no row for this herd
+    //                   - "expired (...)"                            every row of the herd has the Expired icon
+    //                 One herd can have several rows (one per holder); only the NOT-expired row is used, for the name
+    //                 and for the View link (EntsSession.transferOutRowXpath). The name of that row replaces the DB name
+    //                 (ents.name.from.portal).
+    // Parameters    : pHerd (String) - herd number | pRole (String) - "transferor" or "transferee" (for the log)
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    public static synchronized void resetScenario()
+    private static String herdProblem(String pHerd, String pRole)
     {
-        iCurrentPair  = null;
-        iLoggedInUser = "";
+        if (Hooks.BLACKLISTED_HERDS.contains(pHerd))
+        {
+            return "blacklisted";
+        }
+
+        if (!EntsSession.searchTransferOut(pHerd))
+        {
+            return "not in the Transfer Out list of " + EntsTestData.loggedInUser();
+        }
+
+        // A herd can have several rows (one per holder), some expired. searchTransferOut logged each of them;
+        // the herd is usable when at least one row is not expired, and that row is the one used from here on.
+        if (EntsSession.activeTransferOutRows(pHerd) == 0)
+        {
+            return "expired (every Transfer Out row of this herd has the Expired icon)";
+        }
+
+        // Name check (22-09-2026): the transferee search needs the exact portal name, which can differ from the DB
+        // name (D3930387: DB "Martin Starr", portal "Martin Starr Jnr"). The name of the NOT-expired row replaces
+        // the DB name, so {transferee.name} is what the dialog expects. Only runtime herds are changed.
+        if (ConfigManager.getBool("ents.name.from.portal", true))
+        {
+            String iPortalName = EntsSession.transferOutName(pHerd);
+            log.info("[TRANSFER] " + pRole + " " + pHerd + " portal name (not-expired row)='" + iPortalName + "'");
+            EntsTestData.usePortalName(pHerd, iPortalName);
+        }
+        return null;
     }
 
+
+    // ===================================================================================================================================
+    //  TRANSFEROR — DOCUMENT UPLOAD
+    // ===================================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Function Name : setLoggedInUser / loggedInUser
-    // Description   : The ENTS login steps record who is logged in, so a same-agent transfer knows which agent's herds
-    //                 to use without repeating the login in the feature file.
+    // Step          : the agent uploads the transferor signature document
+    // Description   : Opens the upload dialog, selects "Transferor Signature Confirmation" as the document type
+    //                 (falls back to "Companies Registrations Office (Company Printout)" when that option is not
+    //                 offered), attaches the sample PDF and confirms the upload.
+    //                 Change from Selenium: the option list is given PROBE_SECONDS to render before the fallback
+    //                 is chosen (Selenium checked immediately after opening the dropdown).
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
     // ***************************************************************************************************************************************************************************************
-    public static synchronized void setLoggedInUser(String pUsername)
+    @And("the agent uploads the transferor signature document")
+    public void theAgentUploadsTheTransferorSignatureDocument()
     {
-        iLoggedInUser = pUsername == null ? "" : pUsername.trim();
-    }
+        log.info("[STEP] And the agent uploads the transferor signature document");
 
-    public static synchronized String loggedInUser()
-    {
-        return iLoggedInUser;
-    }
+        String iFilePath = System.getProperty("transfer.upload.path",
+                System.getProperty("user.dir")
+                        + java.io.File.separator + "src"
+                        + java.io.File.separator + "test"
+                        + java.io.File.separator + "resources"
+                        + java.io.File.separator + "Test_Data"
+                        + java.io.File.separator + "Cover_Letter.pdf");
 
-    public static synchronized TransferPair currentPair()
-    {
-        return iCurrentPair;
-    }
+        // ── Click "Upload Document" on the summary card ───────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
 
-    // =================================================================================================
-    // TOKENS
-    // =================================================================================================
+        // ── Wait for dialog to open ───────────────────────────────────────────────────
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : hasToken / tableHasToken
-    // Description   : True when a value (or any value of a DataTable map) is a runtime token such as {transferor.herd}
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static boolean hasToken(String pValue)
-    {
-        if (pValue == null) return false;
-        String iValue = pValue.trim();
-        return iValue.startsWith("{") && iValue.endsWith("}");
-    }
+        // ── Select document type ──────────────────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
 
-    public static boolean tableHasToken(Map<String, String> pTable)
-    {
-        if (pTable == null) return false;
-        for (String iValue : pTable.values())
+        String iPreferredOption = "//mat-option//span[normalize-space()='Transferor Signature Confirmation']";
+        String iSelectedType;
+
+        if (isVisible(iPreferredOption, PROBE_SECONDS))
         {
-            if (hasToken(iValue)) return true;
-        }
-        return false;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : resolve
-    // Description   : Replaces a runtime token with the value of the current pair. Plain values come back unchanged.
-    //                 Throws with a clear message when a token is used before any pair was picked, or is misspelt.
-    // Parameters    : pValue (String) - DataTable cell, e.g. "{transferee.herd}" or "C1010148"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static synchronized String resolve(String pValue)
-    {
-        if (pValue == null) return null;
-        if (!hasToken(pValue)) return pValue.trim();
-
-        String iToken = pValue.trim().toLowerCase(Locale.ROOT);
-
-        if (iCurrentPair == null)
-        {
-            throw new IllegalStateException(LOG_PREFIX + "Token " + pValue.trim() + " used before a transfer pair was picked. "
-                    + "The step that creates the transfer must run first in this section.");
-        }
-
-        switch (iToken)
-        {
-            case "{transferor.herd}":    return iCurrentPair.transferor.herdNumber;
-            case "{transferor.name}":    return iCurrentPair.transferor.name;
-            case "{transferor.address}": return iCurrentPair.transferor.address;
-            case "{transferee.herd}":    return iCurrentPair.transferee.herdNumber;
-            case "{transferee.name}":    return iCurrentPair.transferee.name;
-            case "{transferee.address}": return iCurrentPair.transferee.address;
-            case "{agent}":              return iCurrentPair.agent;
-            default:
-                throw new IllegalArgumentException(LOG_PREFIX + "Unknown token " + pValue.trim()
-                        + ". Use {transferor.herd}, {transferor.name}, {transferee.herd}, {transferee.name}, "
-                        + "{transferor.address}, {transferee.address} or {agent}.");
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : resolveTable
-    // Description   : Returns a copy of a DataTable map with every token replaced (keys and order kept)
-    // Parameters    : pTable (Map) - the DataTable as a key/value map
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static Map<String, String> resolveTable(Map<String, String> pTable)
-    {
-        Map<String, String> iResolved = new LinkedHashMap<>();
-        for (Map.Entry<String, String> iEntry : pTable.entrySet())
-        {
-            iResolved.put(iEntry.getKey(), resolve(iEntry.getValue()));
-        }
-        return iResolved;
-    }
-
-    // =================================================================================================
-    // PAIR SELECTION
-    // =================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : nextSameAgentPair
-    // Description   : Picks two different, unused herds of the same agent (transferor + transferee), records them in
-    //                 the used-herds file, logs them and makes them the current pair.
-    // Parameters    : pAgent   (String) - agent login, e.g. "aga6077"
-    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
-    // Returns       : TransferPair
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static synchronized TransferPair nextSameAgentPair(String pAgent, String pPurpose)
-    {
-        if (pAgent == null || pAgent.isBlank())
-        {
-            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take herds from. "
-                    + "The ENTS login step must run before the transfer is created.");
-        }
-
-        String     iAgent     = pAgent.trim();
-        List<Herd> iPool      = agentPool(iAgent);
-        Set<String> iUsed     = usedHerds();
-        List<Herd> iAvailable = new ArrayList<>();
-
-        for (Herd iHerd : iPool)
-        {
-            if (!iUsed.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
-        }
-
-        if (iAvailable.size() < 2)
-        {
-            throw new IllegalStateException(LOG_PREFIX + "Agent Login query for " + iAgent + " has " + iAvailable.size()
-                    + " unused herd(s) left out of " + iPool.size() + ", and a transfer needs 2. "
-                    + "Clear or trim " + usedFile() + ", raise ents.pool.size, or use another agent.");
-        }
-
-        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
-        Herd iTransferor = iAvailable.get(0);
-        Herd iTransferee = iAvailable.get(1);
-
-        markUsed("transferor", iTransferor.herdNumber, iAgent, pPurpose);
-        markUsed("transferee", iTransferee.herdNumber, iAgent, pPurpose);
-
-        iCurrentPair = new TransferPair(iAgent, iTransferor, iTransferee);
-
-        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] | Agent=" + iAgent
-                + " | Transferor=" + iTransferor + " | Transferee=" + iTransferee
-                + " | " + (iAvailable.size() - 2) + " unused herd(s) left in the pool");
-
-        return iCurrentPair;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : usePortalName
-    // Description   : Replaces the name of a herd of the current pair with the name shown in the portal.
-    //                 The transferee search only matches the exact portal name, and the DB name can differ from it
-    //                 (e.g. "Martin Starr" in the DB, "Martin Starr Jnr" in the portal). After this call,
-    //                 {transferor.name} / {transferee.name} return the portal name.
-    // Parameters    : pHerd (String) - herd number of the current pair | pPortalName (String) - name from the Name column
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    public static synchronized void usePortalName(String pHerd, String pPortalName)
-    {
-        if (iCurrentPair == null || pHerd == null || pPortalName == null || pPortalName.isBlank()) return;
-
-        String iName = pPortalName.trim().replaceAll("\\s+", " ");
-        Herd   iOr   = iCurrentPair.transferor;
-        Herd   iEe   = iCurrentPair.transferee;
-
-        if (iOr.herdNumber.equalsIgnoreCase(pHerd.trim()) && !iName.equals(iOr.name))
-        {
-            CommonFunctions.log.info(LOG_PREFIX + "Transferor " + iOr.herdNumber + " name: DB='" + iOr.name + "' portal='" + iName + "' - using the portal name");
-            iOr = new Herd(iOr.herdNumber, iName, iOr.address);
-        }
-        else if (iEe.herdNumber.equalsIgnoreCase(pHerd.trim()) && !iName.equals(iEe.name))
-        {
-            CommonFunctions.log.info(LOG_PREFIX + "Transferee " + iEe.herdNumber + " name: DB='" + iEe.name + "' portal='" + iName + "' - using the portal name");
-            iEe = new Herd(iEe.herdNumber, iName, iEe.address);
+            xp(iPreferredOption).first().click();
+            iSelectedType = "Transferor Signature Confirmation";
         }
         else
         {
-            return;
+            iSelectedType = "Companies Registrations Office (Company Printout)";
+            iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), iSelectedType);
         }
-        iCurrentPair = new TransferPair(iCurrentPair.agent, iOr, iEe);
+        log.info("[TRANSFER] Document type selected: " + iSelectedType);
+
+        // ── Attach PDF ────────────────────────────────────────────────────────────────
+        iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iTransferFileUploadInput"), iFilePath);
+
+        // ── Confirm upload ────────────────────────────────────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+
+        // ── Wait for dialog to close ──────────────────────────────────────────────────
+        iAction("WAITINVISIBLE", "XPATH", "//app-supporting-doc-upload-transfer-application-popup", null);
     }
 
+
+    // ===================================================================================================================================
+    //  TRANSFEROR — SEND FOR ACCEPTANCE
+    // ===================================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Function Name : agentPool
-    // Description   : Rows of the Agent Login query for one agent, fetched once per run and cached
-    // Parameters    : pAgent (String) - agent login
+    // Step          : the agent sends the transfer for acceptance
+    // Description   : Clicks "Send to Transferee for Acceptance", accepts T&C, and confirms.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
+    // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    private static List<Herd> agentPool(String pAgent)
+    @And("the agent sends the transfer for acceptance")
+    public void theAgentSendsTheTransferForAcceptance()
     {
-        String     iKey    = pAgent.toLowerCase(Locale.ROOT);
-        List<Herd> iCached = AGENT_POOLS.get(iKey);
-        if (iCached != null) return iCached;
+        log.info("[STEP] And the agent sends the transfer for acceptance");
 
-        int    iLimit = ConfigManager.getInt("ents.pool.size", 200);
-        String iYear  = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
-        String iType  = ConfigManager.getOrDefault("ents.cust.type", "").trim();
-        String iTwo   = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
-        long   iStart = System.currentTimeMillis();
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSendForAcceptanceBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSendForAcceptanceBtn"), null);
 
-        CommonFunctions.log.info(LOG_PREFIX + "Running Agent Login query for " + pAgent + " (up to " + iLimit + " rows"
-                + (iYear.isEmpty() ? ", all scheme years" : ", scheme year " + iYear)
-                + (iType.isEmpty() ? ", all customer types" : ", cust_type " + iType)
-                + (iTwo.isEmpty() ? "" : ", two-word names only") + ")...");
-        DBRouter.runDB("ENTS", "ENTS Agent Login herds", pAgent, String.valueOf(iLimit), iYear, iType, iTwo);
-
-        List<Herd> iPool = new ArrayList<>();
-        for (Map<String, Object> iRow : DBRouter.getRows())
-        {
-            String iHerd = text(iRow, "HERD_NUMBER");
-            if (!iHerd.isEmpty())
-            {
-                iPool.add(new Herd(iHerd, text(iRow, "HERD_NAME"), text(iRow, "ADDRESSLINE1")));
-            }
-        }
-
-        CommonFunctions.log.info(LOG_PREFIX + "Agent Login query for " + pAgent + " returned " + iPool.size()
-                + " herd(s) in " + (System.currentTimeMillis() - iStart) / 1000 + " s");
-
-        if (iPool.isEmpty())
-        {
-            throw new IllegalStateException(LOG_PREFIX + "Agent Login query returned no herds for " + pAgent
-                    + ". Check the agent login, or run the query in SQL Developer on CENTEST_ENTS_DATA.");
-        }
-
-        AGENT_POOLS.put(iKey, iPool);
-        return iPool;
+        log.info("Transfer sent for acceptance.");
     }
 
-    private static String text(Map<String, Object> pRow, String pColumn)
-    {
-        return Objects.toString(pRow.get(pColumn), "").trim();
-    }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : markNotFound
-    // Description   : Records that a picked herd could not be found on screen (for example not in the agent's
-    //                 Transfer Out list). The herd is already in the used-herds file, so it is never picked again;
-    //                 this extra line only explains why, for whoever reads the file.
-    // Parameters    : pHerd   (String) - herd number
-    //                 pReason (String) - short reason, e.g. "not in Transfer Out list"
+    // Step          : the transfer key should be captured
+    // Description   : Reads the transfer key from the summary screen and keeps it for the Transferee flow.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (also published as lastCapturedTransferKey)
     // ***************************************************************************************************************************************************************************************
-    public static synchronized void markNotFound(String pHerd, String pReason)
+    @Then("the transfer key should be captured")
+    public void theTransferKeyShouldBeCaptured()
     {
-        String iAgent = iCurrentPair == null ? iLoggedInUser : iCurrentPair.agent;
-        markUsed("not-found", pHerd, iAgent, pReason);
-        CommonFunctions.log.warning(LOG_PREFIX + "Herd " + pHerd + " skipped: " + pReason);
+        log.info("[STEP] Then the transfer key should be captured");
+
+        String iKey = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iTransferKeySummaryField"), null);
+        iCapturedTransferKey = iKey == null ? "" : iKey.trim();
+
+        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key should be visible on the summary screen.");
+
+        System.setProperty("lastCapturedTransferKey", iCapturedTransferKey);
+        log.info("Transfer key captured: " + iCapturedTransferKey);
     }
 
-    // =================================================================================================
-    // USED-HERDS FILE
-    // =================================================================================================
 
-    private static Path usedFile()
-    {
-        return Paths.get(ConfigManager.getOrDefault("ents.used.herds.file", "runtime-data/ents_used_herds.csv"));
-    }
+    // ===================================================================================================================================
+    //  TRANSFEREE FLOW — Accept and Submit
+    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : usedHerds
-    // Description   : Herds that must not be picked: those handed out in this run, plus (when ents.skip.used.herds=true)
-    //                 every herd listed in the used-herds file from earlier runs.
+    // Step          : the agent navigates to the transferee acceptance flow (DataTable)
+    // Description   : My Clients → Transfers tab, searches for the transferee herd, clicks View, then clicks View on the
+    //                 transferee dashboard row for that herd.
+    //                 DataTable keys: transfereeHerd (String) - herd number, or {transferee.herd}
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
+    // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    private static Set<String> usedHerds()
+    @When("the agent navigates to the transferee acceptance flow")
+    public void theAgentNavigatesToTheTransfereeAcceptanceFlow(DataTable pDataTable)
     {
-        Set<String> iUsed = new HashSet<>(USED_THIS_RUN);
+        log.info("[STEP] When the agent navigates to the transferee acceptance flow");
 
-        if (!ConfigManager.getBool("ents.skip.used.herds", true)) return iUsed;
+        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
 
-        Path iFile = usedFile();
-        if (!Files.exists(iFile)) return iUsed;
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
+
+        EntsSession.openTransferOutHerd(iTransfereeHerd);
+
+        iAction("CLICK", "XPATH", "//tr[contains(.,'" + iTransfereeHerd + "')]//button[contains(text(),'View')] | "
+                + "//button[contains(text(),'View')]", null);
+
+        log.info("Navigated to transferee acceptance flow for herd: " + iTransfereeHerd);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent enters the transfer key and views the application
+    // Description   : Enters the captured transfer key and clicks "View Transfer Application".
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent enters the transfer key and views the application")
+    public void theAgentEntersTheTransferKeyAndViewsTheApplication()
+    {
+        log.info("[STEP] And the agent enters the transfer key and views the application");
+
+        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key must have been captured before entering it on the transferee side.");
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey.trim());
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+
+        log.info("Transfer key entered and application loaded: " + iCapturedTransferKey);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent submits the transfer to DAFM with notes {string}
+    // Description   : Enters the transferee notes, clicks "Submit Application to DAFM", accepts T&C, confirms, and
+    //                 checks that a success message is shown.
+    // Parameters    : pNotes (String) - notes to enter e.g. "Approved Test"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent submits the transfer to DAFM with notes {string}")
+    public void theAgentSubmitsTheTransferToDAFMWithNotes(String pNotes)
+    {
+        log.info("[STEP] And the agent submits the transfer to DAFM with notes: " + pNotes);
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), pNotes);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+
+        log.info("Transfer submitted to DAFM.");
+
+        String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+        Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+        log.info("Transfer submitted successfully: " + iConfirmation);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the transfer should be submitted successfully
+    // Description   : Looks for the success message after submission, then logs out so the next section starts with
+    //                 a fresh login.
+    //
+    //                 Kept from Selenium ON PURPOSE (one-to-one): when no success message is found the step still
+    //                 PASSES - it only writes a warning. Tell us if it should fail instead.
+    //                 Change from Selenium: the logout now always runs (finally). Selenium skipped the logout when the
+    //                 message was missing, so the next section's login found no username box and failed.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright, logout in finally)
+    // ***************************************************************************************************************************************************************************************
+    @Then("the transfer should be submitted successfully")
+    public void theTransferShouldBeSubmittedSuccessfully()
+    {
+        log.info("[STEP] Then the transfer should be submitted successfully");
 
         try
         {
-            for (String iLine : Files.readAllLines(iFile, StandardCharsets.UTF_8))
-            {
-                String[] iCells = iLine.split(",", -1);
-                if (iCells.length >= 4 && !iCells[3].isBlank() && !"herd".equalsIgnoreCase(iCells[3].trim()))
-                {
-                    iUsed.add(iCells[3].trim());
-                }
-            }
+            String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+            log.info("Transfer submitted successfully: " + iConfirmation);
         }
-        catch (IOException e)
+        catch (Exception e)
         {
-            CommonFunctions.log.warning(LOG_PREFIX + "Could not read " + iFile + " (" + e.getMessage()
-                    + ") - only herds used in this run are skipped.");
+            log.warning("[TRANSFER] No success message found after submission (" + e.getMessage()
+                    + ") - step passes as in the Selenium version. Check the screenshot of this section.");
         }
-        return iUsed;
+        finally
+        {
+            EntsSession.logout();
+        }
     }
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : markUsed
-    // Description   : Adds one line to the used-herds file. A write failure is logged, never fatal.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void markUsed(String pRole, String pHerd, String pLogin, String pPurpose)
-    {
-        USED_THIS_RUN.add(pHerd);
 
-        Path iFile = usedFile();
+    // ===================================================================================================================================
+    //  NAVIGATION — Reset between sections
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent navigates back to the Transfers client list
+    // Description   : Clears the captured key and goes back to My Clients → Transfers tab for the next section.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent navigates back to the Transfers client list")
+    public void theAgentNavigatesBackToTheTransfersClientList()
+    {
+        log.info("[STEP] When the agent navigates back to the Transfers client list");
+
+        iCapturedTransferKey = "";
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
+
+        log.info("Navigated back to Transfers client list.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogout
+    // Description   : Kept for callers of the Selenium name - delegates to the shared EntsSession.logout()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026 | Updated: 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public void performLogout()
+    {
+        EntsSession.logout();
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Validate if Appeal can be made sucessfully
+    // Description   : Submits an appeal from whichever appeal button is shown (transfer or NR/CISYF), checks the
+    //                 confirmation, then logs out. Same as Selenium: any failure is logged and the step passes.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
+    // ***************************************************************************************************************************************************************************************
+    @Then("Validate if Appeal can be made sucessfully")
+    public void theAppealShouldBeSubmittedSuccessfully()
+    {
+        log.info("[STEP] Then the Appeal should be submitted successfully");
+
         try
         {
-            if (iFile.getParent() != null) Files.createDirectories(iFile.getParent());
-            if (!Files.exists(iFile))
-            {
-                Files.write(iFile, (CSV_HEADER + System.lineSeparator()).getBytes(StandardCharsets.UTF_8));
-            }
+            boolean iTransferAppeal = isVisible(ObjReader.getLocator("iAppealApplicationBtn"), 3);
 
-            String iLine = String.join(",",
-                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
-                    csv(System.getProperty("testcase", "")),
-                    csv(pRole),
-                    csv(pHerd),
-                    csv(pLogin),
-                    csv(pPurpose)) + System.lineSeparator();
+            iAction("CLICK", "XPATH", ObjReader.getLocator(iTransferAppeal ? "iAppealApplicationBtn" : "iAppealNRCISYFApplicationBtn"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppealNotesField"), "Test Automation");
+            iAction("CLICK", "XPATH", ObjReader.getLocator(iTransferAppeal ? "iAppealChkBoxAccept" : "iAppealNRCISYFChkBoxAccept"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iSubmitAppealBtn"), null);
 
-            Files.write(iFile, iLine.getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+            String iConfirmation = iAction("GETTEXT", "XPATH", "//*[contains(text(),'Appeal has been submitted')]", null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Appeal submission success indicator should be visible.");
+            log.info("Appeal submitted successfully: " + iConfirmation);
+
+            EntsSession.logout();
         }
-        catch (IOException e)
+        catch (Exception e)
         {
-            CommonFunctions.log.warning(LOG_PREFIX + "Could not record " + pHerd + " in " + iFile + " (" + e.getMessage() + ")");
+            log.warning("[APPEAL] Appeal not confirmed (" + e.getMessage() + ") - step passes as in the Selenium version.");
         }
     }
 
-    // Commas would break the simple CSV format - replace them
-    private static String csv(String pValue)
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the transfers should be submitted successfully
+    // Description   : Same check as "the transfer should be submitted successfully" but without the logout.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the transfers should be submitted successfully")
+    public void theTransfersShouldBeSubmittedSuccessfully()
     {
-        return pValue == null ? "" : pValue.replace(',', ' ').replace('\n', ' ').replace('\r', ' ').trim();
+        log.info("[STEP] Then the transfers should be submitted successfully");
+
+        try
+        {
+            String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+            log.info("Transfer submitted successfully: " + iConfirmation);
+        }
+        catch (Exception e)
+        {
+            log.warning("[TRANSFER] No success message found after submission (" + e.getMessage()
+                    + ") - step passes as in the Selenium version.");
+        }
     }
 }
