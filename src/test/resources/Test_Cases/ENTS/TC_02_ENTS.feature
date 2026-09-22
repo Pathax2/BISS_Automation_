@@ -2,30 +2,33 @@ Feature: TC_02_ENTS - Transfer Application E2E Regression Pack (Different Agent)
 
   # --------------------------------------------------------------------------------------------------------------------
   # Purpose:
-  #   End-to-end regression journey for Transfer of Entitlements flows using a different
-  #   agent (Agent 3 / aga6327) than TC_01_ENTS (Agent 1 / aga6077).
+  #   End-to-end regression journey for Transfer of Entitlements using a different agent from TC_01_ENTS.
   #
-  #   Covers:
-  #     Section 1 : Merger of Entitlements (code 203) — full Transferor → Transferee cycle
-  #     Section 2 : Negative case — herd without entitlements (Add Entitlement button absent)
+  #   Section 1 : Merger of Entitlements - full Transferor to Transferee cycle (same agent, same session)
+  #   Section 2 : Negative case - herd without entitlements (Add Entitlement button absent)
   #
-  # Migrated from: TC_02_ENTS.feature (legacy)
-  #   TC_06 → Section 1  (Merger)
-  #   Commented negative case → Section 2  (No entitlements)
+  # Runtime data (22-09-2026):
+  #   Section 1 herd cells are tokens. The herds are picked at runtime from the ENTS Agent Login query for whoever is
+  #   logged in, both herds come from the same agent, and a herd is never reused across runs
+  #   (runtime-data/ents_used_herds.csv). See guide/STEP_06_ENTS_TC01.md.
+  #     {transferor.herd}  {transferee.herd}  {transferee.name}
+  #   Put a herd number back in any cell to pin it for debugging - a value that is not a token is used as it is.
+  #
+  #   Section 2 herds stay hard-coded ON PURPOSE. The Agent Login query only returns herds holding more than 10
+  #   entitlements, so it can never supply a herd with none. A1374039 is the fixture from the Selenium version; if it
+  #   stops working, swap in another herd with no entitlements for aga6077 (or ask for a "no entitlements" query and a
+  #   token of its own). The transferee name must match the portal exactly, Jnr and middle names included.
   #
   # Step reuse:
-  #   All Transferor/Transferee steps are defined in TC_01_ENTS.java.
-  #   Background login steps are from TC_03.java.
-  #   Tab switching is from TC_06.java.
-  #   The only NEW step in this file is the negative entitlement validation (Section 2).
-  #
-  # Notes:
-  #   1. This agent uses different credentials from TC_01_ENTS — set via TestData.xlsx
-  #      or -DusernameOverride for Agent 3.
-  #   2. Herd numbers are hardcoded test fixtures — update in TestData.xlsx if they expire.
+  #   Login / portal navigation       -> stepdefinitions.TC_03
+  #   Tab switching                   -> stepdefinitions.TC_06
+  #   Login as a named user           -> stepdefinitions.ENTS.TC_08_ENTS
+  #   Create / upload / send / key    -> stepdefinitions.ENTS.TC_01_ENTS
+  #   Transferee acceptance           -> stepdefinitions.ENTS.TC_07_ENTS
+  #   Negative entitlement validation -> stepdefinitions.ENTS.TC_02_ENTS
   #
   # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 31-03-2026
+  # Created: 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
   # --------------------------------------------------------------------------------------------------------------------
 
   Background:
@@ -41,14 +44,14 @@ Feature: TC_02_ENTS - Transfer Application E2E Regression Pack (Different Agent)
 
     # ===========================================
     # SECTION 1 : Merger of Entitlements (203)
-    # Covers: TC_06
+    # Herds picked at runtime from aga6535's pool
     # ===========================================
 
     # --- Transferor ---
     When the agent creates a transfer application with the following details
-      | transferorHerd | H114113X         |
-      | transfereeHerd | H2454086         |
-      | transfereeName | Kathleen Mahon   |
+      | transferorHerd | {transferor.herd} |
+      | transfereeHerd | {transferee.herd} |
+      | transfereeName | {transferee.name} |
       | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership)|
       | entitlements   | 0.01             |
       | notes          | Test Notes       |
@@ -60,15 +63,13 @@ Feature: TC_02_ENTS - Transfer Application E2E Regression Pack (Different Agent)
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | H2454086  |
+      | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
-
     # ===========================================
-    # SECTION 2 : Negative — herd without entitlements
-    # Covers: Commented legacy negative scenario
-    # The Add Entitlement button should NOT be present
+    # SECTION 2 : Negative - herd without entitlements
+    # Hard-coded herds - see the note in the header
     # ===========================================
     When the individual logs in as transferor "aga6077"
     And the agent opens the "Basic Income Support for Sustainability" application
