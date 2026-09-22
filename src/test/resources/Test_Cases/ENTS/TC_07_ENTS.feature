@@ -124,9 +124,9 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | J1410417           |
-      | transfereeHerd | J1360045           |
-      | transfereeName | Nestor Exports Ltd |
+      | transferorHerd | JFP10136           |
+      | transfereeHerd | J199406X           |
+      | transfereeName | Buckley Suppliers |
       | transferType   | Gift of Entitlements|
       | entitlements   | 0.01               |
       | notes          | Test Notes         |
@@ -139,7 +139,7 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | Nestor Exports Ltd      |
+      | transfereeHerd | J199406X     |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -158,8 +158,8 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1400195          |
-      | transfereeHerd | J1350309          |
-      | transfereeName | Cadden Suppliers  |
+      | transfereeHerd | J1970609          |
+      | transfereeName | David Vaughan  |
       | transferType   | Lease of Entitlements|
       | entitlements   | 0.01              |
       | leaseYear      | Yes               |
@@ -173,7 +173,7 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | J1350309      |
+      | transfereeHerd | J1970609      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -191,8 +191,8 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1400217    |
-      | transfereeHerd | J1350147    |
-      | transfereeName | Sean Lally  |
+      | transfereeHerd | J1930160    |
+      | transfereeName | Edward Grimes |
       | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
       | entitlements   | 0.01        |
       | notes          | Test Notes  |
@@ -205,7 +205,7 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | J1350147      |
+      | transfereeHerd | J1930160      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -254,10 +254,10 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | J1400519    |
-      | transfereeHerd | J1350147    |
-      | transfereeName | Sean Lally  |
-      | transferType   |  Sale of Entitlements |
+      | transferorHerd | JFP10136    |
+      | transfereeHerd | J1930305    |
+      | transfereeName | Michael Owen Galvin  |
+      | transferType   | Sale of Entitlements |
       | entitlements   | 0.01        |
       | notes          | Test Notes  |
     And the agent uploads the transferor signature document
@@ -269,7 +269,7 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | J1350147      |
+      | transfereeHerd | J1930305      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
 
@@ -287,8 +287,8 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
       | transferorHerd | J1350350              |
-      | transfereeHerd | J1350457              |
-      | transfereeName | Michael Gerard Gargan |
+      | transfereeHerd | A1030887              |
+      | transfereeName | John Joseph Mcgovern |
       | transferType   | Change of Legal Entity|
       | entitlements   | 0.01                  |
       | notes          | Test Notes            |
@@ -301,6 +301,6 @@ Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Par
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | J1350457      |
+      | transfereeHerd | A1030887      |
       | notes          | Approved Test |
     Then the transfer should be submitted successfully
