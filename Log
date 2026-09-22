@@ -1,253 +1,192 @@
 // ===================================================================================================================================
-// File          : EntsSession.java
+// File          : TC_08_ENTS.java
 // Package       : stepdefinitions.ENTS
-// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
+// Description   : Individual-as-TRANSFEROR + Agent-as-TRANSFEREE steps.
 //
-//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
-//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
-//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
-//                 themselves keep the same Gherkin text as before.
+//                 Steps in this file (4):
+//                   1. the individual logs in as transferor {string}          (also the login step of TC_01_ENTS)
+//                   2. the individual creates a transfer application with the following details (DataTable)
+//                   3. the agent logs in as transferee agent {string}
+//                   4. the agent completes the same agent transferee acceptance flow (DataTable)
 //
-//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
+//                 Playwright edition (22-09-2026):
+//                   - Same step texts, same ObjectRepository keys, same flow.
+//                   - Login / logout use the shared EntsSession helpers (one copy instead of four).
+//                   - Step 3 used iExitBISSLink / iLogoutBtn / iWelcomeLoginBtn, which are not in the Playwright
+//                     ObjectRepository; it now uses the same logout as every other ENTS step (iExitLink / iLogoutbtn).
+//                   - Step 4 read System property "lastCapturedTransferKey", which nothing set in Selenium; it now uses
+//                     the key captured by TC_01_ENTS (which also sets that property).
+//                   - DataTable values may be runtime tokens such as {transferee.herd} (utilities.EntsTestData).
+//                   - Steps 2-4 are migrated but not yet run - TC_01_ENTS only uses step 1.
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 22-09-2026
+// Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
 // ===================================================================================================================================
 
 package stepdefinitions.ENTS;
 
-import com.microsoft.playwright.Locator;
-import commonFunctions.CommonFunctions;
-import commonFunctions.UiHelpers;
-import stepdefinitions.Hooks;
-import utilities.ConfigManager;
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import org.junit.jupiter.api.Assertions;
 import utilities.EntsTestData;
 import utilities.ObjReader;
 
+import java.util.Map;
 import java.util.logging.Logger;
 
 import static commonFunctions.CommonFunctions.iAction;
 
-final class EntsSession
+public class TC_08_ENTS
 {
-    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
+    private static final Logger log = Logger.getLogger(TC_08_ENTS.class.getName());
 
-    // How long an "if present" check waits before deciding the element is not there
-    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
-
-    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
-    static final String TRANSFERS_TAB_XPATH =
-            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
-
-    private EntsSession() { }
-
-
-    // ===================================================================================================================================
-    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
-    // ===================================================================================================================================
-
-    // Locator for a raw XPath
-    static Locator xp(String pXpath)
-    {
-        return UiHelpers.byXpath(pXpath);
-    }
-
-    // True when the first match becomes visible within pSeconds - never throws
-    static boolean isVisible(String pXpath, int pSeconds)
-    {
-        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
-    }
-
-    // Immediate count, no waiting - same as findElements(...).size()
-    static int countOf(String pXpath)
-    {
-        return xp(pXpath).count();
-    }
-
-    // Replacement for Thread.sleep
-    static void pause(long pMilliseconds)
-    {
-        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
-    }
-
-
-    // ===================================================================================================================================
-    //  LOGIN
-    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : loginAs
-    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
-    //                 Same sequence as the Selenium ENTS login steps:
-    //                   username -> Continue -> password (TD:Password) -> Login
-    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
-    //                   otherwise :  OTP 111111 -> Login
-    //                 If the username box is not on screen (for example after an earlier section left the portal open),
-    //                 the base URL is opened first.
-    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
-    //
-    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
-    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
-    //                 and then logged in again as the same expired ENTS user, which could never succeed.
-    //
-    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
-    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Step          : the individual logs in as transferor {string}
+    // Description   : Logs in from the Keycloak page as the given user (agent, individual or ETF partner).
+    //                 The password comes from the TestData Password column (TD:Password), the same for every user.
+    // Parameters    : pUsername (String) - login name, e.g. "aga6077" or "PADDYMORGAN"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright, shared login)
     // ***************************************************************************************************************************************************************************************
-    static void loginAs(String pUsername, String pLogPrefix)
+    @When("the individual logs in as transferor {string}")
+    public void theIndividualLogsInAsTransferor(String pUsername)
     {
-        log.info(pLogPrefix + " Logging in as: " + pUsername);
-
-        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
-        {
-            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
-            UiHelpers.navigateTo(Hooks.iUrl);
-        }
-
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
-
-        // -- Account Expired -------------------------------------------------------------------------------------
-        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
-        if (isVisible(iExpiredXpath, PROBE_SECONDS))
-        {
-            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
-                    + ". Use another login in the feature file or ask for the account to be renewed.");
-        }
-
-        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
-        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
-        {
-            log.info(pLogPrefix + " PIN screen detected.");
-            fillPinSlots(pLogPrefix);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
-            log.info(pLogPrefix + " PIN login submitted.");
-
-            acceptTermsIfShown(pLogPrefix, 2);
-
-            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
-            for (int iNext = 1; iNext <= 7; iNext++)
-            {
-                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
-                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
-            }
-
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
-            log.info(pLogPrefix + " TOTP submitted.");
-
-            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
-        }
-        else
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
-            log.info(pLogPrefix + " OTP login submitted.");
-        }
-
-        EntsTestData.setLoggedInUser(pUsername);
-        log.info(pLogPrefix + " Login complete: " + pUsername);
+        log.info("[STEP] When the individual logs in as transferor: " + pUsername);
+        EntsSession.loginAs(pUsername, "[LOGIN]");
     }
 
-    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
-    private static void fillPinSlots(String pLogPrefix)
-    {
-        for (int idx = 1; idx <= 7; idx++)
-        {
-            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
-
-            if (!isVisible(iSlotXpath, 1))
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
-                continue;
-            }
-
-            Locator iInput = xp(iSlotXpath).first();
-            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
-            {
-                iInput.fill("");
-                iInput.pressSequentially("1");
-                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
-            }
-            else
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
-            }
-        }
-    }
-
-    // Ticks and accepts Terms & Conditions when the screen is shown
-    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
-    {
-        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
-            log.info(pLogPrefix + " Terms & Conditions accepted.");
-        }
-    }
-
-
-    // ===================================================================================================================================
-    //  LOGOUT
-    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : logout
-    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
-    //                 base URL so the next login starts on a clean Keycloak page.
-    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
-    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Step          : the individual creates a transfer application with the following details (DataTable)
+    // Description   : Same flow as TC_01_ENTS but the individual is already on their own Transfers tab (no herd
+    //                 search), always adds the first entitlement row, and uploads a CRO document.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
     // ***************************************************************************************************************************************************************************************
-    static void logout()
+    @And("the individual creates a transfer application with the following details")
+    public void theIndividualCreatesATransferApplication(DataTable pDataTable)
     {
-        log.info("[RELOGIN] Logging out current session...");
-        try
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+        log.info("[STEP] Individual creates transfer application");
 
-            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
-            {
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
-            }
-            log.info("[RELOGIN] Logout complete.");
-        }
-        catch (Exception e)
-        {
-            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
-        }
+        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
 
-        UiHelpers.clearCookies();
-        UiHelpers.navigateTo(Hooks.iUrl);
-        EntsTestData.setLoggedInUser("");
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
+        String iTransfereeName = iData.get("transfereeName").trim();
+        String iTransferType   = iData.get("transferType").trim();
+        String iEntitlements   = iData.get("entitlements").trim();
+        String iNotes          = iData.get("notes").trim();
+        boolean iHasLeaseYear  = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
+
+        // Create Transfer Application (Individual is already on Transfers tab)
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
+
+        // Search transferee
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), iTransfereeHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), iTransfereeName);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
+
+        // Select transfer type (iTransferType has a %s placeholder for the type)
+        iAction("CLICK", "XPATH", String.format(ObjReader.getLocator("iTransferType"), iTransferType), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+
+        // Add entitlement
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferAddEntitlementBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), iEntitlements);
+        if (iHasLeaseYear)
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearDropdown"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearFirstOption"), null);
+        }
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogAddBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+
+        // Notes
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+
+        // Upload CRO document (different from the agent's signature document)
+        String iFilePath = System.getProperty("transfer.upload.path",
+                System.getProperty("user.dir")
+                        + java.io.File.separator + "src"
+                        + java.io.File.separator + "test"
+                        + java.io.File.separator + "resources"
+                        + java.io.File.separator + "Test_Data"
+                        + java.io.File.separator + "Cover_Letter.pdf");
+
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
+        iAction("LIST",        "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), "Companies Registrations Office (Company Printout)");
+        log.info("[TRANSFER] Document type selected: Companies Registrations Office (Company Printout)");
+
+        iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iTransferFileUploadInput"), iFilePath);
+
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+
+        iAction("WAITINVISIBLE", "XPATH", "//app-supporting-doc-upload-transfer-application-popup", null);
+
+        log.info("Individual transfer created: " + iTransferType + " -> " + iTransfereeHerd);
     }
 
 
-    // ===================================================================================================================================
-    //  NAVIGATION
-    // ===================================================================================================================================
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent logs in as transferee agent {string}
+    // Description   : Logs out of the individual / ETF session, logs in as the agent, and opens
+    //                 BISS -> Home -> My Clients -> Transfers.
+    // Parameters    : pAgentUsername (String) - agent login e.g. "aga6325"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright, shared login)
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent logs in as transferee agent {string}")
+    public void theAgentLogsInAsTransfereeAgent(String pAgentUsername)
+    {
+        log.info("[STEP] Agent logs in as transferee: " + pAgentUsername);
+
+        EntsSession.logout();
+        EntsSession.loginAs(pAgentUsername, "[LOGIN-TRANSFEREE]");
+        EntsSession.openBissMyClientsTransfers();
+
+        log.info("Agent logged in as transferee: " + pAgentUsername);
+    }
+
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : openBissMyClientsTransfers
-    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
-    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
+    // Step          : the agent completes the same agent transferee acceptance flow (DataTable)
+    // Description   : Searches the transferee herd, opens it, enters the captured transfer key, adds notes and submits
+    //                 to DAFM with T&C acceptance.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
     // ***************************************************************************************************************************************************************************************
-    static void openBissMyClientsTransfers()
+    @And("the agent completes the same agent transferee acceptance flow")
+    public void theAgentCompletesTheSameAgentTransfereeAcceptanceFlow(DataTable pDataTable)
     {
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
+        log.info("[STEP] Agent completes transferee acceptance");
+
+        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+        String iHerd  = iData.get("transfereeHerd").trim();
+        String iNotes = iData.get("notes").trim();
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iHerd);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
+        iAction("CLICK",   "XPATH",
+                "//tr[contains(.,'" + iHerd + "')]//button[contains(text(),'View')] | //button[contains(text(),'View')]", null);
+
+        String iKey = TC_01_ENTS.iCapturedTransferKey;
+        Assertions.assertFalse(iKey == null || iKey.isEmpty(), "Transfer key must be captured first.");
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iKey);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+
+        log.info("Transferee acceptance completed for: " + iHerd);
     }
 }
