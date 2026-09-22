@@ -1,264 +1,307 @@
-# ===================================================================================================================================
-# File          : application.properties
-# Description   : Base configuration defaults for the BISS automation framework (Playwright edition).
-#                 These values apply to ALL environments unless overridden by a profile file.
-#                 Profile files (application-dev.properties, application-docker.properties, etc.)
-#                 overlay and override these values for specific environments.
-#
-# Folder        : src/test/resources/config/application.properties
-#
-# Resolution    : -Dkey=value  >  BISS_KEY environment variable  >  application-<env>.properties  >  this file
-# Activation    : This file is always loaded. Profile overlay activated via -Denv=<profile> (default dev)
-#
-# Author        : Aniket Pathare | aniket.pathare@goverment.ie
-# Date Created  : 10-03-2026
-# Updated       : 16-09-2026 - Playwright keys added, Selenium-only keys removed
-#                 16-09-2026 - browser.zoom.percent (67), click.strategy, click.attempt.timeout.ms 5000
-#                 16-09-2026 - browser.https.upgrades, dialog handling, [BROWSER] event log
-#                 17-09-2026 - browser.cleanup.before.start, browser.cleanup.temp.folders, execution.fail.fast
-#                 18-09-2026 - browser.cleanup.scope, trace.screenshots, trace.snapshots (suite run speed)
-#                 18-09-2026 - browser.reuse: one browser for the whole run, clean session per test case
-# ===================================================================================================================================
+// ===================================================================================================================================
+// File          : EntsSession.java
+// Package       : stepdefinitions.ENTS
+// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
+//
+//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
+//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
+//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
+//                 themselves keep the same Gherkin text as before.
+//
+//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 22-09-2026
+// ===================================================================================================================================
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Browser Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Supported values: CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
-browser=CHROME
+package stepdefinitions.ENTS;
 
-# Installed browser to drive instead of Playwright's bundled Chromium: blank | chrome | msedge
-# (a value here also stops Playwright from trying to download browsers)
-browser.channel=
+import com.microsoft.playwright.Locator;
+import commonFunctions.CommonFunctions;
+import commonFunctions.UiHelpers;
+import stepdefinitions.Hooks;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
+import utilities.ObjReader;
 
-# false = Playwright default (--no-sandbox, needed when Chrome runs as root, e.g. in Docker). The dev profile sets true.
-browser.chromium.sandbox=false
+import java.util.logging.Logger;
 
-# true = ONE browser for the whole run. Each test case still starts clean: new tab, cookies cleared and the site's
-# storage wiped, so every test case logs in again. Saves the 8-30 s Chrome start and the 10-14 s close per test case.
-# false = a new browser per test case (the behaviour up to 17-09).
-browser.reuse=true
+import static commonFunctions.CommonFunctions.iAction;
 
-# 0 = keep the same browser for the whole run. Set e.g. 10 to start a fresh browser every 10 test cases.
-browser.reuse.max.testcases=0
+final class EntsSession
+{
+    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
 
-# Browser processes stopped before each test case starts (replaces the Selenium killProcessByName("chrome")):
-#   none       = nothing stopped
-#   automation = only browsers started by Playwright or Selenium (your own Chrome windows stay open)
-#   all        = every chrome.exe (msedge.exe for Edge), like the Selenium framework - your own Chrome windows close too
-# chromedriver.exe left over from Selenium runs is stopped by automation and all.
-browser.cleanup.before.start=automation
+    // How long an "if present" check waits before deciding the element is not there
+    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
 
-# true = on the first test case of a run, delete old Playwright temp folders (profiles, driver copies) from %TEMP%
-browser.cleanup.temp.folders=true
+    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
+    static final String TRANSFERS_TAB_XPATH =
+            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
 
-# automation mode only: run = scan process command lines once per run (fast), testcase = before every test case (slow)
-browser.cleanup.scope=run
+    private EntsSession() { }
 
-# true = never download browsers (laptops behind the department web gateway)
-playwright.skip.browser.download=false
 
-# Run browser in headless mode (no visible window) - set true for CI/Bamboo agents and Docker
-headless=false
+    // ===================================================================================================================================
+    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
+    // ===================================================================================================================================
 
-# Window / viewport
-browser.maximize=false
-viewport.width=1920
-viewport.height=1080
+    // Locator for a raw XPath
+    static Locator xp(String pXpath)
+    {
+        return UiHelpers.byXpath(pXpath);
+    }
 
-# Locale and timezone used by every browser context
-browser.locale=en-IE
-browser.timezone=Europe/Dublin
+    // True when the first match becomes visible within pSeconds - never throws
+    static boolean isVisible(String pXpath, int pSeconds)
+    {
+        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
+    }
 
-# Accept internal / self-signed certificates
-ignore.https.errors=false
+    // Immediate count, no waiting - same as findElements(...).size()
+    static int countOf(String pXpath)
+    {
+        return xp(pXpath).count();
+    }
 
-# Open http:// links over https:// first, exactly like normal Chrome (Chrome 'HTTPS-Upgrades').
-# Playwright turns this off by default; without it the BISS Exit link (http://agfood.icentest...) times out on port 80.
-browser.https.upgrades=true
+    // Replacement for Thread.sleep
+    static void pause(long pMilliseconds)
+    {
+        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
+    }
 
-# Safety net: hosts that are always redirected from http:// to https:// (comma-separated, *.domain allowed).
-# Leave blank unless a host still times out with browser.https.upgrades=true. Example:
-# browser.https.upgrade.hosts=agfood.icentest.agriculture.gov.ie
-browser.https.upgrade.hosts=
 
-# Browser proxy (blank = use the operating system settings)
-browser.proxy.server=
-browser.proxy.bypass=
+    // ===================================================================================================================================
+    //  LOGIN
+    // ===================================================================================================================================
 
-# Visual aids for local runs
-highlight.enabled=false
-playwright.slowmo.ms=0
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : loginAs
+    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
+    //                 Same sequence as the Selenium ENTS login steps:
+    //                   username -> Continue -> password (TD:Password) -> Login
+    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
+    //                   otherwise :  OTP 111111 -> Login
+    //                 If the username box is not on screen (for example after an earlier section left the portal open),
+    //                 the base URL is opened first.
+    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
+    //
+    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
+    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
+    //                 and then logged in again as the same expired ENTS user, which could never succeed.
+    //
+    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
+    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
+    // ***************************************************************************************************************************************************************************************
+    static void loginAs(String pUsername, String pLogPrefix)
+    {
+        log.info(pLogPrefix + " Logging in as: " + pUsername);
 
-# Page zoom, same as Ctrl+minus in Chrome (100 = normal). 67 matches the Selenium framework
-# (ChromeOptions profile.default_zoom_level = -2.196545). Other examples: 70, 75, 80, 90
-browser.zoom.percent=67
+        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
+        {
+            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
+            UiHelpers.navigateTo(Hooks.iUrl);
+        }
 
-# Extra CSS zoom on the page body only (the old per-action document.body.style.zoom='84%').
-# 100 = off. Normally leave this at 100 and use browser.zoom.percent instead.
-ui.zoom.percent=100
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
 
-# false = first matching element (Selenium behaviour), true = Playwright strict mode
-locator.strict=false
+        // -- Account Expired -------------------------------------------------------------------------------------
+        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
+        if (isVisible(iExpiredXpath, PROBE_SECONDS))
+        {
+            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
+                    + ". Use another login in the feature file or ask for the account to be renewed.");
+        }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Wait Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Maximum seconds for any element action (click, fill, visible ...)
-explicit.wait.seconds=20
+        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
+        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
+        {
+            log.info(pLogPrefix + " PIN screen detected.");
+            fillPinSlots(pLogPrefix);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+            log.info(pLogPrefix + " PIN login submitted.");
 
-# Maximum seconds for page navigation
-page.load.timeout.seconds=30
+            acceptTermsIfShown(pLogPrefix, 2);
 
-# Polling interval for custom waits (milliseconds)
-wait.polling.interval.ms=250
+            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
+            for (int iNext = 1; iNext <= 7; iNext++)
+            {
+                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
+            }
 
-# Click strategy for CLICK, RADIOBUTTON, CHECKBOX, LIST ...
-#   auto   = normal click; JavaScript click if the normal click is blocked (Selenium ElementClickIntercepted behaviour)
-#   js     = always JavaScript click (arguments[0].click())
-#   native = normal click only, no JavaScript fallback
-# The JSCLICK action always uses a JavaScript click, whatever this is set to.
-click.strategy=auto
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info(pLogPrefix + " TOTP submitted.");
 
-# How long a normal click may be blocked (overlay, spinner) before the JavaScript click is used (milliseconds)
-click.attempt.timeout.ms=5000
+            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
+        }
+        else
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info(pLogPrefix + " OTP login submitted.");
+        }
 
-# Browser pop-up dialogs (alert / confirm / prompt): accept = click OK, dismiss = click Cancel.
-# 'Leave site?' pop-ups are always accepted. UiHelpers.acceptNextDialog() / dismissNextDialog() override one dialog.
-dialog.default.action=accept
+        EntsTestData.setLoggedInUser(pUsername);
+        log.info(pLogPrefix + " Login complete: " + pUsername);
+    }
 
-# [BROWSER] lines in the run log: page changes, new tabs, dialogs, failed requests, HTTP 4xx/5xx, console errors
-log.browser.events=true
-log.browser.console.errors=true
+    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
+    private static void fillPinSlots(String pLogPrefix)
+    {
+        for (int idx = 1; idx <= 7; idx++)
+        {
+            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
 
-# How long an "if present" / "if applicable" step looks for an optional element before deciding it is absent.
-# This wait is paid every time such an element is NOT there, so keep it small (the action timeout above is not used).
-probe.timeout.seconds=3
+            if (!isVisible(iSlotXpath, 1))
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
+                continue;
+            }
 
-# WAITVISIBLE / VERIFYELEMENT / LIST option timeouts (seconds)
-wait.visible.seconds=30
-verify.element.timeout.seconds=20
-list.option.timeout.seconds=30
+            Locator iInput = xp(iSlotXpath).first();
+            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+            {
+                iInput.fill("");
+                iInput.pressSequentially("1");
+                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
+            }
+            else
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
+            }
+        }
+    }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Retry Configuration
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Number of times to retry a failed test case (0 = no retry)
-retry.count=1
+    // Ticks and accepts Terms & Conditions when the screen is shown
+    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
+    {
+        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info(pLogPrefix + " Terms & Conditions accepted.");
+        }
+    }
 
-# Exception types that trigger a retry (comma-separated simple class names) - Playwright names
-retry.on.exceptions=TimeoutError,PlaywrightException
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Test Data
-# -----------------------------------------------------------------------------------------------------------------------------------
-test.data.file.path=src/test/resources/Test_Data/TestData.xlsx
-test.data.sheet.name=Data
+    // ===================================================================================================================================
+    //  LOGOUT
+    // ===================================================================================================================================
 
-# Write the runtime HerdNumber / Username back into TestData.xlsx
-testdata.writeback.enabled=true
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : logout
+    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
+    //                 base URL so the next login starts on a clean Keycloak page.
+    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
+    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // ***************************************************************************************************************************************************************************************
+    static void logout()
+    {
+        log.info("[RELOGIN] Logging out current session...");
+        try
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
 
-# Oracle herd/agent bootstrap before each test case (false = use the sheet values)
-db.bootstrap=true
+            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            }
+            log.info("[RELOGIN] Logout complete.");
+        }
+        catch (Exception e)
+        {
+            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
+        }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Execution Control
-# -----------------------------------------------------------------------------------------------------------------------------------
-execution.control.path=src/test/resources/Execution_Control_File/ExecutionControl.xlsx
-execution.control.sheet=Sheet1
+        UiHelpers.clearCookies();
+        UiHelpers.navigateTo(Hooks.iUrl);
+        EntsTestData.setLoggedInUser("");
+    }
 
-# Write PASS / FAIL back into the Status column
-execution.control.writeback=true
 
-# Comma-separated IDs to run regardless of the Execution flag (blank = Execution=Y rows)
-testcase.ids=
+    // ===================================================================================================================================
+    //  TRANSFER OUT LIST - search one herd and open it
+    // ===================================================================================================================================
 
-# true  = when a scenario fails, the remaining scenarios of that test case are skipped and the runner moves on to the
-#         next test case in ExecutionControl.xlsx (a failed step already stops its own scenario)
-# false = every scenario of the test case still runs
-execution.fail.fast=true
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transferOutRowXpath
+    // Description   : XPath of the Transfer Out row for one herd: the row that holds the herd number AND a View link.
+    //                 Clicking "the first View link" is not safe: until the search result arrives the list still shows
+    //                 unfiltered rows, including TRN rows (seen 22-09-2026: a click on the first row opened TRN 26D0957T).
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String transferOutRowXpath(String pHerd)
+    {
+        return "//tr[.//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']]"
+                + "[contains(normalize-space(.),'" + pHerd + "')]";
+    }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Object Repository
-# -----------------------------------------------------------------------------------------------------------------------------------
-object.repository.path=src/test/resources/Object_Repository/ObjectRepository.properties
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : searchTransferOut
+    // Description   : Types the herd in the Transfer Out search box, clicks Search and waits until the row for THAT herd
+    //                 is shown (up to ents.search.seconds). Returns false when it never appears.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static boolean searchTransferOut(String pHerd)
+    {
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        return isVisible(transferOutRowXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 8));
+    }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Feature Files
-# -----------------------------------------------------------------------------------------------------------------------------------
-feature.directory.path=src/test/resources/Test_Cases/
-glue.package=stepdefinitions
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openTransferOutHerd
+    // Description   : searchTransferOut + clicks View in the row of that herd. Fails with the herd number and agent
+    //                 in the message when the herd is not in the list.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void openTransferOutHerd(String pHerd)
+    {
+        if (!searchTransferOut(pHerd))
+        {
+            throw new IllegalStateException("[TRANSFER] Herd " + pHerd + " is not in the Transfer Out list of "
+                    + EntsTestData.loggedInUser() + " (waited " + ConfigManager.getInt("ents.search.seconds", 8) + " s).");
+        }
+        iAction("CLICK", "XPATH", transferOutRowXpath(pHerd) + "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']", null);
+        log.info("[TRANSFER] Opened herd " + pHerd + " from Transfer Out.");
+    }
 
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Reporting
-# -----------------------------------------------------------------------------------------------------------------------------------
-report.docs.path=Test_Report/docs
-report.screenshots.path=Test_Report/screenshots
-report.html.path=Test_Report/html/
-report.traces.path=Test_Report/traces
-report.downloads.path=Test_Report/downloads
-junit.xml.path=target/surefire-reports/
 
-# Playwright trace: off | on | retain-on-failure
-trace.mode=retain-on-failure
+    // ===================================================================================================================================
+    //  NAVIGATION
+    // ===================================================================================================================================
 
-# Screencast inside the trace: false keeps every action fast, true records a filmstrip of the run
-trace.screenshots=false
-# DOM snapshot per action - this is what the trace viewer replays. Keep true.
-trace.snapshots=true
-
-# Screenshot on PASS as well (true = capture every step, false = failure only)
-screenshot.on.pass=false
-
-# Auto-delete screenshots older than N days (0 = never delete)
-screenshot.retention.days=30
-
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Email Notification
-# -----------------------------------------------------------------------------------------------------------------------------------
-notify.email.enabled=false
-notify.email.smtp.host=smtp.office365.com
-notify.email.smtp.port=587
-notify.email.smtp.starttls=true
-notify.email.from=automation@biss.ie
-notify.email.to=qa-team@biss.ie
-# notify.email.password - set via Bamboo plan variable or BISS_NOTIFY_EMAIL_PASSWORD, never store here
-
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Database (optional - leave blank if not used)
-# -----------------------------------------------------------------------------------------------------------------------------------
-db.enabled=false
-db.driver=oracle.jdbc.OracleDriver
-db.url=
-db.username=
-# db.password - set via Bamboo plan variable or BISS_DB_PASSWORD, never store here
-db.connection.pool.size=5
-db.query.timeout.seconds=30
-
-# -----------------------------------------------------------------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------------------------------------------------------------
-log.level=INFO
-log.output.path=target/logs/
-
-# ---- ENTS runtime test data (utilities.EntsTestData) ----
-# Rows fetched per ENTS query (random order). The Agent Login query runs once per agent per run.
-ents.pool.size=200
-# true = a herd listed in the used-herds file is never picked again
-ents.skip.used.herds=true
-# One line per herd handed out: timestamp,testcase,role,herd,login,purpose. Delete the file to start again.
-ents.used.herds.file=runtime-data/ents_used_herds.csv
-# Agent Login query: only herds holding entitlements in this scheme year (blank = all years, as on Confluence)
-ents.scheme.year=2026
-# Agent Login query: only herds of this customer type (vwco_ents_herd_abls_rpt.cust_type). Blank = all types.
-# Joint Venture herds (e.g. D3900895) are not in the agent's Transfer Out list.
-ents.cust.type=Individual
-# When a picked transferor is not in the agent's Transfer Out list, try this many pairs before failing
-ents.pair.retries=5
-# How long to wait for the Transfer Out search result before treating the herd as not found
-ents.search.seconds=8
-# Only herds whose DB name is exactly two words, e.g. "Martin Starr" (skips Jnr/Snr, middle names, companies)
-ents.name.two.words=true
-# Use the Name shown in the Transfer Out list instead of the DB name for the transferee search
-ents.name.from.portal=true
-# ENTS test cases skip the BISS herd + agent DB lookup (they get their data from the ENTS queries)
-db.bootstrap.ents=false
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openBissMyClientsTransfers
+    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
+    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void openBissMyClientsTransfers()
+    {
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
+    }
+}
