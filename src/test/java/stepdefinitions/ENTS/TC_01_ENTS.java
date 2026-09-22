@@ -35,6 +35,8 @@ import commonFunctions.UiHelpers;
 import io.cucumber.datatable.DataTable;
 import io.cucumber.java.en.*;
 import org.junit.jupiter.api.Assertions;
+import stepdefinitions.Hooks;
+import utilities.ConfigManager;
 import utilities.EntsTestData;
 import utilities.ObjReader;
 
@@ -45,6 +47,7 @@ import java.util.logging.Logger;
 import static commonFunctions.CommonFunctions.iAction;
 import static stepdefinitions.ENTS.EntsSession.PROBE_SECONDS;
 import static stepdefinitions.ENTS.EntsSession.TRANSFERS_TAB_XPATH;
+import static stepdefinitions.ENTS.EntsSession.countOf;
 import static stepdefinitions.ENTS.EntsSession.isVisible;
 import static stepdefinitions.ENTS.EntsSession.pause;
 import static stepdefinitions.ENTS.EntsSession.xp;
@@ -99,14 +102,53 @@ public class TC_01_ENTS
     {
         log.info("[STEP] When the agent creates a transfer application with the following details");
 
-        Map<String, String> iRaw = pDataTable.asMap(String.class, String.class);
+        Map<String, String> iRaw      = pDataTable.asMap(String.class, String.class);
+        boolean             iRuntime  = EntsTestData.tableHasToken(iRaw);
+        int                 iMaxTries = iRuntime ? Math.max(1, ConfigManager.getInt("ents.pair.retries", 5)) : 1;
+        Map<String, String> iData     = null;
 
-        // ── Step 0 : runtime data - a new pair for every section that uses tokens ──────────
-        if (EntsTestData.tableHasToken(iRaw))
+        // ── Steps 0-1 : pick a pair and validate both herds on screen (same checks as TC_03) ──
+        // Each herd is searched in the agent's Transfer Out list and rejected when it is
+        //   - blacklisted (Hooks.BLACKLISTED_HERDS)
+        //   - not in the list (0 rows)
+        //   - marked as expired in the Expired column
+        // A rejected herd is recorded in the used-herds file and a new pair is picked (up to ents.pair.retries).
+        // The transferee is checked first, so the last search on screen is the transferor, ready to open.
+        for (int iTry = 1; iTry <= iMaxTries; iTry++)
         {
-            EntsTestData.nextSameAgentPair(EntsTestData.loggedInUser(), iRaw.getOrDefault("transferType", "").trim());
+            if (iRuntime)
+            {
+                EntsTestData.nextSameAgentPair(EntsTestData.loggedInUser(), iRaw.getOrDefault("transferType", "").trim());
+            }
+            iData = EntsTestData.resolveTable(iRaw);
+
+            String iRejectedHerd = null;
+            String iReason       = herdProblem(iData.get("transfereeHerd").trim(), "transferee");
+            if (iReason != null)
+            {
+                iRejectedHerd = iData.get("transfereeHerd").trim();
+            }
+            else
+            {
+                iReason = herdProblem(iData.get("transferorHerd").trim(), "transferor");
+                if (iReason != null) iRejectedHerd = iData.get("transferorHerd").trim();
+            }
+
+            if (iReason == null)
+            {
+                // herdProblem may have swapped a DB name for the portal name - resolve the tokens again
+                if (iRuntime) iData = EntsTestData.resolveTable(iRaw);
+                break;
+            }
+
+            if (!iRuntime || iTry == iMaxTries)
+            {
+                throw new RuntimeException("[TRANSFER] Herd " + iRejectedHerd + " is " + iReason
+                        + (iRuntime ? " (tried " + iMaxTries + " pairs - check the Agent Login query / ents.scheme.year)" : ""));
+            }
+            EntsTestData.markNotFound(iRejectedHerd, iReason);
+            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": " + iRejectedHerd + " " + iReason + " - picking another pair.");
         }
-        Map<String, String> iData = EntsTestData.resolveTable(iRaw);
 
         String iTransferorHerd = iData.get("transferorHerd").trim();
         String iTransfereeHerd = iData.get("transfereeHerd").trim();
@@ -116,11 +158,9 @@ public class TC_01_ENTS
         String iNotes          = iData.get("notes").trim();
         boolean iHasLeaseYear  = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
 
-        // ── Step 1 : Search for the transferor herd and open it ──────────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iTransferorHerd);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
-        pause(2000);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
+        // The last search on screen is the transferor (checked above) - click View in ITS row
+        // (first NOT-expired row of that herd - expired rows are skipped)
+        EntsSession.clickTransferOutView(iTransferorHerd);
         log.info("Transferor herd opened: " + iTransferorHerd);
 
         // ── Step 2 : Click "Create Transfer Application" ─────────────────────────────────
@@ -140,7 +180,7 @@ public class TC_01_ENTS
                         + "//tr[contains(.,'" + iTransferType + "')]//input | "
                         + "//*[@value='" + iTransferType + "']",
                 null);
-        pause(1000);
+        pause(1100);
         log.info("Transfer type selected: " + iTransferType);
 
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
@@ -205,6 +245,7 @@ public class TC_01_ENTS
 
         // Confirm the entitlement, then go to the summary / notes page
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogAddBtn"), null);
+        pause(1500);
         iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
 
         // ── Step 6 : Enter transfer notes ────────────────────────────────────────────────
@@ -212,6 +253,53 @@ public class TC_01_ENTS
 
         log.info("Transfer application created | Type=" + iTransferType + " | Transferor=" + iTransferorHerd
                 + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : herdProblem
+    // Description   : Searches a herd in the agent's Transfer Out list and applies the TC_03 herd checks.
+    //                 Uses EntsSession.searchTransferOut, which waits for the row of THIS herd (not the first row).
+    //                 Returns null when the herd is usable, otherwise the reason it is not:
+    //                   - "blacklisted"                              herd is in Hooks.BLACKLISTED_HERDS
+    //                   - "not in the Transfer Out list of <agent>"  the search returns no row for this herd
+    //                   - "expired (...)"                            every row of the herd has the Expired icon
+    //                 One herd can have several rows (one per holder); only the NOT-expired row is used, for the name
+    //                 and for the View link (EntsSession.transferOutRowXpath). The name of that row replaces the DB name
+    //                 (ents.name.from.portal).
+    // Parameters    : pHerd (String) - herd number | pRole (String) - "transferor" or "transferee" (for the log)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static String herdProblem(String pHerd, String pRole)
+    {
+        if (Hooks.BLACKLISTED_HERDS.contains(pHerd))
+        {
+            return "blacklisted";
+        }
+
+        if (!EntsSession.searchTransferOut(pHerd))
+        {
+            return "not in the Transfer Out list of " + EntsTestData.loggedInUser();
+        }
+
+        // A herd can have several rows (one per holder), some expired. searchTransferOut logged each of them;
+        // the herd is usable when at least one row is not expired, and that row is the one used from here on.
+        if (EntsSession.activeTransferOutRows(pHerd) == 0)
+        {
+            return "expired (every Transfer Out row of this herd has the Expired icon)";
+        }
+
+        // Name check (22-09-2026): the transferee search needs the exact portal name, which can differ from the DB
+        // name (D3930387: DB "Martin Starr", portal "Martin Starr Jnr"). The name of the NOT-expired row replaces
+        // the DB name, so {transferee.name} is what the dialog expects. Only runtime herds are changed.
+        if (ConfigManager.getBool("ents.name.from.portal", true))
+        {
+            String iPortalName = EntsSession.transferOutName(pHerd);
+            log.info("[TRANSFER] " + pRole + " " + pHerd + " portal name (not-expired row)='" + iPortalName + "'");
+            EntsTestData.usePortalName(pHerd, iPortalName);
+        }
+        return null;
     }
 
 
@@ -348,9 +436,7 @@ public class TC_01_ENTS
         iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
         iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iTransfereeHerd);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
+        EntsSession.openTransferOutHerd(iTransfereeHerd);
 
         iAction("CLICK", "XPATH", "//tr[contains(.,'" + iTransfereeHerd + "')]//button[contains(text(),'View')] | "
                 + "//button[contains(text(),'View')]", null);
