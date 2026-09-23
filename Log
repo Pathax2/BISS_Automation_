@@ -1,230 +1,715 @@
 // ===================================================================================================================================
-// File          : TC_02_ENTS.java
+// File          : TC_03_ENTS.java
 // Package       : stepdefinitions.ENTS
-// Description   : Step definitions for TC_02_ENTS - Transfer Application negative case (herd without entitlements).
+// Description   : Step definitions for TC_03_ENTS — Transfer Application E2E (Different Agent / Cross-Agent).
 //
-//                 Steps in this file (2):
-//                   1. the agent initiates a transfer search for herd without entitlements (DataTable)
-//                   2. the Add Entitlement button should not be present
+//                 This file contains ONLY the steps unique to cross-agent transfers.
+//                 The critical difference from TC_01_ENTS / TC_02_ENTS: the Transferee acceptance
+//                 requires logging out of the current agent session and re-logging in as a
+//                 completely different agent before accepting the transfer.
 //
-//                 Every other step of TC_02_ENTS.feature is already defined:
-//                   login / portal navigation                       -> stepdefinitions.TC_03
-//                   tab switching                                   -> stepdefinitions.TC_06
-//                   create / upload / send / key / submit / back    -> stepdefinitions.ENTS.TC_01_ENTS
+//                 ┌──────────────────────────────────────────────────────────────────┬────────────────────┐
+//                 │ Reused Steps                                                     │ Defined In         │
+//                 ├──────────────────────────────────────────────────────────────────┼────────────────────┤
+//                 │ the agent user is on the login page                              │ TC_03.java         │
+//                 │ the agent logs into the application...                           │ TC_03.java         │
+//                 │ the agent opens the {string} application                         │ TC_03.java         │
+//                 │ the agent should land on the BISS Home page                      │ TC_03.java         │
+//                 │ the agent navigates to ... Left Menu Link                        │ TC_03.java         │
+//                 │ the agent switches to the {string} tab...                        │ TC_06.java         │
+//                 │ the agent creates a transfer application with the following...   │ TC_01_ENTS.java    │
+//                 │ the agent uploads the transferor signature document              │ TC_01_ENTS.java    │
+//                 │ the agent sends the transfer for acceptance                      │ TC_01_ENTS.java    │
+//                 │ the transfer key should be captured                              │ TC_01_ENTS.java    │
+//                 │ the transfer should be submitted successfully                    │ TC_01_ENTS.java    │
+//                 └──────────────────────────────────────────────────────────────────┴────────────────────┘
 //
-//                 Playwright edition (22-09-2026):
-//                   - Same step texts, same ObjectRepository keys, same flow.
-//                   - The transferor herd is searched with EntsSession.openTransferOutHerd, which waits for the row of
-//                     THAT herd and skips rows marked expired. Selenium clicked the first View link on the page, which
-//                     could open an unrelated row before the search result arrived.
-//                   - Runtime data (23-09-2026): when the DataTable has tokens, both herds are picked at random for
-//                     the logged-in agent by EntsTestData.nextNoEntitlementPair:
-//                       transferor - a herd of the agent with NO entitlements (query "ENTS Agent herds without entitlements")
-//                       transferee - a herd from the agent's usual Agent Login pool
-//                     Both are checked in the Transfer Out list first (blacklisted, missing, expired). A rejected herd is
-//                     recorded in the used-herds file and a new pair is picked, up to ents.pair.retries (default 5).
-//                     A plain herd number in a cell is used as it is (pinning for debugging).
+//                 New steps in this file (3 total):
+//                   1. the agent logs out and re-logs in as the transferee agent
+//                   2. the agent logs out and re-logs in as the transferor agent
+//                   3. the agent completes the cross-agent transferee acceptance flow (DataTable)
+//
+//                 NOTE: This class needs access to the iCapturedTransferKey from TC_01_ENTS.
+//                 Since TC_01_ENTS stores it as an instance variable, and Cucumber creates
+//                 separate instances per class, we use a static shared field for cross-class access.
+//                 Alternatively, the transfer key can be published via System.setProperty()
+//                 in TC_01_ENTS.theTransferKeyShouldBeCaptured() — uncomment the bridge line there.
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026 | Updated: 23-09-2026 (Playwright + runtime herds for the negative case)
+// Date Created  : 31-03-2026
 // ===================================================================================================================================
 
 package stepdefinitions.ENTS;
 
-import com.microsoft.playwright.Locator;
+import commonFunctions.CommonFunctions;
 import io.cucumber.datatable.DataTable;
 import io.cucumber.java.en.*;
 import org.junit.jupiter.api.Assertions;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
 import stepdefinitions.Hooks;
-import utilities.ConfigManager;
-import utilities.EntsTestData;
 import utilities.ObjReader;
 
-import java.util.List;
+import java.time.Duration;
 import java.util.Map;
 import java.util.logging.Logger;
 
 import static commonFunctions.CommonFunctions.iAction;
-import static stepdefinitions.ENTS.EntsSession.pause;
-import static stepdefinitions.ENTS.EntsSession.xp;
+import static commonFunctions.CommonFunctions.getDriver;
+import static stepdefinitions.ENTS.TC_01_ENTS.iCapturedTransferKey;
 
-public class TC_02_ENTS
+public class TC_03_ENTS
 {
-    private static final Logger log = Logger.getLogger(TC_02_ENTS.class.getName());
+    private static final Logger log = Logger.getLogger(TC_03_ENTS.class.getName());
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Agent credentials — resolved from test data or system properties.
+    // The transferor agent is the one who logged in via the Background (set by Hooks).
+    // The transferee agent credentials are loaded from TestData.xlsx or overridden via -D props.
+    //
+    // These are read from system properties set by Hooks/TestRunner:
+    //   TD:TransfereeUsername / TD:TransfereePassword  — for the transferee agent
+    //   TD:Username / TD:Password                      — for the transferor agent (original)
+    // -------------------------------------------------------------------------------------------------------------------------------
+    private static final String TRANSFEREE_USERNAME_PROP = "TD:TransfereeUsername";
+    private static final String TRANSFEROR_USERNAME_PROP = "TD:Username";
 
 
     // ===================================================================================================================================
-    //  NEGATIVE CASE - HERD WITHOUT ENTITLEMENTS
+    //  CROSS-AGENT SESSION MANAGEMENT — Logout and Re-login
     // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent initiates a transfer search for herd without entitlements (DataTable)
-    // Description   : Runs the transferor flow up to the entitlement page and stops there. The next step asserts that
-    //                 the Add button is absent.
-    //                 This is TC_01_ENTS.theAgentCreatesATransferApplicationWithTheFollowingDetails() without step 5
-    //                 (add entitlement), because the herd has none.
+    // Step          : the agent logs out and re-logs in as the transferee agent
+    // Description   : Exits the current BISS session, logs out fully, then performs a fresh
+    //                 login using the Transferee agent's credentials. Navigates back to
+    //                 My Clients → Transfers tab ready for the acceptance flow.
+    //
+    //                 This is the step that makes cross-agent transfers different from same-agent:
+    //                 the Transferee is a completely different user with different herds.
+    //
+    //                 Credential resolution order:
+    //                   1. System property TD:TransfereeUsername (set by Hooks from TestData.xlsx)
+    //                   2. System property transferee.username (set via -D in Maven/Bamboo)
+    //                   3. Fails if neither is available
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent logs out and re-logs in as the transferee agent {string}")
+    public void theAgentLogsOutAndReLogsInAsTheTransfereeAgent(String pUsername) throws InterruptedException {
+        log.info("[STEP] When the agent logs out and re-logs in as the transferee agent");
+        performLogout();
+
+        {
+
+            log.info("[LOGIN] Classic login detected.");
+
+            // Hit the initial 'Log In' button on the BISS landing screen to get to the Keycloak form
+            //iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+            // Type the agent's username — pulled from Hooks.RUNTIME_USERNAME which is resolved
+            // at runtime from BISS_DATA + BISS_INET before any scenario executes.
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), pUsername);
+            // Move past the username screen to get to the password entry form
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+
+            // Type the password from the test data sheet (TD:Password column)
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
+
+            // Submit the password — this either takes us to the dashboard or triggers MFA
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+
+            // ── Account Expired detection (Option 4 fix — 05-05-2026) ────────────────────
+            // Keycloak shows "Account Expired" immediately after Login click when the agent's
+            // SSO account has expired. Detect it here before waiting for PIN/OTP screen.
+            // If found: mark agent expired → Hooks.markAgentExpired() re-resolves a fresh
+            // herd+agent pair → update RUNTIME_USERNAME → re-attempt login with new agent.
+            By iExpiredMsgBy = By.xpath("//*[contains(@class,'kc-feedback-text') " + "and contains(normalize-space(),'Account Expired')]");
+
+            if (isVisible(iExpiredMsgBy, 3))
+            {
+                String iExpiredAgent = Hooks.RUNTIME_USERNAME;
+                log.warning("[LOGIN] Account Expired detected for agent: " + iExpiredAgent + " — calling Hooks.markAgentExpired() to re-resolve.");
+
+                // Mark expired + re-resolve new herd+agent into Hooks.RUNTIME_HERD / RUNTIME_USERNAME
+                Hooks.markAgentExpired(iExpiredAgent);
+
+                // Cancel the current Keycloak session and restart login with new agent
+                iAction("CLICK", "XPATH", "//button[normalize-space()='Cancel'] | //a[normalize-space()='Cancel']", null);
+
+                // Navigate back to base URL for a clean login state
+                CommonFunctions.getDriver().navigate().to(Hooks.iUrl);
+                // iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+                // Re-attempt login with the newly resolved agent
+                // iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+                getDriver().navigate().to(Hooks.iUrl);
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),       "TD:Password");
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),             null);
+
+                log.info("[LOGIN] Re-attempting login with new agent: " + pUsername);
+            }
+            // ── End Account Expired detection ──────────────────────────────────────────────
+
+            log.info("[STEP] Detect login screen and auto-login using simple PIN loop...");
+
+            WebDriver driver = CommonFunctions.getDriver();
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+
+            By pinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+
+            // Check whether the PIN login screen has appeared (give it 3 seconds — no need to wait longer)
+            if (isVisible(pinFormBy, 3)) {
+
+                log.info("[LOGIN] PIN screen detected. Using simple loop 1 → 7.");
+
+                // The PIN form has up to 7 digit slots — loop through all of them
+                // and enter '1' into each one that is enabled and visible
+                for (int idx = 1; idx <= 7; idx++) {
+
+                    // Build the XPath for this particular PIN slot dynamically using the index
+                    String dynamicXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+                    By pinInputBy = By.xpath(dynamicXpath);
+
+                    if (isVisible(pinInputBy, 1)) {
+
+                        WebElement input = driver.findElement(pinInputBy);
+
+                        boolean disabled = input.getAttribute("disabled") != null;
+
+                        if (!disabled && input.isEnabled())
+                        {
+                            // Slot is active — clear any pre-filled value and type our digit
+                            input.clear();
+                            input.sendKeys("1");
+                            log.info("[LOGIN] Entered '1' into PIN index: " + idx);
+                        }
+                        else
+                        {
+                            // Some PIN slots are disabled (grey) depending on the account setup — skip those
+                            log.info("[LOGIN] PIN index " + idx + " is DISABLED — skipping.");
+                        }
+
+                    } else {
+                        // This slot number doesn't exist in the DOM for this account — move on
+                        log.info("[LOGIN] PIN index " + idx + " not present in DOM — skipping.");
+                    }
+                }
+
+                // All available PIN digits are filled — submit the PIN form
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+                Thread.sleep(2000);
+
+                log.info("[LOGIN] PIN login submitted.");
+
+                for (int iNext = 1; iNext <= 6; iNext++)
+                {
+                    if (isVisible(By.xpath(ObjReader.getLocator("iNextBtnNewUser")), 1))
+                    {
+                        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                        log.info("Clicked Next button - Attempt " + iNext);
+                    }
+                    else
+                    {
+                        log.info("Next button no longer available after " + (iNext - 1) + " clicks.");
+                        break;
+                    }
+                }
+                log.info("[LOGIN] PIN login submitted.");
+
+                if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 2))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                    // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                    log.info("[LOGIN] Accept Terms & Conditions completed.");
+                }
+
+                if (isVisible(By.xpath(ObjReader.getLocator("iNextBtnNewUser")), 3)) {
+                    for (int iNext = 1; iNext <= 7; iNext++)
+                    {
+                        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                    }
+                }
+                // After PIN, the system asks for a 6-digit TOTP code from the authenticator app
+                // We're using a hardcoded test value here — replace with TD lookup if needed
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"), "111111");
+
+                // Submit the TOTP code to complete the MFA flow
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+
+                log.info("[LOGIN] TOTP screen completed.");
+                // Click the Terms & Conditions checkbox
+                // Some accounts require accepting Terms & Conditions after first login or after a reset.
+                // Check if the T&C screen is there — if it is, tick the checkbox and hit Accept.
+                // If it's not there (most runs), this quietly skips without failing.
+                if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                    // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                    log.info("[LOGIN] Accept Terms & Conditions completed.");
+                }
+
+
+
+
+            }
+            else
+            {
+                // No PIN screen appeared — this is the simpler OTP-only login path
+                // Type the 6-digit OTP and submit directly
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+                log.info("[LOGIN] Classic login completed.");
+            }
+
+        }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent logs out and re-logs in as the transferee agent
+    // Description   : Exits the current BISS session, logs out fully, then performs a fresh
+    //                 login using the Transferee agent's credentials. Navigates back to
+    //                 My Clients → Transfers tab ready for the acceptance flow.
+    //
+    //                 This is the step that makes cross-agent transfers different from same-agent:
+    //                 the Transferee is a completely different user with different herds.
+    //
+    //                 Credential resolution order:
+    //                   1. System property TD:TransfereeUsername (set by Hooks from TestData.xlsx)
+    //                   2. System property transferee.username (set via -D in Maven/Bamboo)
+    //                   3. Fails if neither is available
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent logs out and re-log in as the transferee agent {string}")
+    public void theAgentLogsOutAndReLogsInAsTheTransfereAgent(String pUsername)
+    {
+        log.info("[STEP] When the agent logs out and re-logs in as the transferee agent");
+
+
+        {
+
+            log.info("[LOGIN] Classic login detected.");
+
+            // Hit the initial 'Log In' button on the BISS landing screen to get to the Keycloak form
+            //iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+            // Type the agent's username — pulled from Hooks.RUNTIME_USERNAME which is resolved
+            // at runtime from BISS_DATA + BISS_INET before any scenario executes.
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), pUsername);
+            // Move past the username screen to get to the password entry form
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+
+            // Type the password from the test data sheet (TD:Password column)
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
+
+            // Submit the password — this either takes us to the dashboard or triggers MFA
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+
+            // ── Account Expired detection (Option 4 fix — 05-05-2026) ────────────────────
+            // Keycloak shows "Account Expired" immediately after Login click when the agent's
+            // SSO account has expired. Detect it here before waiting for PIN/OTP screen.
+            // If found: mark agent expired → Hooks.markAgentExpired() re-resolves a fresh
+            // herd+agent pair → update RUNTIME_USERNAME → re-attempt login with new agent.
+            By iExpiredMsgBy = By.xpath("//*[contains(@class,'kc-feedback-text') " + "and contains(normalize-space(),'Account Expired')]");
+
+            if (isVisible(iExpiredMsgBy, 3))
+            {
+                String iExpiredAgent = Hooks.RUNTIME_USERNAME;
+                log.warning("[LOGIN] Account Expired detected for agent: " + iExpiredAgent + " — calling Hooks.markAgentExpired() to re-resolve.");
+
+                // Mark expired + re-resolve new herd+agent into Hooks.RUNTIME_HERD / RUNTIME_USERNAME
+                Hooks.markAgentExpired(iExpiredAgent);
+
+                // Cancel the current Keycloak session and restart login with new agent
+                iAction("CLICK", "XPATH", "//button[normalize-space()='Cancel'] | //a[normalize-space()='Cancel']", null);
+
+                // Navigate back to base URL for a clean login state
+                CommonFunctions.getDriver().navigate().to(Hooks.iUrl);
+                // iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+
+                // Re-attempt login with the newly resolved agent
+                // iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
+                getDriver().navigate().to(Hooks.iUrl);
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),       "TD:Password");
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),             null);
+
+                log.info("[LOGIN] Re-attempting login with new agent: " + pUsername);
+            }
+            // ── End Account Expired detection ──────────────────────────────────────────────
+
+            log.info("[STEP] Detect login screen and auto-login using simple PIN loop...");
+
+            WebDriver driver = CommonFunctions.getDriver();
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(3));
+
+            By pinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+
+            // Check whether the PIN login screen has appeared (give it 3 seconds — no need to wait longer)
+            if (isVisible(pinFormBy, 3)) {
+
+                log.info("[LOGIN] PIN screen detected. Using simple loop 1 → 7.");
+
+                // The PIN form has up to 7 digit slots — loop through all of them
+                // and enter '1' into each one that is enabled and visible
+                for (int idx = 1; idx <= 7; idx++) {
+
+                    // Build the XPath for this particular PIN slot dynamically using the index
+                    String dynamicXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+                    By pinInputBy = By.xpath(dynamicXpath);
+
+                    if (isVisible(pinInputBy, 1)) {
+
+                        WebElement input = driver.findElement(pinInputBy);
+
+                        boolean disabled = input.getAttribute("disabled") != null;
+
+                        if (!disabled && input.isEnabled())
+                        {
+                            // Slot is active — clear any pre-filled value and type our digit
+                            input.clear();
+                            input.sendKeys("1");
+                            log.info("[LOGIN] Entered '1' into PIN index: " + idx);
+                        }
+                        else
+                        {
+                            // Some PIN slots are disabled (grey) depending on the account setup — skip those
+                            log.info("[LOGIN] PIN index " + idx + " is DISABLED — skipping.");
+                        }
+
+                    } else {
+                        // This slot number doesn't exist in the DOM for this account — move on
+                        log.info("[LOGIN] PIN index " + idx + " not present in DOM — skipping.");
+                    }
+                }
+
+                // All available PIN digits are filled — submit the PIN form
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+                log.info("[LOGIN] PIN login submitted.");
+
+                if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 2))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                    // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                    log.info("[LOGIN] Accept Terms & Conditions completed.");
+                }
+
+                if (isVisible(By.xpath(ObjReader.getLocator("iNextBtnNewUser")), 3)) {
+                    for (int iNext = 1; iNext <= 7; iNext++)
+                    {
+                        iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                    }
+                }
+                // After PIN, the system asks for a 6-digit TOTP code from the authenticator app
+                // We're using a hardcoded test value here — replace with TD lookup if needed
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"), "111111");
+
+                // Submit the TOTP code to complete the MFA flow
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+
+                log.info("[LOGIN] TOTP screen completed.");
+                // Click the Terms & Conditions checkbox
+                // Some accounts require accepting Terms & Conditions after first login or after a reset.
+                // Check if the T&C screen is there — if it is, tick the checkbox and hit Accept.
+                // If it's not there (most runs), this quietly skips without failing.
+                if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+                {
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                    // T&C checkbox is ticked — the Accept button should now be enabled, click it
+                    iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                    log.info("[LOGIN] Accept Terms & Conditions completed.");
+                }
+
+
+
+
+            }
+            else
+            {
+                // No PIN screen appeared — this is the simpler OTP-only login path
+                // Type the 6-digit OTP and submit directly
+                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+                iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+                log.info("[LOGIN] Classic login completed.");
+            }
+
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent logs out and re-logs in as the transferor agent
+    // Description   : Exits the transferee session and re-logs in using the original transferor
+    //                 agent credentials. Navigates back to My Clients → Transfers tab.
+    //                 Called between sections to switch back to the transferor for the next transfer.
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent logs out and re-logs in as the transferor agent")
+    public void theAgentLogsOutAndReLogsInAsTheTransferorAgent()
+    {
+        log.info("[STEP] When the agent logs out and re-logs in as the transferor agent");
+
+        // ── Exit and logout ──────────────────────────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iExitBISSLink"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutBtn"), null);
+        log.info("Logged out of transferee agent session.");
+
+        // ── Resolve transferor credentials ───────────────────────────────────────────────
+        String iTransferorUsername = System.getProperty(TRANSFEROR_USERNAME_PROP,
+                stepdefinitions.Hooks.RUNTIME_USERNAME).trim();
+
+        // ── Fresh login as the transferor agent ──────────────────────────────────────────
+        stepdefinitions.Hooks.RUNTIME_USERNAME = iTransferorUsername;
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), iTransferorUsername);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), null);
+
+        // Handle OTP/PIN
+        handlePostLoginOTP();
+
+        // ── Navigate to BISS → My Clients → Transfers ───────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iBissLink"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+
+        iAction("CLICK", "XPATH",
+                "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers']"
+                        + " | //a[normalize-space()='Transfers']",
+                null);
+
+        log.info("Re-logged in as transferor agent: " + iTransferorUsername);
+    }
+
+
+    // ===================================================================================================================================
+    //  CROSS-AGENT TRANSFEREE ACCEPTANCE
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent completes the cross-agent transferee acceptance flow (DataTable)
+    // Description   : After the transferee agent has logged in, this step:
+    //                 1. Searches for the transferee herd in the Transfers tab
+    //                 2. Clicks View on the searched herd
+    //                 3. Clicks View on the transferee dashboard row
+    //                 4. Enters the captured transfer key
+    //                 5. Views the transfer application
+    //                 6. Enters transferee notes
+    //                 7. Submits to DAFM with T&C acceptance
     //
     //                 DataTable keys:
-    //                   transferorHerd (String) - {transferor.herd} (a random herd of the agent with no entitlements),
-    //                                             or a herd number to pin it
-    //                   transfereeHerd (String) - {transferee.herd}, or a herd number
-    //                   transfereeName (String) - {transferee.name}, or the exact portal name
-    //                   transferType   (String) - transfer type text, e.g. "Inheritance of Entitlements"
+    //                   transfereeHerd (String) - herd number to search for
+    //                   notes          (String) - transferee notes e.g. "Approved Test"
+    //
+    //                 Depends on: transfer key captured by TC_01_ENTS.theTransferKeyShouldBeCaptured()
+    //                 The key is read from System.getProperty("lastCapturedTransferKey") which
+    //                 TC_01_ENTS publishes after capturing it.
     //
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 23-09-2026 (Playwright + runtime herds)
+    // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    @When("the agent initiates a transfer search for herd without entitlements")
-    public void theAgentInitiatesATransferSearchForHerdWithoutEntitlements(DataTable pDataTable)
-    {
-        log.info("[STEP] When the agent initiates a transfer search for herd without entitlements");
+    @And("the agent completes the cross-agent transferee acceptance flow")
+    public void theAgentCompletesTheCrossAgentTransfereeAcceptanceFlow(DataTable pDataTable) throws InterruptedException {
+        log.info("[STEP] And the agent completes the cross-agent transferee acceptance flow");
 
-        Map<String, String> iRaw      = pDataTable.asMap(String.class, String.class);
-        boolean             iRuntime  = EntsTestData.tableHasToken(iRaw);
-        int                 iMaxTries = iRuntime ? Math.max(1, ConfigManager.getInt("ents.pair.retries", 5)) : 1;
-        Map<String, String> iData     = null;
+        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
 
-        // Pick a pair (runtime) and check both herds in the agent's Transfer Out list.
-        // The transferee is checked first, so the last search on screen is the transferor.
-        for (int iTry = 1; iTry <= iMaxTries; iTry++)
-        {
-            if (iRuntime)
-            {
-                EntsTestData.nextNoEntitlementPair(EntsTestData.loggedInUser(),
-                        iRaw.getOrDefault("transferType", "").trim() + " (no entitlements)");
-            }
-            iData = EntsTestData.resolveTable(iRaw);
-
-            String iRejectedHerd = iData.get("transfereeHerd").trim();
-            String iReason       = herdProblem(iRejectedHerd, "transferee");
-            if (iReason == null)
-            {
-                iRejectedHerd = iData.get("transferorHerd").trim();
-                iReason       = herdProblem(iRejectedHerd, "transferor");
-            }
-
-            if (iReason == null)
-            {
-                // herdProblem may have swapped the DB name for the portal name - resolve the tokens again
-                if (iRuntime) iData = EntsTestData.resolveTable(iRaw);
-                break;
-            }
-
-            if (!iRuntime || iTry == iMaxTries)
-            {
-                throw new RuntimeException("[TRANSFER] Herd " + iRejectedHerd + " is " + iReason
-                        + (iRuntime ? " (tried " + iMaxTries + " pairs - check the \"ENTS Agent herds without entitlements\" query / ents.scheme.year)" : ""));
-            }
-            EntsTestData.markNotFound(iRejectedHerd, iReason);
-            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": " + iRejectedHerd + " " + iReason + " - picking another pair.");
-        }
-
-        String iTransferorHerd = iData.get("transferorHerd").trim();
         String iTransfereeHerd = iData.get("transfereeHerd").trim();
-        String iTransfereeName = iData.get("transfereeName").trim();
-        String iTransferType   = iData.get("transferType").trim();
+        String iNotes          = iData.get("notes").trim();
 
-        // Search the transferor herd and open its row (waits for that row, skips expired rows)
-        EntsSession.openTransferOutHerd(iTransferorHerd);
-        log.info("Transferor herd opened (no entitlements expected): " + iTransferorHerd);
+        // ── Search for the transferee herd ───────────────────────────────────────────────
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iTransfereeHerd);
+        Thread.sleep(2000);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersViewLink"), null);
+        log.info("Partner herd opened: " + iTransfereeHerd);
 
-        // Create Transfer Application
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
+        // ── Click the ETF button ─────────────────────────────────────────────────────────
+        // ETF button is unique to the Partner dashboard — it's NOT the standard View button
+        if (isVisible(By.xpath(ObjReader.getLocator("iETFBtn")), 3)) {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
+            log.info("ETF button clicked.");
+            // ── Enter the captured transfer key ──────────────────────────────────────────────
+            //String iTransferKey = System.getProperty("lastCapturedTransferKey", "");
+            //Assertions.assertFalse(iTransferKey.isEmpty(), "Transfer key must have been captured in the Transferor flow before the ETF Partner can accept.");
 
-        // Search for the transferee
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), iTransfereeHerd);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), iTransfereeName);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
-        log.info("Transferee searched: " + iTransfereeName + " (" + iTransfereeHerd + ")");
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey);
+            log.info("Transfer key entered: " + iCapturedTransferKey);
 
-        // Select the transfer type (same union XPath as TC_01_ENTS)
-        pause(1000);
-        iAction("CLICK", "XPATH",
-                "//mat-radio-button[contains(.,'" + iTransferType + "')] | "
-                        + "//tr[contains(.,'" + iTransferType + "')]//input | "
-                        + "//*[@value='" + iTransferType + "']",
-                null);
-        pause(1000);
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+            // ── Enter transferee notes ───────────────────────────────────────────────────────
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+            // ── Submit to DAFM ───────────────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
 
-        // Next - lands on the entitlement page
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+            // Accept T&C
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
 
-        log.info("Transfer setup complete - on the entitlement page. Expecting NO Add button for herd: " + iTransferorHerd);
+            // Confirm submission
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        }
+        else
+        {
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
+
+
+            // ── Enter the captured transfer key ──────────────────────────────────────────────
+            //String iTransferKey = System.getProperty("lastCapturedTransferKey", "");
+            //Assertions.assertFalse(iTransferKey.isEmpty(), "Transfer key must have been captured in the Transferor flow before the ETF Partner can accept.");
+
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey);
+            log.info("Transfer key entered: " + iCapturedTransferKey);
+            // ── View the transfer application ────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+            // ── Submit to DAFM ───────────────────────────────────────────────────────────────
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+
+            // Accept T&C
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+
+            // Confirm submission
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        }
+        log.info("Cross-agent transferee acceptance completed for herd: " + iTransfereeHerd);
     }
 
 
+    // ===================================================================================================================================
+    //  HELPER — Post-login OTP/PIN handling
+    //
+    //  Extracted as a private method because it's called twice per section (once for transferee
+    //  login, once for transferor re-login). Follows the same logic as TC_03.java's login step
+    //  but is self-contained here to avoid coupling to TC_03's internal implementation.
+    // ===================================================================================================================================
+
     // ***************************************************************************************************************************************************************************************
-    // Function Name : herdProblem
-    // Description   : Null when the herd can be used, otherwise the reason it cannot (same checks as TC_01_ENTS):
-    //                   - "blacklisted"                              herd is in Hooks.BLACKLISTED_HERDS
-    //                   - "not in the Transfer Out list of <agent>"  the search returns no row for this herd
-    //                   - "expired (...)"                            every row of the herd has the Expired icon
-    //                 For the transferee, the name of the not-expired row replaces the DB name (ents.name.from.portal),
-    //                 because the transferee search needs the exact portal name.
-    // Parameters    : pHerd (String) - herd number | pRole (String) - "transferor" or "transferee"
+    // Function Name : handlePostLoginOTP
+    // Description   : Handles the OTP / PIN flow that appears after submitting username + password.
+    //                 Checks for PIN screen first (up to 7 slots), then TOTP, then plain OTP.
+    //                 Also handles the T&C acceptance screen if it appears.
+    //                 Mirrors the logic in TC_03.theAgentLogsIntoTheApplicationWithValidCredentialsAndOTP()
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 23-09-2026
+    // Date Created  : 31-03-2026
     // ***************************************************************************************************************************************************************************************
-    private static String herdProblem(String pHerd, String pRole)
+    private void handlePostLoginOTP()
     {
-        if (Hooks.BLACKLISTED_HERDS.contains(pHerd))
+        WebDriver iDriver = getDriver();
+
+        By iPinFormBy = By.xpath(ObjReader.getLocator("iPinForm"));
+
+        if (isVisible(iPinFormBy, 3))
         {
-            return "blacklisted";
+            log.info("[LOGIN-XAGENT] PIN screen detected. Entering PIN 1→7.");
+
+            for (int idx = 1; idx <= 7; idx++)
+            {
+                String iDynamicXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+                By iPinBy = By.xpath(iDynamicXpath);
+
+                if (isVisible(iPinBy, 1))
+                {
+                    try
+                    {
+                        org.openqa.selenium.WebElement iInput = iDriver.findElement(iPinBy);
+                        if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+                        {
+                            iInput.clear();
+                            iInput.sendKeys("1");
+                        }
+                    }
+                    catch (Exception ignored) {}
+                }
+            }
+
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"), "111111");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+
+            // Handle T&C if present
+            if (isVisible(By.xpath(ObjReader.getLocator("iAcceptTermsCheckbox")), 3))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+            }
+        }
+        else
+        {
+            // Simple OTP flow
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), null);
         }
 
-        if (!EntsSession.searchTransferOut(pHerd))
-        {
-            return "not in the Transfer Out list of " + EntsTestData.loggedInUser();
-        }
-
-        if (EntsSession.activeTransferOutRows(pHerd) == 0)
-        {
-            return "expired (every Transfer Out row of this herd has the Expired icon)";
-        }
-
-        if ("transferee".equals(pRole) && ConfigManager.getBool("ents.name.from.portal", true))
-        {
-            String iPortalName = EntsSession.transferOutName(pHerd);
-            log.info("[TRANSFER] transferee " + pHerd + " portal name (not-expired row)='" + iPortalName + "'");
-            EntsTestData.usePortalName(pHerd, iPortalName);
-        }
-        return null;
+        log.info("[LOGIN-XAGENT] Post-login OTP handling complete.");
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : the Add Entitlement button should not be present
-    // Description   : Asserts that no visible Add button is on the entitlement page and that the
-    //                 "You currently have no entitlements to select" label is shown.
-    //                 Change from Selenium: counts the VISIBLE Add buttons with Playwright locators instead of
-    //                 findElements + isDisplayed, and gives the page a moment to render the empty state first.
+    // Method        : performLogout
+    // Description   : Logs out via Exit + Logout buttons. Falls back to navigate + deleteAllCookies.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
+    // Date Created  : 22-05-2026
     // ***************************************************************************************************************************************************************************************
-    @Then("the Add Entitlement button should not be present")
-    public void theAddEntitlementButtonShouldNotBePresent()
+    public void performLogout()
     {
-        log.info("[STEP] Then the Add Entitlement button should not be present");
-
-        // Wait for the empty-state label rather than asserting on a page that is still rendering
-        boolean iNoEntitlementLabel = EntsSession.isVisible(ObjReader.getLocator("iTransferNoEntitlementLabel"), 10);
-
-        List<Locator> iAddButtons   = xp(ObjReader.getLocator("iTransferAddEntitlementBtns")).all();
-        int           iVisibleCount = 0;
-        for (Locator iBtn : iAddButtons)
+        log.info("[TC13-RELOGIN] Logging out current session...");
+        try
         {
-            if (iBtn.isVisible()) iVisibleCount++;
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            By iSadPopup = By.xpath(ObjReader.getLocator("iLogoutPopup"));
+            if (isVisible(iSadPopup, 1)) iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            log.info("[TC13-RELOGIN] Logout complete.");
+            getDriver().manage().deleteAllCookies();
+            getDriver().navigate().to(Hooks.iUrl);
         }
+        catch (Exception e)
+        {
+            log.warning("[TC13-RELOGIN] UI logout failed (" + e.getMessage() + ") — navigating to base URL as fallback.");
+            getDriver().manage().deleteAllCookies();
+            getDriver().navigate().to(Hooks.iUrl);
+        }
+    }
 
-        log.info("[TRANSFER] Visible Add button(s): " + iVisibleCount
-                + " | 'no entitlements' label shown: " + iNoEntitlementLabel);
-
-        Assertions.assertEquals(0, iVisibleCount,
-                "Add Entitlement button should NOT be present for a herd without entitlements.");
-        Assertions.assertTrue(iNoEntitlementLabel,
-                "The 'You currently have no entitlements to select' label should be shown for a herd without entitlements.");
-
-        log.info("Negative validation passed - Add Entitlement button is absent as expected.");
+    /**
+     * Short-wait visibility check — returns true if the element appears within pSeconds.
+     * Never throws. Same pattern as TC_03.java's isVisible() helper.
+     */
+    private boolean isVisible(By pLocator, int pSeconds)
+    {
+        try
+        {
+            WebDriverWait iWait = new WebDriverWait(getDriver(), Duration.ofSeconds(pSeconds));
+            iWait.until(ExpectedConditions.visibilityOfElementLocated(pLocator));
+            return true;
+        }
+        catch (Exception e)
+        {
+            return false;
+        }
     }
 }
