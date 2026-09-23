@@ -1,405 +1,230 @@
 // ===================================================================================================================================
-// File          : EntsSession.java
+// File          : TC_02_ENTS.java
 // Package       : stepdefinitions.ENTS
-// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
+// Description   : Step definitions for TC_02_ENTS - Transfer Application negative case (herd without entitlements).
 //
-//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
-//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
-//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
-//                 themselves keep the same Gherkin text as before.
+//                 Steps in this file (2):
+//                   1. the agent initiates a transfer search for herd without entitlements (DataTable)
+//                   2. the Add Entitlement button should not be present
 //
-//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
+//                 Every other step of TC_02_ENTS.feature is already defined:
+//                   login / portal navigation                       -> stepdefinitions.TC_03
+//                   tab switching                                   -> stepdefinitions.TC_06
+//                   create / upload / send / key / submit / back    -> stepdefinitions.ENTS.TC_01_ENTS
+//
+//                 Playwright edition (22-09-2026):
+//                   - Same step texts, same ObjectRepository keys, same flow.
+//                   - The transferor herd is searched with EntsSession.openTransferOutHerd, which waits for the row of
+//                     THAT herd and skips rows marked expired. Selenium clicked the first View link on the page, which
+//                     could open an unrelated row before the search result arrived.
+//                   - Runtime data (23-09-2026): when the DataTable has tokens, both herds are picked at random for
+//                     the logged-in agent by EntsTestData.nextNoEntitlementPair:
+//                       transferor - a herd of the agent with NO entitlements (query "ENTS Agent herds without entitlements")
+//                       transferee - a herd from the agent's usual Agent Login pool
+//                     Both are checked in the Transfer Out list first (blacklisted, missing, expired). A rejected herd is
+//                     recorded in the used-herds file and a new pair is picked, up to ents.pair.retries (default 5).
+//                     A plain herd number in a cell is used as it is (pinning for debugging).
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 22-09-2026
+// Date Created  : 31-03-2026 | Updated: 23-09-2026 (Playwright + runtime herds for the negative case)
 // ===================================================================================================================================
 
 package stepdefinitions.ENTS;
 
 import com.microsoft.playwright.Locator;
-import commonFunctions.CommonFunctions;
-import commonFunctions.UiHelpers;
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import org.junit.jupiter.api.Assertions;
 import stepdefinitions.Hooks;
 import utilities.ConfigManager;
 import utilities.EntsTestData;
 import utilities.ObjReader;
 
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Logger;
 
 import static commonFunctions.CommonFunctions.iAction;
+import static stepdefinitions.ENTS.EntsSession.pause;
+import static stepdefinitions.ENTS.EntsSession.xp;
 
-final class EntsSession
+public class TC_02_ENTS
 {
-    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
-
-    // How long an "if present" check waits before deciding the element is not there
-    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
-
-    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
-    static final String TRANSFERS_TAB_XPATH =
-            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
-
-    private EntsSession() { }
+    private static final Logger log = Logger.getLogger(TC_02_ENTS.class.getName());
 
 
     // ===================================================================================================================================
-    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
-    // ===================================================================================================================================
-
-    // Locator for a raw XPath
-    static Locator xp(String pXpath)
-    {
-        return UiHelpers.byXpath(pXpath);
-    }
-
-    // True when the first match becomes visible within pSeconds - never throws
-    static boolean isVisible(String pXpath, int pSeconds)
-    {
-        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
-    }
-
-    // Immediate count, no waiting - same as findElements(...).size()
-    static int countOf(String pXpath)
-    {
-        return xp(pXpath).count();
-    }
-
-    // Replacement for Thread.sleep
-    static void pause(long pMilliseconds)
-    {
-        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
-    }
-
-
-    // ===================================================================================================================================
-    //  LOGIN
+    //  NEGATIVE CASE - HERD WITHOUT ENTITLEMENTS
     // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : loginAs
-    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
-    //                 Same sequence as the Selenium ENTS login steps:
-    //                   username -> Continue -> password (TD:Password) -> Login
-    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
-    //                   otherwise :  OTP 111111 -> Login
-    //                 If the username box is not on screen (for example after an earlier section left the portal open),
-    //                 the base URL is opened first.
-    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
+    // Step          : the agent initiates a transfer search for herd without entitlements (DataTable)
+    // Description   : Runs the transferor flow up to the entitlement page and stops there. The next step asserts that
+    //                 the Add button is absent.
+    //                 This is TC_01_ENTS.theAgentCreatesATransferApplicationWithTheFollowingDetails() without step 5
+    //                 (add entitlement), because the herd has none.
     //
-    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
-    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
-    //                 and then logged in again as the same expired ENTS user, which could never succeed.
+    //                 DataTable keys:
+    //                   transferorHerd (String) - {transferor.herd} (a random herd of the agent with no entitlements),
+    //                                             or a herd number to pin it
+    //                   transfereeHerd (String) - {transferee.herd}, or a herd number
+    //                   transfereeName (String) - {transferee.name}, or the exact portal name
+    //                   transferType   (String) - transfer type text, e.g. "Inheritance of Entitlements"
     //
-    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
-    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
+    // Date Created  : 31-03-2026 | Updated: 23-09-2026 (Playwright + runtime herds)
     // ***************************************************************************************************************************************************************************************
-    static void loginAs(String pUsername, String pLogPrefix)
+    @When("the agent initiates a transfer search for herd without entitlements")
+    public void theAgentInitiatesATransferSearchForHerdWithoutEntitlements(DataTable pDataTable)
     {
-        log.info(pLogPrefix + " Logging in as: " + pUsername);
+        log.info("[STEP] When the agent initiates a transfer search for herd without entitlements");
 
-        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
+        Map<String, String> iRaw      = pDataTable.asMap(String.class, String.class);
+        boolean             iRuntime  = EntsTestData.tableHasToken(iRaw);
+        int                 iMaxTries = iRuntime ? Math.max(1, ConfigManager.getInt("ents.pair.retries", 5)) : 1;
+        Map<String, String> iData     = null;
+
+        // Pick a pair (runtime) and check both herds in the agent's Transfer Out list.
+        // The transferee is checked first, so the last search on screen is the transferor.
+        for (int iTry = 1; iTry <= iMaxTries; iTry++)
         {
-            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
-            UiHelpers.navigateTo(Hooks.iUrl);
-        }
-
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
-
-        // -- Account Expired -------------------------------------------------------------------------------------
-        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
-        if (isVisible(iExpiredXpath, PROBE_SECONDS))
-        {
-            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
-                    + ". Use another login in the feature file or ask for the account to be renewed.");
-        }
-
-        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
-        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
-        {
-            log.info(pLogPrefix + " PIN screen detected.");
-            fillPinSlots(pLogPrefix);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
-            log.info(pLogPrefix + " PIN login submitted.");
-
-            acceptTermsIfShown(pLogPrefix, 2);
-
-            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
-            for (int iNext = 1; iNext <= 7; iNext++)
+            if (iRuntime)
             {
-                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
-                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
+                EntsTestData.nextNoEntitlementPair(EntsTestData.loggedInUser(),
+                        iRaw.getOrDefault("transferType", "").trim() + " (no entitlements)");
+            }
+            iData = EntsTestData.resolveTable(iRaw);
+
+            String iRejectedHerd = iData.get("transfereeHerd").trim();
+            String iReason       = herdProblem(iRejectedHerd, "transferee");
+            if (iReason == null)
+            {
+                iRejectedHerd = iData.get("transferorHerd").trim();
+                iReason       = herdProblem(iRejectedHerd, "transferor");
             }
 
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
-            log.info(pLogPrefix + " TOTP submitted.");
-
-            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
-        }
-        else
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
-            log.info(pLogPrefix + " OTP login submitted.");
-        }
-
-        EntsTestData.setLoggedInUser(pUsername);
-        log.info(pLogPrefix + " Login complete: " + pUsername);
-    }
-
-    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
-    private static void fillPinSlots(String pLogPrefix)
-    {
-        for (int idx = 1; idx <= 7; idx++)
-        {
-            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
-
-            if (!isVisible(iSlotXpath, 1))
+            if (iReason == null)
             {
-                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
-                continue;
+                // herdProblem may have swapped the DB name for the portal name - resolve the tokens again
+                if (iRuntime) iData = EntsTestData.resolveTable(iRaw);
+                break;
             }
 
-            Locator iInput = xp(iSlotXpath).first();
-            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+            if (!iRuntime || iTry == iMaxTries)
             {
-                iInput.fill("");
-                iInput.pressSequentially("1");
-                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
+                throw new RuntimeException("[TRANSFER] Herd " + iRejectedHerd + " is " + iReason
+                        + (iRuntime ? " (tried " + iMaxTries + " pairs - check the \"ENTS Agent herds without entitlements\" query / ents.scheme.year)" : ""));
             }
-            else
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
-            }
+            EntsTestData.markNotFound(iRejectedHerd, iReason);
+            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": " + iRejectedHerd + " " + iReason + " - picking another pair.");
         }
+
+        String iTransferorHerd = iData.get("transferorHerd").trim();
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
+        String iTransfereeName = iData.get("transfereeName").trim();
+        String iTransferType   = iData.get("transferType").trim();
+
+        // Search the transferor herd and open its row (waits for that row, skips expired rows)
+        EntsSession.openTransferOutHerd(iTransferorHerd);
+        log.info("Transferor herd opened (no entitlements expected): " + iTransferorHerd);
+
+        // Create Transfer Application
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
+
+        // Search for the transferee
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), iTransfereeHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), iTransfereeName);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
+        log.info("Transferee searched: " + iTransfereeName + " (" + iTransfereeHerd + ")");
+
+        // Select the transfer type (same union XPath as TC_01_ENTS)
+        pause(1000);
+        iAction("CLICK", "XPATH",
+                "//mat-radio-button[contains(.,'" + iTransferType + "')] | "
+                        + "//tr[contains(.,'" + iTransferType + "')]//input | "
+                        + "//*[@value='" + iTransferType + "']",
+                null);
+        pause(1000);
+
+        // Next - lands on the entitlement page
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+
+        log.info("Transfer setup complete - on the entitlement page. Expecting NO Add button for herd: " + iTransferorHerd);
     }
 
-    // Ticks and accepts Terms & Conditions when the screen is shown
-    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
-    {
-        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
-            log.info(pLogPrefix + " Terms & Conditions accepted.");
-        }
-    }
-
-
-    // ===================================================================================================================================
-    //  LOGOUT
-    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : logout
-    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
-    //                 base URL so the next login starts on a clean Keycloak page.
-    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
-    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Function Name : herdProblem
+    // Description   : Null when the herd can be used, otherwise the reason it cannot (same checks as TC_01_ENTS):
+    //                   - "blacklisted"                              herd is in Hooks.BLACKLISTED_HERDS
+    //                   - "not in the Transfer Out list of <agent>"  the search returns no row for this herd
+    //                   - "expired (...)"                            every row of the herd has the Expired icon
+    //                 For the transferee, the name of the not-expired row replaces the DB name (ents.name.from.portal),
+    //                 because the transferee search needs the exact portal name.
+    // Parameters    : pHerd (String) - herd number | pRole (String) - "transferor" or "transferee"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // Date Created  : 23-09-2026
     // ***************************************************************************************************************************************************************************************
-    static void logout()
+    private static String herdProblem(String pHerd, String pRole)
     {
-        log.info("[RELOGIN] Logging out current session...");
-        try
+        if (Hooks.BLACKLISTED_HERDS.contains(pHerd))
         {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
-
-            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
-            {
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
-            }
-            log.info("[RELOGIN] Logout complete.");
-        }
-        catch (Exception e)
-        {
-            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
+            return "blacklisted";
         }
 
-        UiHelpers.clearCookies();
-        UiHelpers.navigateTo(Hooks.iUrl);
-        EntsTestData.setLoggedInUser("");
+        if (!EntsSession.searchTransferOut(pHerd))
+        {
+            return "not in the Transfer Out list of " + EntsTestData.loggedInUser();
+        }
+
+        if (EntsSession.activeTransferOutRows(pHerd) == 0)
+        {
+            return "expired (every Transfer Out row of this herd has the Expired icon)";
+        }
+
+        if ("transferee".equals(pRole) && ConfigManager.getBool("ents.name.from.portal", true))
+        {
+            String iPortalName = EntsSession.transferOutName(pHerd);
+            log.info("[TRANSFER] transferee " + pHerd + " portal name (not-expired row)='" + iPortalName + "'");
+            EntsTestData.usePortalName(pHerd, iPortalName);
+        }
+        return null;
     }
 
 
-    // ===================================================================================================================================
-    //  TRANSFER OUT LIST - search one herd and open it
-    // ===================================================================================================================================
-
-    // Cells of a Transfer Out row (Angular mat-table column classes, checked against the DOM on 22-09-2026)
-    static final String VIEW_LINK_XPATH    = "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']";
-    static final String NAME_CELL_XPATH    = "//td[contains(@class,'mat-column-name')]";
-    static final String EXPIRED_CELL_XPATH = "//td[contains(@class,'mat-column-expired')]";
-
     // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutAllRowsXpath
-    // Description   : XPath of EVERY Transfer Out row of one herd, expired or not: rows whose Herd No. cell is exactly
-    //                 the herd and that have a View link.
-    //                 One herd can have several rows, one per holder. Seen 22-09-2026 for D3990193: "Thomas Morris"
-    //                 (Expired icon shown) and "Jean Doolaghty" (not expired). Both rows hold the same herd number.
-    // Parameters    : pHerd (String) - herd number
+    // Step          : the Add Entitlement button should not be present
+    // Description   : Asserts that no visible Add button is on the entitlement page and that the
+    //                 "You currently have no entitlements to select" label is shown.
+    //                 Change from Selenium: counts the VISIBLE Add buttons with Playwright locators instead of
+    //                 findElements + isDisplayed, and gives the page a moment to render the empty state first.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
     // ***************************************************************************************************************************************************************************************
-    static String transferOutAllRowsXpath(String pHerd)
+    @Then("the Add Entitlement button should not be present")
+    public void theAddEntitlementButtonShouldNotBePresent()
     {
-        return "//tr[." + VIEW_LINK_XPATH + "]"
-                + "[.//td[contains(@class,'mat-column-herdNo')][normalize-space()='" + pHerd + "']]";
-    }
+        log.info("[STEP] Then the Add Entitlement button should not be present");
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutRowXpath
-    // Description   : XPath of the NOT-EXPIRED Transfer Out row(s) of one herd. The row to open, name to read and View
-    //                 link to click always come from here.
-    //                 A row is expired when its Expired cell holds the red icon
-    //                   <mat-icon aria-label="red check mark for expired"> do_not_disturb_on </mat-icon>
-    //                 and not expired when that cell is empty.
-    //                 Clicking "the first View link" is not safe either: until the search result arrives the list still
-    //                 shows unfiltered rows, including TRN rows (seen 22-09-2026: a click opened TRN 26D0957T).
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
-    // ***************************************************************************************************************************************************************************************
-    static String transferOutRowXpath(String pHerd)
-    {
-        return transferOutAllRowsXpath(pHerd) + "[not(." + EXPIRED_CELL_XPATH + "//mat-icon)]";
-    }
+        // Wait for the empty-state label rather than asserting on a page that is still rendering
+        boolean iNoEntitlementLabel = EntsSession.isVisible(ObjReader.getLocator("iTransferNoEntitlementLabel"), 10);
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : searchTransferOut
-    // Description   : Types the herd in the Transfer Out search box, clicks Search and waits until a row for THAT herd
-    //                 is shown (up to ents.search.seconds). Returns false when it never appears.
-    //                 Then goes through every row of the herd and logs Name + Expired for each, so the log shows which
-    //                 row will be used. Expired rows are not rejected here - see activeTransferOutRows.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (logs every row)
-    // ***************************************************************************************************************************************************************************************
-    static boolean searchTransferOut(String pHerd)
-    {
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
-        if (!isVisible(transferOutAllRowsXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 8)))
+        List<Locator> iAddButtons   = xp(ObjReader.getLocator("iTransferAddEntitlementBtns")).all();
+        int           iVisibleCount = 0;
+        for (Locator iBtn : iAddButtons)
         {
-            return false;
+            if (iBtn.isVisible()) iVisibleCount++;
         }
 
-        List<Locator> iRows = xp(transferOutAllRowsXpath(pHerd)).all();
-        for (int i = 0; i < iRows.size(); i++)
-        {
-            Locator iRow     = iRows.get(i);
-            boolean iExpired = iRow.locator("xpath=." + EXPIRED_CELL_XPATH + "//mat-icon").count() > 0;
-            String  iName    = "";
-            try
-            {
-                iName = iRow.locator("xpath=." + NAME_CELL_XPATH).first().innerText().trim().replaceAll("\\s+", " ");
-            }
-            catch (Exception iEx)
-            {
-                iName = "?";
-            }
-            log.info("[TRANSFER] " + pHerd + " row " + (i + 1) + "/" + iRows.size() + ": Name='" + iName + "' | "
-                    + (iExpired ? "EXPIRED - skipped" : "not expired"));
-        }
-        return true;
-    }
+        log.info("[TRANSFER] Visible Add button(s): " + iVisibleCount
+                + " | 'no entitlements' label shown: " + iNoEntitlementLabel);
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : activeTransferOutRows
-    // Description   : Number of NOT-expired rows of the herd currently on screen (call after searchTransferOut).
-    //                 0 means every row of the herd is expired.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static int activeTransferOutRows(String pHerd)
-    {
-        return countOf(transferOutRowXpath(pHerd));
-    }
+        Assertions.assertEquals(0, iVisibleCount,
+                "Add Entitlement button should NOT be present for a herd without entitlements.");
+        Assertions.assertTrue(iNoEntitlementLabel,
+                "The 'You currently have no entitlements to select' label should be shown for a herd without entitlements.");
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutName
-    // Description   : Name cell of the first NOT-expired row of the herd, or "" when there is none
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static String transferOutName(String pHerd)
-    {
-        String iCell = transferOutRowXpath(pHerd) + NAME_CELL_XPATH;
-        try
-        {
-            if (countOf(iCell) > 0) return xp(iCell).first().innerText().trim().replaceAll("\\s+", " ");
-        }
-        catch (Exception iEx)
-        {
-            log.warning("[TRANSFER] Could not read the portal name of " + pHerd + ": " + iEx.getMessage());
-        }
-        return "";
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clickTransferOutView
-    // Description   : Clicks View in the first NOT-expired row of the herd (the list must already show it)
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void clickTransferOutView(String pHerd)
-    {
-        if (activeTransferOutRows(pHerd) == 0)
-        {
-            throw new IllegalStateException("[TRANSFER] Every Transfer Out row of herd " + pHerd + " is marked expired - nothing to open.");
-        }
-        iAction("CLICK", "XPATH", "(" + transferOutRowXpath(pHerd) + VIEW_LINK_XPATH + ")[1]", null);
-        log.info("[TRANSFER] Opened herd " + pHerd + " ('" + transferOutName(pHerd) + "' row) from Transfer Out.");
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : openTransferOutHerd
-    // Description   : searchTransferOut + clicks View in the first NOT-expired row of that herd. Fails with the herd
-    //                 number and agent in the message when the herd is not in the list or every row is expired.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
-    // ***************************************************************************************************************************************************************************************
-    static void openTransferOutHerd(String pHerd)
-    {
-        if (!searchTransferOut(pHerd))
-        {
-            throw new IllegalStateException("[TRANSFER] Herd " + pHerd + " is not in the Transfer Out list of " + EntsTestData.loggedInUser() + " (waited " + ConfigManager.getInt("ents.search.seconds", 8) + " s).");
-        }
-        clickTransferOutView(pHerd);
-    }
-
-
-    // ===================================================================================================================================
-    //  NAVIGATION
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : openBissMyClientsTransfers
-    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
-    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void openBissMyClientsTransfers()
-    {
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
+        log.info("Negative validation passed - Add Entitlement button is absent as expected.");
     }
 }
