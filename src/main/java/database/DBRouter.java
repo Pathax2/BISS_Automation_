@@ -55,10 +55,17 @@ import java.util.logging.*;
 //                   DBRouter.runDB("ENTS", "ENTS ETF Login herds", "2026", "200");
 //                   DBRouter.runDB("ENTS", "ENTS Agent herds without entitlements", "aga6077", "200", "2026");
 //
+//                 Individual usage (25-09-2026, TC_03_IND):
+//                   DBRouter.runDB("DATA", "List of not started individual herds with CISYF flag", "2026", "50");
+//                   DBRouter.runDB("INET", "Get Individual Login for herd", "E1080206");
+//                   String login = DBRouter.getValue("LOGIN");
+//
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 27-04-2026
 // Updated       : 22-09-2026 - Playwright edition: ENTS_DATA connection and the three ENTS login queries added
 //                 23-09-2026 - "ENTS Agent herds without entitlements" added (TC_02_ENTS Section 2)
+//                 25-09-2026 - "List of not started individual herds with CISYF flag" (DATA) and
+//                              "Get Individual Login for herd" (INET) added (TC_03_IND)
 // =====================================================================================================================================
 
 public class DBRouter
@@ -1076,6 +1083,84 @@ public class DBRouter
                 binds.add(agent);
                 binds.add(maxRows);
                 jdbcParams = binds.toArray();
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // DATA DB (CENTEST_BISS_DATA): Not Started individual herds with a CISYF flag (TC_03_IND)
+            //
+            // Source query supplied by Aniket (25-09-2026):
+            //   select app.app_herd_no, app.app_year, sch.*
+            //   from vwbs_application app, vwbs_application_flag_schemes sch
+            //   where app.app_id = sch.app_id and mde_abbrev='I' and cisyf_ind is not null
+            //   and app.app_applicant_type = 'I';
+            //
+            // Changes agreed for automation:
+            //   mde_abbrev = 'RI'                     -> Not Started (was 'I' = Submitted). TC_03_IND starts a
+            //                                            new BISS application, which needs a Not Started herd.
+            //   app.app_year = ?                      -> scheme year (herd.year, default 2026)
+            //   DISTINCT herd + year                  -> the flag view can hold several rows per application
+            //   REGEXP_LIKE(app_herd_no, '^[A-Z]')    -> real herd numbers only (TRNs start with digits)
+            //   ORDER BY DBMS_RANDOM.VALUE + ROWNUM   -> random pick, limited to params[1] rows
+            //   mde_abbrev and cisyf_ind stay unqualified, exactly as in the source query.
+            //
+            // params[0] = year  (required)
+            // params[1] = limit (optional - defaults to 50)
+            // Columns returned: APP_HERD_NO, APP_YEAR
+            // ----------------------------------------------------------------
+            case "LIST OF NOT STARTED INDIVIDUAL HERDS WITH CISYF FLAG":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "year");
+                int maxRows = (params.length >= 2 && !isBlank(params[1])) ? parseInt(params[1], "limit") : 50;
+                sql =
+                        "SELECT app_herd_no, app_year " +
+                                "FROM ( " +
+                                "    SELECT app_herd_no, app_year " +
+                                "    FROM ( " +
+                                "        SELECT DISTINCT app.app_herd_no, app.app_year " +
+                                "        FROM vwbs_application app, vwbs_application_flag_schemes sch " +
+                                "        WHERE app.app_id             = sch.app_id " +
+                                "        AND   mde_abbrev             = 'RI' " +
+                                "        AND   cisyf_ind              IS NOT NULL " +
+                                "        AND   app.app_applicant_type = 'I' " +
+                                "        AND   app.app_year           = ? " +
+                                "        AND   REGEXP_LIKE(app.app_herd_no, '^[A-Z]') " +
+                                "    ) " +
+                                "    ORDER BY DBMS_RANDOM.VALUE " +
+                                ") " +
+                                "WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // INET DB (CENTEST_BISS_INET): Individual login for a herd (TC_03_IND)
+            //
+            // Source query supplied by Aniket (25-09-2026). Role 100 = the herd, role 115 = the customer's
+            // online business record that the login (tdcr_user_info) is attached to. The herd is now a bind
+            // parameter instead of the fixed 'E1080206'.
+            //
+            // One herd can return more than one login - Hooks.resolveIndividualHerdAndUser takes the first one not expired.
+            //
+            // params[0] = herd number (required)
+            // Columns returned: HERDNUMBER, LOGIN
+            // ----------------------------------------------------------------
+            case "GET INDIVIDUAL LOGIN FOR HERD":
+            {
+                requireParamCountBetween(key, params, 1, 1);
+                sql =
+                        "SELECT bc_100.bcus_bus_id AS herdnumber, " +
+                                "       ui.uri_username     AS login " +
+                                "FROM tdcr_user_info ui, " +
+                                "     tdco_business_customers bc_100, " +
+                                "     tdco_business_customers bc_115 " +
+                                "WHERE ui.uri_ccs_bus_id      = bc_115.bcus_bus_id " +
+                                "AND   bc_100.bcus_cust_id    = bc_115.bcus_cust_id " +
+                                "AND   bc_100.bcus_bus_id     = ? " +
+                                "AND   bc_100.bcus_role_code  = 100 " +
+                                "AND   bc_115.bcus_role_code  = 115";
+                jdbcParams = new Object[]{ params[0].trim() };
                 break;
             }
 
