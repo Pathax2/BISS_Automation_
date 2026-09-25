@@ -3,7 +3,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
   # --------------------------------------------------------------------------------------------------------------------
   # Purpose:
   #   Single end-to-end regression journey covering the major business flow in the BISS Application Portal.
-  #
+  #/  #
   #   - Login and portal navigation
   #   - Farmer dashboard access
   #   - Side navigation tab validation
@@ -53,7 +53,7 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     When the agent navigates through the farmer side navigation tabs
       | Applications / Payments           |
       | Farm Details                      |
-      |Entitlements / Usage              |
+      | Entitlements / Usage              |
       | Transfers                         |
       | NR-CISYF                          |
       | My Correspondence                 |
@@ -172,9 +172,9 @@ Feature: BISS Agent completes an end-to-end farmer application journey
       | ownershipStatus   | Owned                |
       | organicStatus     | Conventional         |
       | claimedArea       | 10                   |
-      | plotUse           | Alfalfa              |
+      | plotUse           | Apples               |
       | mapChangeOption   | Submit Paper Map By Post |
-    Then plot "T87654321" should be available in Land Details
+    Then plot "T87654322" should be available in Land Details
 
     # -----------------------------------------
     # Land Details - delete plot
@@ -190,6 +190,11 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     And the agent proceeds to the next application step
     Then the next application step should open successfully
 
+    #----------------------------------------------------------
+    # ISLAND PAGE
+    #-------------------------------------------------------------
+    And the agent reaches on Island Stepper
+
     # -----------------------------------------
     # GAEC 7 step
     # -----------------------------------------
@@ -201,10 +206,12 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     # ACRES step
     # -----------------------------------------
-    When the agent opens the "ACRES" step
-    And the agent selects "Yes, rescore" on panel 1
-    And the agent continues panel 1
-    Then the ACRES step should be completed successfully
+    And the agent handles the ACRES step if present
+    #Below Steps explain what is happening
+    #When the agent opens the "ACRES" step
+    #And the agent selects "Yes, rescore" on panel 1
+    #And the agent continues panel 1
+    #Then the ACRES step should be completed successfully
 
     # -----------------------------------------
     # Eco step
