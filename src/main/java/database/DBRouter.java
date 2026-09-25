@@ -12,8 +12,8 @@ import java.util.logging.*;
 // File          : DBRouter.java
 // Package       : database
 // Description   : Multi-database query router for the BISS Automation Framework.
-//                 Provides a single entry point for all SQL execution across BISS_DATA
-//                 and BISS_INET Oracle databases. All queries are identified by a logical
+//                 Provides a single entry point for all SQL execution across BISS_DATA,
+//                 BISS_INET and ENTS_DATA Oracle databases. All queries are identified by a logical
 //                 label string and resolved to parameterised SQL internally, keeping
 //                 step definitions and hooks free of SQL syntax.
 //
@@ -45,9 +45,20 @@ import java.util.logging.*;
 //                   db.inet.url         — BISS_INET JDBC connection URL
 //                   db.inet.username    — BISS_INET username
 //                   db.inet.password    — BISS_INET password
+//                   db.ents.url         — ENTS_DATA JDBC connection URL   (optional - only needed by ENTS test cases)
+//                   db.ents.username    — ENTS_DATA username               (optional)
+//                   db.ents.password    — ENTS_DATA password               (optional)
+//
+//                 ENTS usage (22-09-2026):
+//                   DBRouter.runDB("ENTS", "ENTS Agent Login herds", "aga6077", "200");
+//                   DBRouter.runDB("ENTS", "ENTS Individual Login herds", "200");
+//                   DBRouter.runDB("ENTS", "ENTS ETF Login herds", "2026", "200");
+//                   DBRouter.runDB("ENTS", "ENTS Agent herds without entitlements", "aga6077", "200", "2026");
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 27-04-2026
+// Updated       : 22-09-2026 - Playwright edition: ENTS_DATA connection and the three ENTS login queries added
+//                 23-09-2026 - "ENTS Agent herds without entitlements" added (TC_02_ENTS Section 2)
 // =====================================================================================================================================
 
 public class DBRouter
@@ -75,6 +86,11 @@ public class DBRouter
     private static String DB_INET_USER;
     private static String DB_INET_PASSWORD;
 
+    // ENTS_DATA connection - optional, checked only when an ENTS query runs
+    private static String DB_ENTS_URL;
+    private static String DB_ENTS_USER;
+    private static String DB_ENTS_PASSWORD;
+
     static
     {
         setupLogger();
@@ -92,7 +108,7 @@ public class DBRouter
     //                 and matched in a switch block to the corresponding parameterised SQL.
     //                 Results are stored in lastRows and lastScalar for caller access via
     //                 getValue(), getRows(), and hasRows().
-    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
+    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA), "INET" (BISS_INET) or "ENTS" (ENTS_DATA)
     //                 label  — logical query label e.g. "List of herds with no errors at all"
     //                 params — bind parameter values for the selected query (varies per label)
     // Author        : Aniket Pathare | aniket.pathare@government.ie
@@ -153,7 +169,7 @@ public class DBRouter
                                 "FROM vwbs_application ap_ri " +
                                 "WHERE ap_ri.app_mde_code = 1 " +
                                 "AND ap_ri.app_year = ? " +
-                               " AND REGEXP_LIKE(ap_ri.app_herd_no, '^[D-Z]')" +
+                                " AND REGEXP_LIKE(ap_ri.app_herd_no, '^[D-Z]')" +
                                 "AND EXISTS ( " +
                                 "    SELECT 1 " +
                                 "    FROM tdbs_application_land x " +
@@ -739,6 +755,330 @@ public class DBRouter
                 break;
             }
 
+            // =========================================================================================================
+            // ENTS QUERIES - Confluence "SQL Query Reference for Automation Testing" (Ruchi Malik)
+            // ---------------------------------------------------------------------------------------------------------
+            // Run on the ENTS_DATA connection: DBRouter.runDB("ENTS", label, params...)
+            // Consumed by utilities.EntsTestData, which picks a random unused row for each transfer.
+            //
+            // Differences from the Confluence text (the logic is the same):
+            //   - The agent login and the scheme year are bind parameters instead of literals.
+            //   - The rows are returned in random order (DBMS_RANDOM) and capped with ROWNUM, so every run sees a
+            //     different sample even when the agent has more herds than the cap.
+            //   - Individual Login uses DATE '2022-12-31' instead of '31-DEC-22', which only works when the session
+            //     date format happens to match. A JDBC session does not always use the SQL Developer format.
+            //   - The optional "herd_number IN (...)" lines were left out.
+            //   - TRNs (temporary reference numbers, which do not start with a letter) are excluded with
+            //     REGEXP_LIKE(herd, '^[A-Z]'). The BISS queries use SUBSTR(herd,1,1) > 'A', which also drops every
+            //     real herd starting with 'A' (e.g. A1011114); the ENTS queries keep those. (22-09-2026)
+            //   - Expired herds are excluded with the death indicator of vwco_ems_client_details (22-09-2026,
+            //     logic confirmed on CENTEST by Aniket): herd_number_status.has_n = 1 when the herd has a row with
+            //     death_indicator = 'N'; that row is ranked first, and only herds whose chosen row is 'N' are kept.
+            //     A herd whose old holder is 'Y' but has a current 'N' row is kept. The ETF query has no
+            //     herd_number_status CTE, so it uses EXISTS (death_indicator = 'N') on the same view.
+            // =========================================================================================================
+
+            // ----------------------------------------------------------------
+            // ENTS DB: Agent Login - herds of one agent with more than 10 entitlements
+            //
+            // params[0] = agent login e.g. "aga6077"   (required)
+            // params[1] = limit                        (optional - defaults to 200)
+            // params[2] = scheme year e.g. "2026"      (optional - blank = all years, as on Confluence)
+            //             With the year, only herds holding more than 10 entitlements in that year are returned.
+            //             Without it, herds that only had entitlements in past years come back too, and they are
+            //             often missing from the agent's Transfer Out list (seen 22-09-2026 with D3900895).
+            // params[3] = customer type e.g. "Individual" (optional - blank = all types)
+            //             vwco_ents_herd_abls_rpt.cust_type. D3900895 is a 'Joint Venture' and is not in the agent's
+            //             Transfer Out list; the ETF Login query on Confluence already filters cust_type = 'Individual'.
+            // params[4] = "Y" = only herds whose name is exactly two words, e.g. "Martin Starr" (optional - blank = all)
+            //             The transferee search in the Create Transfer dialog wants the exact name shown in the portal.
+            //             payee_name can differ from it (D3930387 is "Martin Starr" in the DB but "Martin Starr Jnr" in
+            //             the portal), so names with a third word (Jnr, Snr, a middle name, "& Sons", a company name)
+            //             are left out. Letters and hyphens only, so "Mary-Anne Kelly" is kept. (22-09-2026)
+            // herd_agt holds "<agent code> <date> <login>", e.g. "AGT10726F 19-JUN-2023 aga6525".
+            //
+            // Columns returned: HERD_NUMBER, HERD_NAME (trimmed), ADDRESSLINE1, AGENT_LOGIN
+            // ----------------------------------------------------------------
+            case "ENTS AGENT LOGIN HERDS":
+            {
+                requireParamCountBetween(key, params, 1, 5);
+                String  agent   = params[0].trim();
+                int     maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 200;
+                boolean hasYear = params.length >= 3 && params[2] != null && !params[2].isBlank();
+                Integer year    = hasYear ? parseInt(params[2], "schemeYear") : null;
+                boolean hasType = params.length >= 4 && params[3] != null && !params[3].isBlank();
+                String  custTyp = hasType ? params[3].trim() : null;
+                boolean twoWord = params.length >= 5 && params[4] != null
+                        && ("Y".equalsIgnoreCase(params[4].trim()) || "true".equalsIgnoreCase(params[4].trim()));
+                sql =
+                        "WITH herd_numbers AS ( " +
+                                "    SELECT DISTINCT ohs_herd app_from_herd " +
+                                "    FROM tden_owner_history, " +
+                                "         vwen_ent_sets, " +
+                                "         vwco_ents_herd_abls_rpt " +
+                                "    WHERE ohs_scheme_year = ent_scheme_year " +
+                                "    AND   ohs_own_id      = ent_own_id " +
+                                "    AND   ohs_hist_no     = ent_hist_no " +
+                                (hasYear ? "    AND   ent_scheme_year = ? " : "") +
+                                "    AND   ent_num_ents    > 10 " +
+                                "    AND   ohs_herd        = herd_id " +
+                                "    AND   herd_agt LIKE ? " +
+                                "    AND   REGEXP_LIKE(ohs_herd, '^[A-Z]') " +
+                                (hasType ? "    AND   cust_type = ? " : "") +
+                                "), " +
+                                "herd_number_status AS ( " +
+                                "    SELECT t.herd_number, " +
+                                "           MAX(CASE WHEN t.death_indicator = 'N' THEN 1 ELSE 0 END) has_n " +
+                                "    FROM vwco_ems_client_details t " +
+                                "    JOIN herd_numbers i ON i.app_from_herd = t.herd_number " +
+                                "    GROUP BY t.herd_number " +
+                                "), " +
+                                "picked AS ( " +
+                                "    SELECT herd_number, " +
+                                "           initcap(TRIM(payee_name)) herd_name, " +
+                                "           initcap(addr1)      addressline1 " +
+                                "    FROM ( " +
+                                "        SELECT t.*, " +
+                                "               ROW_NUMBER() OVER ( " +
+                                "                   PARTITION BY t.herd_number " +
+                                "                   ORDER BY CASE " +
+                                "                                WHEN s.has_n = 1 AND t.death_indicator = 'N' THEN 1 " +
+                                "                                ELSE 2 " +
+                                "                            END, " +
+                                "                            t.start_date DESC " +
+                                "               ) rn " +
+                                "        FROM vwco_ems_client_details t " +
+                                "        JOIN herd_numbers i       ON i.app_from_herd = t.herd_number " +
+                                "        JOIN herd_number_status s ON s.herd_number   = t.herd_number " +
+                                "        WHERE s.has_n = 1 " +
+                                "    ) " +
+                                "    WHERE rn = 1 " +
+                                "    AND   death_indicator = 'N' " +
+                                (twoWord ? "    AND   REGEXP_LIKE(TRIM(payee_name), '^[[:alpha:]-]+ [[:alpha:]-]+$') " : "") +
+                                "    ORDER BY DBMS_RANDOM.VALUE " +
+                                ") " +
+                                "SELECT herd_number, herd_name, addressline1, CAST(? AS VARCHAR2(50)) agent_login " +
+                                "FROM picked " +
+                                "WHERE ROWNUM <= ?";
+                List<Object> binds = new ArrayList<>();
+                if (hasYear) binds.add(year);
+                binds.add("%" + agent + "%");
+                if (hasType) binds.add(custTyp);
+                binds.add(agent);
+                binds.add(maxRows);
+                jdbcParams = binds.toArray();
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // ENTS DB: Individual Login - herds whose holder has an online login
+            //
+            // params[0] = limit (optional - defaults to 200)
+            //
+            // Columns returned: LOGIN_ID, NAME, HERD_NUMBER, ADDRESS
+            // ----------------------------------------------------------------
+            case "ENTS INDIVIDUAL LOGIN HERDS":
+            {
+                requireParamCountBetween(key, params, 0, 1);
+                int maxRows = (params.length >= 1) ? parseInt(params[0], "limit") : 200;
+                sql =
+                        "WITH herd_numbers AS ( " +
+                                "    SELECT vr.herd_ols_login login_id, " +
+                                "           vr.herd_id        app_from_herd " +
+                                "    FROM vwco_ents_herd_abls_rpt vr " +
+                                "    WHERE vr.herd_ols_login IS NOT NULL " +
+                                "    AND   vr.start_date > DATE '2022-12-31' " +
+                                "    AND   REGEXP_LIKE(vr.herd_id, '^[A-Z]') " +
+                                "), " +
+                                "herd_number_status AS ( " +
+                                "    SELECT t.herd_number, " +
+                                "           MAX(CASE WHEN t.death_indicator = 'N' THEN 1 ELSE 0 END) has_n " +
+                                "    FROM vwco_ems_client_details t " +
+                                "    JOIN herd_numbers i ON i.app_from_herd = t.herd_number " +
+                                "    GROUP BY t.herd_number " +
+                                "), " +
+                                "picked AS ( " +
+                                "    SELECT login_id, " +
+                                "           initcap(payee_name) name, " +
+                                "           herd_number, " +
+                                "           initcap(addr1)      address " +
+                                "    FROM ( " +
+                                "        SELECT t.*, " +
+                                "               i.login_id, " +
+                                "               ROW_NUMBER() OVER ( " +
+                                "                   PARTITION BY t.herd_number " +
+                                "                   ORDER BY CASE " +
+                                "                                WHEN s.has_n = 1 AND t.death_indicator = 'N' THEN 1 " +
+                                "                                ELSE 2 " +
+                                "                            END, " +
+                                "                            t.start_date DESC " +
+                                "               ) rn " +
+                                "        FROM vwco_ems_client_details t " +
+                                "        JOIN herd_numbers i       ON i.app_from_herd = t.herd_number " +
+                                "        JOIN herd_number_status s ON s.herd_number   = t.herd_number " +
+                                "        WHERE s.has_n = 1 " +
+                                "    ) " +
+                                "    WHERE rn = 1 " +
+                                "    AND   death_indicator = 'N' " +
+                                "    ORDER BY DBMS_RANDOM.VALUE " +
+                                ") " +
+                                "SELECT login_id, name, herd_number, address " +
+                                "FROM picked " +
+                                "WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // ENTS DB: ETF Login - individual herds linked to an ETF, with the ETF username
+            //
+            // params[0] = scheme year e.g. "2026"  (required)
+            // params[1] = limit                     (optional - defaults to 200)
+            //
+            // Columns returned: INDIVIDUAL_LOGIN, HERD_NUMBER, HERD_NAME, ETF_USERNAME
+            // ETF_USERNAME is NULL when the herd's ETF does not meet the year / entitlement rules.
+            // ----------------------------------------------------------------
+            case "ENTS ETF LOGIN HERDS":
+            {
+                requireParamCountBetween(key, params, 1, 2);
+                int year    = parseInt(params[0], "schemeYear");
+                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 200;
+                sql =
+                        "SELECT * FROM ( " +
+                                "    SELECT t.individual_login, " +
+                                "           t.herd_number, " +
+                                "           t.herd_name, " +
+                                "           ( " +
+                                "               SELECT username " +
+                                "               FROM tden_herd_etf_link, vw_sso_roles_for_user_ents " +
+                                "               WHERE hel_scheme_year       = ? " +
+                                "               AND   hel_txor_ents_allowed > 10 " +
+                                "               AND   businessid            = hel_etf_no " +
+                                "               AND   hel_herd_no NOT LIKE '2%' " +
+                                "               AND   hel_etf_no            = t.etf_no " +
+                                "               AND   ROWNUM = 1 " +
+                                "           ) AS etf_username " +
+                                "    FROM ( " +
+                                "        SELECT ve.herd_ols_login individual_login, " +
+                                "               ve.herd_id        herd_number, " +
+                                "               ( " +
+                                "                   SELECT initcap(cd.payee_name) " +
+                                "                   FROM vwco_ems_client_details cd " +
+                                "                   WHERE cd.herd_number = ve.herd_id " +
+                                "                   AND   ROWNUM = 1 " +
+                                "               ) AS herd_name, " +
+                                "               ( " +
+                                "                   SELECT hel_etf_no " +
+                                "                   FROM tden_herd_etf_link " +
+                                "                   WHERE hel_herd_no = ve.herd_id " +
+                                "                   AND   ROWNUM = 1 " +
+                                "               ) AS etf_no " +
+                                "        FROM vwco_ents_herd_abls_rpt ve " +
+                                "        WHERE ve.cust_type = 'Individual' " +
+                                "        AND   ve.herd_ols_login IS NOT NULL " +
+                                "        AND   EXISTS     (SELECT 1 FROM vwco_ems_client_details dn " +
+                                "                          WHERE dn.herd_number = ve.herd_id AND dn.death_indicator = 'N') " +
+                                "        AND   REGEXP_LIKE(ve.herd_id, '^[A-Z]') " +
+                                "        AND   ve.herd_id IN ( " +
+                                "            SELECT DISTINCT hel_herd_no " +
+                                "            FROM tden_herd_etf_link " +
+                                "            WHERE hel_grantor_type = 1 " +
+                                "        ) " +
+                                "    ) t " +
+                                "    ORDER BY DBMS_RANDOM.VALUE " +
+                                ") " +
+                                "WHERE ROWNUM <= ?";
+                jdbcParams = new Object[]{ year, maxRows };
+                break;
+            }
+
+            // ----------------------------------------------------------------
+            // ENTS DB: Agent herds WITHOUT entitlements (TC_02_ENTS Section 2, negative case)
+            //
+            // Same agent filter, TRN filter, expired-herd filter and random order as "ENTS Agent Login herds",
+            // but keeps the herds of the agent that hold NO entitlements in the scheme year, instead of more than 10.
+            // A herd is kept when it has no owner-history / ent-set row with ent_num_ents > 0 for that year.
+            //
+            // Verified in SQL Developer on CENTEST_ENTS_DATA (23-09-2026, Aniket): the herd_numbers part returns 50 herds
+            // for aga6077 in scheme year 2026, including A1374039, the no-entitlements herd used by the Selenium version.
+            //
+            // params[0] = agent login e.g. "aga6077"      (required)
+            // params[1] = limit                           (optional - defaults to 200)
+            // params[2] = scheme year e.g. "2026"         (required by the NOT EXISTS - EntsTestData passes
+            //                                              ents.scheme.year, or the current year when it is blank)
+            // params[3] = customer type e.g. "Individual" (optional - blank = all types)
+            //
+            // Columns returned: HERD_NUMBER, HERD_NAME (trimmed), ADDRESSLINE1, AGENT_LOGIN
+            // ----------------------------------------------------------------
+            case "ENTS AGENT HERDS WITHOUT ENTITLEMENTS":
+            {
+                requireParamCountBetween(key, params, 3, 4);
+                String  agent   = params[0].trim();
+                int     maxRows = (params[1] == null || params[1].isBlank()) ? 200 : parseInt(params[1], "limit");
+                int     year    = parseInt(params[2], "schemeYear");
+                boolean hasType = params.length >= 4 && params[3] != null && !params[3].isBlank();
+                String  custTyp = hasType ? params[3].trim() : null;
+                sql =
+                        "WITH herd_numbers AS ( " +
+                                "    SELECT DISTINCT r.herd_id app_from_herd " +
+                                "    FROM vwco_ents_herd_abls_rpt r " +
+                                "    WHERE r.herd_agt LIKE ? " +
+                                "    AND   REGEXP_LIKE(r.herd_id, '^[A-Z]') " +
+                                (hasType ? "    AND   r.cust_type = ? " : "") +
+                                "    AND   NOT EXISTS ( " +
+                                "        SELECT 1 " +
+                                "        FROM tden_owner_history, vwen_ent_sets " +
+                                "        WHERE ohs_scheme_year = ent_scheme_year " +
+                                "        AND   ohs_own_id      = ent_own_id " +
+                                "        AND   ohs_hist_no     = ent_hist_no " +
+                                "        AND   ohs_herd        = r.herd_id " +
+                                "        AND   ent_scheme_year = ? " +
+                                "        AND   ent_num_ents    > 0 " +
+                                "    ) " +
+                                "), " +
+                                "herd_number_status AS ( " +
+                                "    SELECT t.herd_number, " +
+                                "           MAX(CASE WHEN t.death_indicator = 'N' THEN 1 ELSE 0 END) has_n " +
+                                "    FROM vwco_ems_client_details t " +
+                                "    JOIN herd_numbers i ON i.app_from_herd = t.herd_number " +
+                                "    GROUP BY t.herd_number " +
+                                "), " +
+                                "picked AS ( " +
+                                "    SELECT herd_number, " +
+                                "           initcap(TRIM(payee_name)) herd_name, " +
+                                "           initcap(addr1)      addressline1 " +
+                                "    FROM ( " +
+                                "        SELECT t.*, " +
+                                "               ROW_NUMBER() OVER ( " +
+                                "                   PARTITION BY t.herd_number " +
+                                "                   ORDER BY CASE " +
+                                "                                WHEN s.has_n = 1 AND t.death_indicator = 'N' THEN 1 " +
+                                "                                ELSE 2 " +
+                                "                            END, " +
+                                "                            t.start_date DESC " +
+                                "               ) rn " +
+                                "        FROM vwco_ems_client_details t " +
+                                "        JOIN herd_numbers i       ON i.app_from_herd = t.herd_number " +
+                                "        JOIN herd_number_status s ON s.herd_number   = t.herd_number " +
+                                "        WHERE s.has_n = 1 " +
+                                "    ) " +
+                                "    WHERE rn = 1 " +
+                                "    AND   death_indicator = 'N' " +
+                                "    ORDER BY DBMS_RANDOM.VALUE " +
+                                ") " +
+                                "SELECT herd_number, herd_name, addressline1, CAST(? AS VARCHAR2(50)) agent_login " +
+                                "FROM picked " +
+                                "WHERE ROWNUM <= ?";
+                List<Object> binds = new ArrayList<>();
+                binds.add("%" + agent + "%");
+                if (hasType) binds.add(custTyp);
+                binds.add(year);
+                binds.add(agent);
+                binds.add(maxRows);
+                jdbcParams = binds.toArray();
+                break;
+            }
+
             default:
                 throw new RuntimeException("Unknown DB label: " + label);
         }
@@ -780,8 +1120,7 @@ public class DBRouter
         lastRows   = new ArrayList<>();
         lastScalar = null;
 
-        try (Connection conn = "INET".equals(whichDb)
-                ? getInetConnection() : getDataConnection();
+        try (Connection conn = openConnection(whichDb);
              PreparedStatement stmt = conn.prepareStatement(sql))
         {
             for (int i = 0; i < params.length; i++)
@@ -818,6 +1157,26 @@ public class DBRouter
             throw new RuntimeException("DB (" + whichDb + ") execution failed: "
                     + e.getMessage(), e);
         }
+    }
+
+    private static Connection openConnection(String whichDb) throws SQLException
+    {
+        switch (whichDb)
+        {
+            case "INET": return getInetConnection();
+            case "ENTS": return getEntsConnection();
+            default:     return getDataConnection();
+        }
+    }
+
+    private static Connection getEntsConnection() throws SQLException
+    {
+        if (isBlank(DB_ENTS_URL) || isBlank(DB_ENTS_USER) || isBlank(DB_ENTS_PASSWORD))
+        {
+            throw new RuntimeException("ENTS_DATA connection is not configured. Add db.ents.url, db.ents.username "
+                    + "and db.ents.password to " + PROPERTIES_FILE + " (see db.properties.example).");
+        }
+        return DriverManager.getConnection(DB_ENTS_URL, DB_ENTS_USER, DB_ENTS_PASSWORD);
     }
 
     private static Connection getDataConnection() throws SQLException
@@ -908,7 +1267,14 @@ public class DBRouter
                                 "(db.inet.url / db.inet.username / db.inet.password)");
             }
 
-            log.info("[DBRouter] DATA and INET connection properties loaded successfully.");
+            // ENTS_DATA is optional: BISS test cases run without it, ENTS test cases fail with a clear message
+            DB_ENTS_URL      = props.getProperty("db.ents.url");
+            DB_ENTS_USER     = props.getProperty("db.ents.username");
+            DB_ENTS_PASSWORD = props.getProperty("db.ents.password");
+            boolean iEntsConfigured = !isBlank(DB_ENTS_URL) && !isBlank(DB_ENTS_USER) && !isBlank(DB_ENTS_PASSWORD);
+
+            log.info("[DBRouter] DATA and INET connection properties loaded successfully."
+                    + (iEntsConfigured ? " ENTS connection configured." : " ENTS connection not configured (only needed by ENTS test cases)."));
         }
         catch (IOException e)
         {
@@ -969,9 +1335,9 @@ public class DBRouter
     private static String normalizeDb(String s)
     {
         String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
-        if ("DATA".equals(v) || "INET".equals(v)) return v;
+        if ("DATA".equals(v) || "INET".equals(v) || "ENTS".equals(v)) return v;
         throw new IllegalArgumentException(
-                "dbKey must be 'DATA' or 'INET' (was: " + s + ")");
+                "dbKey must be 'DATA', 'INET' or 'ENTS' (was: " + s + ")");
     }
 
     private static String normalize(String s)
