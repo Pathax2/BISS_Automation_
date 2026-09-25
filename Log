@@ -1,3 +1,121 @@
+// ===================================================================================================================================
+// File          : TC_03_IND.java
+// Package       : stepdefinitions
+// Description   : Individual-only steps for the BISS Individual end-to-end journey (TC_03_IND).
+//
+//                 Every other step of TC_03_IND.feature is a TC_03 / TC_06 step: their annotations accept both
+//                 "the agent ..." and "the individual ..." (Cucumber alternative text agent/individual).
+//                 Herd + login: Hooks (test case ID contains "_IND") -> DATA + INET individual queries.
+//
+//                 Only these two steps differ, because an individual has no My Clients list:
+//                   When  the individual opens their farmer dashboard          (replaces the My Clients herd search)
+//                   Then  the individual farmer dashboard should be displayed (replaces the first-client-name click)
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 25-09-2026
+// ===================================================================================================================================
 
-        // Same herd returned twice ("2 matches found. Please select one:") - select the row with no End Date (24-09-2026)
-        EntsSession.selectOpenTransfereeMatch(iTransfereeHerd);
+package stepdefinitions;
+
+import com.microsoft.playwright.Locator;
+import commonFunctions.UiHelpers;
+import io.cucumber.java.en.Then;
+import io.cucumber.java.en.When;
+import utilities.ConfigManager;
+import utilities.ObjReader;
+
+import java.util.logging.Logger;
+
+import static commonFunctions.CommonFunctions.iAction;
+
+public class TC_03_IND
+{
+    private static final Logger log = Logger.getLogger(TC_03_IND.class.getName());
+
+    // How long an "if present" check waits before deciding the element is not there
+    private static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
+
+    // Side navigation entry of the Farmer Dashboard (same pattern as TC_03 side navigation)
+    private static final String FARMER_DASHBOARD_NAV_XPATH =
+            "(//mat-selection-list//span[contains(normalize-space(),'Farmer Dashboard')])[1]";
+
+    // True when the first element matching the XPath becomes visible within pSeconds (never throws)
+    private static boolean isVisible(String pXpath, int pSeconds)
+    {
+        Locator iLocator = UiHelpers.byXpath(pXpath).first();
+        return UiHelpers.isVisible(iLocator, pSeconds);
+    }
+
+
+    // ===================================================================================================================================
+    //  FARMER DASHBOARD
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : When the individual opens their farmer dashboard
+    // Description   : Replaces the agent's My Clients herd search. The individual only sees their own herd, so the
+    //                 dashboard is opened from the side navigation when it is not already on screen.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 25-09-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the individual opens their farmer dashboard")
+    public void theIndividualOpensTheirFarmerDashboard()
+    {
+        log.info("[STEP] When the individual opens their farmer dashboard | herd=" + Hooks.RUNTIME_HERD);
+
+        String iOnDashboard = ObjReader.getLocator("iStartApplicationBtn") + " | " + ObjReader.getLocator("iDeleteDraftBtn");
+
+        if (isVisible(iOnDashboard, PROBE_SECONDS))
+        {
+            log.info("[IND] Farmer Dashboard already on screen.");
+            return;
+        }
+
+        if (isVisible(FARMER_DASHBOARD_NAV_XPATH, PROBE_SECONDS))
+        {
+            iAction("WAITCLICKABLE", "XPATH", FARMER_DASHBOARD_NAV_XPATH, null);
+            iAction("CLICK",         "XPATH", FARMER_DASHBOARD_NAV_XPATH, null);
+            log.info("[IND] Farmer Dashboard opened from the side navigation.");
+            return;
+        }
+
+        log.warning("[IND] No Farmer Dashboard link and no Start Application / Delete Draft button yet - the next step waits for the dashboard.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Then the individual farmer dashboard should be displayed
+    // Description   : Same as the agent step "the farmer dashboard should be displayed" without the client-name click:
+    //                 deletes an existing draft when shown, clicks Start Application and accepts Continue when shown.
+    //                 Kept one to one with the agent journey, which also starts the application here and again after
+    //                 the side navigation checks.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 25-09-2026
+    // ***************************************************************************************************************************************************************************************
+    @Then("the individual farmer dashboard should be displayed")
+    public void theIndividualFarmerDashboardShouldBeDisplayed()
+    {
+        log.info("[STEP] Then the individual farmer dashboard should be displayed");
+
+        if (isVisible(ObjReader.getLocator("iDeleteDraftBtn"), 5))
+        {
+            log.info("[IND] Existing draft detected. Clearing it before proceeding.");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iDeleteDraftBtn"),   "Delete Draft Button");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"), "Confirm Delete Button");
+            iAction("WAITINVISIBLE", "XPATH", "//div[@class='mdc-circular-progress__gap-patch']//*[name()='svg']", "Deletion Spinner");
+        }
+        else
+        {
+            log.info("[IND] No existing draft found. Proceeding directly to Start Application.");
+        }
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iStartApplicationBtn"), "");
+
+        if (isVisible(ObjReader.getLocator("iContinueBtn"), PROBE_SECONDS))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iContinueBtn"), null);
+        }
+
+        log.info("[IND] Farmer Dashboard displayed | herd=" + Hooks.RUNTIME_HERD + " | login=" + Hooks.RUNTIME_USERNAME);
+    }
+}
