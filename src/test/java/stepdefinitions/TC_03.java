@@ -166,7 +166,7 @@ public class TC_03 {
         // herd+agent pair -> update RUNTIME_USERNAME -> re-attempt login with new agent.
         String iExpiredMsgXpath = "//*[contains(@class,'kc-feedback-text') " + "and contains(normalize-space(),'Account Expired')]";
 
-        if (isVisible(iExpiredMsgXpath, 3))
+        if (isVisible(iExpiredMsgXpath, 2))
         {
             String iExpiredAgent = Hooks.RUNTIME_USERNAME;
             log.warning("[LOGIN] Account Expired detected for agent: " + iExpiredAgent + " - calling Hooks.markAgentExpired() to re-resolve.");
@@ -198,7 +198,7 @@ public class TC_03 {
         String iPinFormXpath = ObjReader.getLocator("iPinForm");
 
         // Check whether the PIN login screen has appeared (give it 3 seconds - no need to wait longer)
-        if (isVisible(iPinFormXpath, 3))
+        if (isVisible(iPinFormXpath, 2))
         {
             log.info("[LOGIN] PIN screen detected. Using simple loop 1 -> 7.");
 
@@ -426,9 +426,9 @@ public class TC_03 {
         final String BASE_LIMIT         = System.getProperty("herd.limit", "25").trim();
         final String iClientRowsXpath   = ObjReader.getLocator("clientTableRows");
         final String iHerdExpiredXpath  = "//tbody[contains(@class,'mdc-data-table__content')]"
-                                        + "//tr[contains(@class,'client-list-element-row')]"
-                                        + "//td[contains(@class,'cdk-column-expired')]"
-                                        + "//span[normalize-space()='Herd expired']";
+                + "//tr[contains(@class,'client-list-element-row')]"
+                + "//td[contains(@class,'cdk-column-expired')]"
+                + "//span[normalize-space()='Herd expired']";
 
         boolean iFound = false;
 
@@ -438,7 +438,7 @@ public class TC_03 {
             log.info("[HERD-RETRY] Attempt " + (iAttempt + 1) + "/" + MAX_HERD_RETRIES + " - searching herd: " + iCurrentHerd + " | logged in as: " + Hooks.RUNTIME_USERNAME);
 
             // -- Search for the herd on My Clients ----------------------------------------------------------------
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
+            //iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
             iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
             iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
 
