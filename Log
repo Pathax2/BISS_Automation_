@@ -1,121 +1,199 @@
-// ===================================================================================================================================
-// File          : TC_03_IND.java
-// Package       : stepdefinitions
-// Description   : Individual-only steps for the BISS Individual end-to-end journey (TC_03_IND).
-//
-//                 Every other step of TC_03_IND.feature is a TC_03 / TC_06 step: their annotations accept both
-//                 "the agent ..." and "the individual ..." (Cucumber alternative text agent/individual).
-//                 Herd + login: Hooks (test case ID contains "_IND") -> DATA + INET individual queries.
-//
-//                 Only these two steps differ, because an individual has no My Clients list:
-//                   When  the individual opens their farmer dashboard          (replaces the My Clients herd search)
-//                   Then  the individual farmer dashboard should be displayed (replaces the first-client-name click)
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 25-09-2026
-// ===================================================================================================================================
+Feature: TC_04_ENTS - Transfer Application E2E Regression Pack (Different Agent 4 / Cross-Agent)
 
-package stepdefinitions;
+  # --------------------------------------------------------------------------------------------------------------------
+  # Purpose:
+  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the
+  #   Transferor agent (Agent 4 / aga6060) and Transferee agent are different users.
+  #   Same cross-agent logout → re-login pattern as TC_03_ENTS.
+  #
+  #   Transfer types covered:
+  #     Section 1 : Lease                      (211) — G1331310 → A1080981 (David Milligan) + lease year
+  #     Section 2 : Inheritance                (201) — G1371095 → A1150106 (Geraldine Brady)
+  #     Section 3 : Change of Registration     (205) — G1610022 → A1090421 (Patrick Healy)
+  #     Section 4 : Change of Legal Entity     (206) — G1861980 → A1314036 (John F O'Leary)
+  #     Section 5 : Gift                       (202) — G1910786 → A1410400 (Luke O'Sullivan)
+  #
+  # Migrated from: TC_04_ENTS.feature (legacy 5 separate scenarios)
+  #   TC_12 → Section 1     TC_13 → Section 2     TC_14 → Section 3
+  #   TC_15 → Section 4     TC_16 → Section 5
+  #
+  # Step reuse — ZERO new step definitions required:
+  #   Background login / nav             → TC_03.java
+  #   Tab switching                      → TC_06.java
+  #   Transferor flow (create/upload/send) → TC_01_ENTS.java
+  #   Transfer key capture               → TC_01_ENTS.java
+  #   Cross-agent logout / re-login      → TC_03_ENTS.java
+  #   Cross-agent transferee acceptance  → TC_03_ENTS.java
+  #   Submission verification            → TC_01_ENTS.java
+  #
+  # Author : Aniket Pathare | aniket.pathare@government.ie
+  # Created: 31-03-2026
+  # --------------------------------------------------------------------------------------------------------------------
 
-import com.microsoft.playwright.Locator;
-import commonFunctions.UiHelpers;
-import io.cucumber.java.en.Then;
-import io.cucumber.java.en.When;
-import utilities.ConfigManager;
-import utilities.ObjReader;
+  Background:
+    Given the agent user is on the login page
+    When the individual logs in as transferor "aga6060"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
 
-import java.util.logging.Logger;
+  @regression @transfers @cross-agent @e2e
+  Scenario: AT-ENTS-TRANSFERS-E2E-04 - Agent 4 completes all cross-agent transfer types
 
-import static commonFunctions.CommonFunctions.iAction;
+    # ===========================================
+    # SECTION 1 : Lease of Entitlements (211)
+    # Covers: TC_12
+    # NOTE: Lease includes lease year selection
+    # ===========================================
 
-public class TC_03_IND
-{
-    private static final Logger log = Logger.getLogger(TC_03_IND.class.getName());
+    # --- Transferor (Agent 4) ---
 
-    // How long an "if present" check waits before deciding the element is not there
-    private static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
+    When the agent creates a transfer application with the following details
+      | transferorHerd | G1331310       |
+      | transfereeHerd | A1080981       |
+      | transfereeName | David Milligan |
+      | transferType   | Lease of Entitlements|
+      | entitlements   | 0.01           |
+      | leaseYear      | Yes            |
+      | notes          | Test Notes     |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-    // Side navigation entry of the Farmer Dashboard (same pattern as TC_03 side navigation)
-    private static final String FARMER_DASHBOARD_NAV_XPATH =
-            "(//mat-selection-list//span[contains(normalize-space(),'Farmer Dashboard')])[1]";
+    # --- Transferee (different agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the cross-agent transferee acceptance flow
+      | transfereeHerd | A1080981      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-    // True when the first element matching the XPath becomes visible within pSeconds (never throws)
-    private static boolean isVisible(String pXpath, int pSeconds)
-    {
-        Locator iLocator = UiHelpers.byXpath(pXpath).first();
-        return UiHelpers.isVisible(iLocator, pSeconds);
-    }
+    # ===========================================
+    # SECTION 2 : Inheritance (201)
+    # Covers: TC_13
+    # ===========================================
 
+    # --- Transferor ---
+    Given the agent user is on the login page
+    When the individual logs in as transferor "aga6060"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent creates a transfer application with the following details
+      | transferorHerd | G1371095        |
+      | transfereeHerd | A1150106        |
+      | transfereeName | Geraldine Brady |
+      | transferType   | Inheritance of Entitlements|
+      | entitlements   | 0.01            |
+      | notes          | Test Notes      |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-    // ===================================================================================================================================
-    //  FARMER DASHBOARD
-    // ===================================================================================================================================
+    # --- Transferee ---
+    When the agent logs out and re-logs in as the transferee agent "agr17724"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the cross-agent transferee acceptance flow
+      | transfereeHerd | A1150106      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the individual opens their farmer dashboard
-    // Description   : Replaces the agent's My Clients herd search. The individual only sees their own herd, so the
-    //                 dashboard is opened from the side navigation when it is not already on screen.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 25-09-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("the individual opens their farmer dashboard")
-    public void theIndividualOpensTheirFarmerDashboard()
-    {
-        log.info("[STEP] When the individual opens their farmer dashboard | herd=" + Hooks.RUNTIME_HERD);
+    # ===========================================
+    # SECTION 3 : Change of Registration (205)
+    # Covers: TC_14
+    # ===========================================
 
-        String iOnDashboard = ObjReader.getLocator("iStartApplicationBtn") + " | " + ObjReader.getLocator("iDeleteDraftBtn");
+    # --- Transferor ---
+    Given the agent user is on the login page
+    When the individual logs in as transferor "aga6060"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent creates a transfer application with the following details
+      | transferorHerd | G1610022       |
+      | transfereeHerd | A1090421       |
+      | transfereeName | Patrick Healy  |
+      | transferType   | Change of Registration Details|
+      | entitlements   | 0.01           |
+      | notes          | Test Notes     |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-        if (isVisible(iOnDashboard, PROBE_SECONDS))
-        {
-            log.info("[IND] Farmer Dashboard already on screen.");
-            return;
-        }
+    # --- Transferee ---
+    When the agent logs out and re-logs in as the transferee agent "aga6352"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the cross-agent transferee acceptance flow
+      | transfereeHerd | A1090421      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-        if (isVisible(FARMER_DASHBOARD_NAV_XPATH, PROBE_SECONDS))
-        {
-            iAction("WAITCLICKABLE", "XPATH", FARMER_DASHBOARD_NAV_XPATH, null);
-            iAction("CLICK",         "XPATH", FARMER_DASHBOARD_NAV_XPATH, null);
-            log.info("[IND] Farmer Dashboard opened from the side navigation.");
-            return;
-        }
+    # ===========================================
+    # SECTION 4 : Change of Legal Entity (206)
+    # Covers: TC_15
+    # ===========================================
 
-        log.warning("[IND] No Farmer Dashboard link and no Start Application / Delete Draft button yet - the next step waits for the dashboard.");
-    }
+    # --- Transferor ---
+    Given the agent user is on the login page
+    When the individual logs in as transferor "aga6060"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent creates a transfer application with the following details
+      | transferorHerd | G1861980         |
+      | transfereeHerd | A1314036         |
+      | transfereeName | John F O'Leary   |
+      | transferType   | Change of Legal Entity|
+      | entitlements   | 0.01             |
+      | notes          | Test Notes       |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
+    # --- Transferee ---
+    When the agent logs out and re-logs in as the transferee agent "aga6306"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the cross-agent transferee acceptance flow
+      | transfereeHerd | A1314036      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the individual farmer dashboard should be displayed
-    // Description   : Same as the agent step "the farmer dashboard should be displayed" without the client-name click:
-    //                 deletes an existing draft when shown, clicks Start Application and accepts Continue when shown.
-    //                 Kept one to one with the agent journey, which also starts the application here and again after
-    //                 the side navigation checks.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 25-09-2026
-    // ***************************************************************************************************************************************************************************************
-    @Then("the individual farmer dashboard should be displayed")
-    public void theIndividualFarmerDashboardShouldBeDisplayed()
-    {
-        log.info("[STEP] Then the individual farmer dashboard should be displayed");
+    # ===========================================
+    # SECTION 5 : Gift of Entitlements (202)
+    # Covers: TC_16
+    # ===========================================
 
-        if (isVisible(ObjReader.getLocator("iDeleteDraftBtn"), 5))
-        {
-            log.info("[IND] Existing draft detected. Clearing it before proceeding.");
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iDeleteDraftBtn"),   "Delete Draft Button");
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iConfirmDeleteBtn"), "Confirm Delete Button");
-            iAction("WAITINVISIBLE", "XPATH", "//div[@class='mdc-circular-progress__gap-patch']//*[name()='svg']", "Deletion Spinner");
-        }
-        else
-        {
-            log.info("[IND] No existing draft found. Proceeding directly to Start Application.");
-        }
+    # --- Transferor ---
+    Given the agent user is on the login page
+    When the individual logs in as transferor "aga6060"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent creates a transfer application with the following details
+      | transferorHerd | G1910786         |
+      | transfereeHerd | A1410400         |
+      | transfereeName | Luke O'Sullivan  |
+      | transferType   | Gift of Entitlements|
+      | entitlements   | 0.01             |
+      | notes          | Test Notes       |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iStartApplicationBtn"), "");
-
-        if (isVisible(ObjReader.getLocator("iContinueBtn"), PROBE_SECONDS))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iContinueBtn"), null);
-        }
-
-        log.info("[IND] Farmer Dashboard displayed | herd=" + Hooks.RUNTIME_HERD + " | login=" + Hooks.RUNTIME_USERNAME);
-    }
-}
+    # --- Transferee ---
+    When the agent logs out and re-logs in as the transferee agent "agr22612"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the cross-agent transferee acceptance flow
+      | transfereeHerd | A1410400      |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
