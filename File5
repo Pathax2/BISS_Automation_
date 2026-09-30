@@ -1,308 +1,130 @@
-Feature: TC_11_ENTS - Transfer Application E2E Regression Pack (ETF Partner to Agent)
+// ===================================================================================================================================
+// File          : TC_05_ENTS.java
+// Package       : stepdefinitions.ENTS
+// Description   : Step definitions for TC_05_ENTS - Transfer Application E2E (Agent to Individual).
+//
+//                 Only the steps unique to an Agent-to-Individual transfer live here. The difference from the
+//                 agent-to-agent flow (TC_03_ENTS / TC_04_ENTS):
+//                   - the transferee logs in with their OWN individual login (e.g. "PAUDYFROG"), not an agent login
+//                   - a personal details dialog can be shown after the individual logs in
+//                   - the individual opens "Transfers" from the farmer side navigation (no My Clients tab switch)
+//                   - the individual sees the transfer on their own Transfers page, so there is no herd search
+//
+//                 Steps in this file (2):
+//                   1. the agent logs out and re-logs in as the individual transferee {string}
+//                   2. the individual completes the transferee acceptance flow (DataTable)
+//
+//                 Every other step of TC_05_ENTS.feature / TC_06_ENTS.feature is already defined:
+//                   login / portal navigation / side navigation -> stepdefinitions.TC_03
+//                   tab switching                               -> stepdefinitions.TC_06
+//                   login as a named user                       -> stepdefinitions.ENTS.TC_08_ENTS
+//                   create / upload / send / key / submit       -> stepdefinitions.ENTS.TC_01_ENTS
+//                   transferor re-login between sections        -> stepdefinitions.ENTS.TC_03_ENTS
+//
+//                 Playwright edition (30-09-2026):
+//                   - Same step texts, same ObjectRepository keys, same flow.
+//                   - The copied login block (username, PIN loop, new-user Next screens, T&C, TOTP, Account Expired)
+//                     is replaced by the shared EntsSession.loginAs / EntsSession.logout. loginAs also fills the
+//                     mobile number form when Keycloak asks for it.
+//                   - Account Expired: Selenium called Hooks.markAgentExpired for the BISS runtime agent (a different
+//                     user) and logged in again as the same expired individual. loginAs now fails the step with the
+//                     login in the message.
+//                   - The personal details dialog is closed when shown (EntsSession.closePersonalDetailsIfShown). The
+//                     Selenium notes mentioned it but the code never closed it.
+//                   - The key comes from TC_01_ENTS.iCapturedTransferKey and is checked before it is typed.
+//                   - Thread.sleep, WebDriverWait, findElement and the private isVisible are gone (Playwright waits).
+//                   - The unused private handlePostLoginOTP() and the local performLogout() copy are gone.
+//                   - Runtime data: the individual login is the token {transferee.login}, picked together with the
+//                     transferee herd from the Individual Login query (utilities.EntsTestData.nextAgentToIndividualPair).
+//                     A plain login such as "PAUDYFROG" still works, to pin a user for debugging.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
+// ===================================================================================================================================
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the Transferor is ETF partner
-  #   agr15512 and the Transferee is a client herd of agent aga6581.
-  #   KEY DIFFERENCE: the entitlement is typed in by hand (Add Manual Entitlement + Entitlement Type + Net UV) instead
-  #   of picking a row, and the transferee search also takes the address line.
-  #
-  #   Transfer types covered:
-  #     Section 1 : Change of Legal Entity (206)  - Selenium: C2057024 to B136017X (Darragh Staunton, Knockeevan Park)
-  #     Section 2 : Change of Registration (205)  - Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
-  #     Section 3 : Lease                  (211)  - Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk) + lease year
-  #     Section 4 : Gift                   (202)  - Selenium: C2057024 to D1460081 (Timothy Mangan, Ballybuggy Lawn)
-  #     Section 5 : Merger                 (203)  - Selenium: C2057024 to D3320139 (Felix Mc Donagh, Ballyine Abbey)
-  #     Section 6 : Division               (204)  - Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
-  #     Section 7 : Inheritance            (201)  - Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
-  #     Section 8 : Sale                   (212)  - Selenium: C2057024 to D2760615 (Griffin Meats Ltd, Killnadrain Ave)
-  #
-  # Migrated from: TC_11_ENTS.feature (legacy 8 separate scenarios)
-  #
-  # Runtime data (Playwright, 30-09-2026):
-  #   The transferee comes from the Agent Login pool of the agent in the transfereeAgent row (aga6581) and fills
-  #     {transferee.herd}  {transferee.name}  {transferee.address}  {transferee.agent}
-  #   The transferor comes from agr15512's own Agent Login pool ({transferor.herd}, EntsTestData.nextCrossAgentPair).
-  #   The Selenium file used the partner's own herd C2057024 in every section: to do the same, put C2057024 back in the
-  #   transferorHerd cell - the step then picks only the transferee (EntsTestData.nextTransfereeForFixedTransferor) and
-  #   does not write the transferor to the used-herds file.
-  #   Check first in SQL Developer that agr15512 has current herds: run the Agent Login query for agr15512, or pin C2057024.
-  #   Every pick is written to runtime-data/ents_used_herds.csv and never reused. Put a herd number, name or login back
-  #   in any cell to pin it for debugging (the Selenium values are in the comments of each section).
-  #
-  # Step reuse:
-  #   ETF partner login + manual-entitlement create   -> stepdefinitions.ENTS.TC_11_ENTS
-  #   Portal navigation                               -> stepdefinitions.TC_03
-  #   Upload / send / key / submit                    -> stepdefinitions.ENTS.TC_01_ENTS
-  #   Agent login (transferee) + acceptance           -> stepdefinitions.ENTS.TC_08_ENTS
-  #   Tab switching                                   -> stepdefinitions.TC_06
-  #
-  #   Object Repository: iTransfereeAddressField, iTransferAddManualEntitlementBtn, iTransferEntitlementTypeDropdown and
-  #   iTransferNetUVField must exist - the create step fails before its first click when one is missing.
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
-  # --------------------------------------------------------------------------------------------------------------------
+package stepdefinitions.ENTS;
 
-  Background:
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import org.junit.jupiter.api.Assertions;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
 
-  @regression @transfers @etf-to-agent @e2e
-  Scenario: AT-ENTS-TRANSFERS-E2E-11 - ETF Partner completes all transfer types to Agent
+import java.util.Map;
+import java.util.logging.Logger;
 
-    # ===========================================
-    # SECTION 1 : Change of Legal Entity (206)
-    # Selenium: C2057024 to B136017X (Darragh Staunton, Knockeevan Park)
-    # ===========================================
+public class TC_05_ENTS
+{
+    private static final Logger log = Logger.getLogger(TC_05_ENTS.class.getName());
 
-    # --- Transferor (ETF Partner agr15512) ---
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}      |
-      | transfereeHerd    | {transferee.herd}      |
-      | transfereeName    | {transferee.name}      |
-      | transfereeAddress | {transferee.address}   |
-      | transfereeAgent   | aga6581                |
-      | transferType      | Change of Legal Entity |
-      | entitlements      | 0.01                   |
-      | entitlementType   | BISS                   |
-      | netUV             | 1                      |
-      | notes             | Test Notes             |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    // ===================================================================================================================================
+    //  INDIVIDUAL LOGIN - log out of the agent session, log in as the individual
+    // ===================================================================================================================================
 
-    # ===========================================
-    # SECTION 2 : Change of Registration (205)
-    # Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
-    # ===========================================
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent logs out and re-logs in as the individual transferee {string}
+    // Description   : Logs out of the current session and logs in as the individual transferee:
+    //                   username -> Continue -> password (TD:Password) -> Login -> PIN / mobile number / TOTP / T&C,
+    //                   or OTP only (EntsSession.loginAs, same sequence as the Selenium copy).
+    //                 Then closes the personal details dialog when it is shown (waits up to ents.personal.details.seconds,
+    //                 default 5).
+    // Parameters    : pUsername (String) - individual login, e.g. "PAUDYFROG", or {transferee.login}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login)
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent logs out and re-logs in as the individual transferee {string}")
+    public void theAgentLogsOutAndReLogsInAsTheIndividualTransferee(String pUsername)
+    {
+        String iUsername = EntsTestData.resolve(pUsername);
+        log.info("[STEP] When the agent logs out and re-logs in as the individual transferee: " + iUsername);
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}              |
-      | transfereeHerd    | {transferee.herd}              |
-      | transfereeName    | {transferee.name}              |
-      | transfereeAddress | {transferee.address}           |
-      | transfereeAgent   | aga6581                        |
-      | transferType      | Change of Registration Details |
-      | entitlements      | 0.01                           |
-      | entitlementType   | BISS                           |
-      | netUV             | 1                              |
-      | notes             | Test Notes                     |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        Assertions.assertFalse(iUsername == null || iUsername.isEmpty(),
+                "No individual login to use. Give a login in the feature file or use {transferee.login} after the create step.");
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        EntsSession.logout();
+        EntsSession.loginAs(iUsername, "[LOGIN-INDIVIDUAL]");
+        EntsSession.closePersonalDetailsIfShown(ConfigManager.getInt("ents.personal.details.seconds", 5));
 
-    # ===========================================
-    # SECTION 3 : Lease of Entitlements (211)
-    # Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
-    # NOTE: Lease includes lease year selection
-    # ===========================================
+        log.info("Logged in as the individual transferee: " + iUsername);
+    }
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}     |
-      | transfereeHerd    | {transferee.herd}     |
-      | transfereeName    | {transferee.name}     |
-      | transfereeAddress | {transferee.address}  |
-      | transfereeAgent   | aga6581               |
-      | transferType      | Lease of Entitlements |
-      | entitlements      | 0.01                  |
-      | entitlementType   | BISS                  |
-      | netUV             | 1                     |
-      | leaseYear         | Yes                   |
-      | notes             | Test Notes            |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    // ===================================================================================================================================
+    //  INDIVIDUAL TRANSFEREE ACCEPTANCE
+    // ===================================================================================================================================
 
-    # ===========================================
-    # SECTION 4 : Gift of Entitlements (202)
-    # Selenium: C2057024 to D1460081 (Timothy Mangan, Ballybuggy Lawn)
-    # ===========================================
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the individual completes the transferee acceptance flow (DataTable)
+    // Description   : The individual is on their own Transfers page (side navigation step), so there is no herd search.
+    //                 The screens themselves are EntsSession.acceptWithTransferKey (ETF button or View, key, notes,
+    //                 Submit Application to DAFM, T&C, confirm), shared with TC_07 and TC_08.
+    //
+    //                 DataTable keys:
+    //                   transfereeHerd (String) - herd number, or {transferee.herd} (log only - no search on this page)
+    //                   notes          (String) - transferee notes, e.g. "Approved Test"
+    //
+    //                 Depends on the key captured by TC_01_ENTS "the transfer key should be captured".
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
+    // ***************************************************************************************************************************************************************************************
+    @And("the individual completes the transferee acceptance flow")
+    public void theIndividualCompletesTheTransfereeAcceptanceFlow(DataTable pDataTable)
+    {
+        log.info("[STEP] And the individual completes the transferee acceptance flow");
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}    |
-      | transfereeHerd    | {transferee.herd}    |
-      | transfereeName    | {transferee.name}    |
-      | transfereeAddress | {transferee.address} |
-      | transfereeAgent   | aga6581              |
-      | transferType      | Gift of Entitlements |
-      | entitlements      | 0.01                 |
-      | entitlementType   | BISS                 |
-      | netUV             | 1                    |
-      | notes             | Test Notes           |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        String iTransfereeHerd = iData.getOrDefault("transfereeHerd", "").trim();
+        String iNotes          = iData.get("notes").trim();
+        String iTransferKey    = TC_01_ENTS.iCapturedTransferKey;
 
-    # ===========================================
-    # SECTION 5 : Merger of Entitlements (203)
-    # Selenium: C2057024 to D3320139 (Felix Mc Donagh, Ballyine Abbey)
-    # ===========================================
+        Assertions.assertFalse(iTransferKey == null || iTransferKey.isEmpty(),
+                "Transfer key must have been captured in the Transferor flow before the individual can accept.");
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}                                                       |
-      | transfereeHerd    | {transferee.herd}                                                       |
-      | transfereeName    | {transferee.name}                                                       |
-      | transfereeAddress | {transferee.address}                                                    |
-      | transfereeAgent   | aga6581                                                                 |
-      | transferType      | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
-      | entitlements      | 0.01                                                                    |
-      | entitlementType   | BISS                                                                    |
-      | netUV             | 1                                                                       |
-      | notes             | Test Notes                                                              |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        EntsSession.acceptWithTransferKey(iTransferKey, iNotes);
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
-
-    # ===========================================
-    # SECTION 6 : Division of Entitlements (204)
-    # Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
-    # ===========================================
-
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}                   |
-      | transfereeHerd    | {transferee.herd}                   |
-      | transfereeName    | {transferee.name}                   |
-      | transfereeAddress | {transferee.address}                |
-      | transfereeAgent   | aga6581                             |
-      | transferType      | Division of Entitlements (Scission) |
-      | entitlements      | 0.01                                |
-      | entitlementType   | BISS                                |
-      | netUV             | 1                                   |
-      | notes             | Test Notes                          |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
-
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
-
-    # ===========================================
-    # SECTION 7 : Inheritance (201)
-    # Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
-    # ===========================================
-
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}           |
-      | transfereeHerd    | {transferee.herd}           |
-      | transfereeName    | {transferee.name}           |
-      | transfereeAddress | {transferee.address}        |
-      | transfereeAgent   | aga6581                     |
-      | transferType      | Inheritance of Entitlements |
-      | entitlements      | 0.01                        |
-      | entitlementType   | BISS                        |
-      | netUV             | 1                           |
-      | notes             | Test Notes                  |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
-
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
-
-    # ===========================================
-    # SECTION 8 : Sale of Entitlements (212)
-    # Selenium: C2057024 to D2760615 (Griffin Meats Ltd, Killnadrain Ave)
-    # ===========================================
-
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}    |
-      | transfereeHerd    | {transferee.herd}    |
-      | transfereeName    | {transferee.name}    |
-      | transfereeAddress | {transferee.address} |
-      | transfereeAgent   | aga6581              |
-      | transferType      | Sale of Entitlements |
-      | entitlements      | 0.01                 |
-      | entitlementType   | BISS                 |
-      | netUV             | 1                    |
-      | notes             | Test Notes           |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
-
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        log.info("Individual transferee acceptance completed for herd: " + iTransfereeHerd
+                + " | login=" + EntsTestData.loggedInUser());
+    }
+}
