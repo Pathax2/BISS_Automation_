@@ -2,31 +2,48 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
 
   # --------------------------------------------------------------------------------------------------------------------
   # Purpose:
-  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the
-  #   Transferor is Agent 6 (aga6504) and the Transferee is an Individual user.
-  #   Same Agent-to-Individual pattern as TC_05_ENTS but with different agent and herds.
+  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the Transferor is Agent 6
+  #   (aga6504) and the Transferee is an Individual user. Same Agent-to-Individual pattern as TC_05_ENTS with a
+  #   different agent and transfer types.
   #
   #   Transfer types covered:
-  #     Section 1 : Merger                   (203) — A1090502 → Y1310159 (Seamus Carolan / DANIELPAUL)
-  #     Section 2 : Division                 (204) — A1090588 → Y1310159 (Seamus Carolan / DANIELPAUL)
-  #     Section 3 : Sale                     (212) — A1100087 → Y1041344 (Felim Sullivan / TERENCE1)
-  #     Section 4 : Change of Legal Entity   (206) — A1100478 → Y104069X (Daniel Mulvany / PAUDYFROG)
+  #     Section 1 : Merger                 (203)  - Selenium: A1090502 to Y1310159 (Seamus Carolan / DANIELPAUL)
+  #     Section 2 : Division               (204)  - Selenium: A1090588 to Y1310159 (Seamus Carolan / DANIELPAUL)
+  #     Section 3 : Sale                   (212)  - Selenium: A1100087 to Y1041344 (Felim Sullivan / TERENCE1)
+  #     Section 4 : Change of Legal Entity (206)  - Selenium: A1100478 to Y104069X (Daniel Mulvany / PAUDYFROG)
   #
   # Migrated from: TC_06_ENTS.feature (legacy 4 separate scenarios)
-  #   TC_21 → Section 1     TC_22 → Section 2     TC_23 → Section 3     TC_24 → Section 4
+  #   TC_21 -> Section 1     TC_22 -> Section 2     TC_23 -> Section 3     TC_24 -> Section 4
   #
-  # Step reuse — ZERO new step definitions required:
-  #   Background login / nav                         → TC_03.java
-  #   Tab switching                                  → TC_06.java
-  #   Transferor flow (create/upload/send/capture)   → TC_01_ENTS.java
-  #   Transfer key capture                           → TC_01_ENTS.java
-  #   Submission verification                        → TC_01_ENTS.java
-  #   Transferor re-login (between sections)         → TC_03_ENTS.java
-  #   Individual logout + re-login                   → TC_05_ENTS.java
-  #   Individual transferee acceptance               → TC_05_ENTS.java
+  # Runtime data (Playwright, 30-09-2026):
+  #   No herd, name or individual login is typed in this file. The "transfereeType | Individual" row makes the create
+  #   step pick the pair with EntsTestData.nextAgentToIndividualPair:
+  #     transferor herd           - an unused herd from the Agent Login pool of the logged-in agent (aga6504)
+  #     transferee herd/name/login - an unused herd from the Individual Login query (holder has their own online login)
+  #   Both are written to runtime-data/ents_used_herds.csv and never reused.
+  #     {transferor.herd}  {transferee.herd}  {transferee.name}  {transferee.login}
+  #   The individual login step uses {transferee.login}, so it always logs in as the owner of the transferee herd.
+  #   Put a herd number, name or login back in any cell to pin it for debugging (the Selenium values are in the
+  #   comments of each section).
+  #
+  #   The transferee herd is not a client of the agent, so the create step checks only the transferor in the
+  #   Transfer Out list. The individual sees the transfer on their own Transfers page (no herd search).
+  #
+  # Step reuse:
+  #   Background login / navigation / side navigation -> stepdefinitions.TC_03
+  #   Login as a named user                           -> stepdefinitions.ENTS.TC_08_ENTS
+  #   Tab switching                                   -> stepdefinitions.TC_06
+  #   Create / upload / send / key / submit           -> stepdefinitions.ENTS.TC_01_ENTS
+  #   Transferor re-login between sections            -> stepdefinitions.ENTS.TC_03_ENTS
+  #   Individual logout + login, individual acceptance -> stepdefinitions.ENTS.TC_05_ENTS
+  #
+  #   Zero new step definitions (TC_06_ENTS.java is a traceability anchor only).
+  #   "the transfer should be submitted successfully" logs out; the next section's
+  #   "the agent logs out and re-logs in as the transferee agent" then finds no Exit link and goes straight to the
+  #   login (EntsSession.logout, 30-09-2026), and logs back in as the transferor agent, as in the Selenium file.
   #
   # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 31-03-2026
+  # Created: 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data, individual transferees)
   # --------------------------------------------------------------------------------------------------------------------
 
   Background:
@@ -43,124 +60,128 @@ Feature: TC_06_ENTS - Transfer Application E2E Regression Pack (Agent 6 to Indiv
     # ===========================================
     # SECTION 1 : Merger of Entitlements (203)
     # Covers: TC_21
-    # Transferee: DANIELPAUL (Individual)
+    # Transferee: an individual with their own login (Individual Login query)
     # ===========================================
 
-    # --- Transferor (Agent 6) ---
+    # --- Transferor (Agent) ---
     When the agent creates a transfer application with the following details
-      | transferorHerd | A1090502        |
-      | transfereeHerd | Y1310159        |
-      | transfereeName | Seamus Carolan  |
+      | transferorHerd | {transferor.herd}                                                       |
+      | transfereeHerd | {transferee.herd}                                                       |
+      | transfereeName | {transferee.name}                                                       |
+      | transfereeType | Individual                                                              |
       | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
-      | entitlements   | 0.01            |
-      | notes          | Test Notes      |
+      | entitlements   | 0.01                                                                    |
+      | notes          | Test Notes                                                              |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (Individual — DANIELPAUL) ---
-    When the agent logs out and re-logs in as the individual transferee "DANIELPAUL"
+    # --- Transferee (Individual - own login) ---
+    When the agent logs out and re-logs in as the individual transferee "{transferee.login}"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     When the agent navigates through the farmer side navigation tabs
-      | Transfers                 |
+      | Transfers |
     And the individual completes the transferee acceptance flow
-      | transfereeHerd | Y1310159      |
-      | notes          | Approved Test |
+      | transfereeHerd | {transferee.herd} |
+      | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
     # SECTION 2 : Division of Entitlements (204)
     # Covers: TC_22
-    # Transferee: DANIELPAUL (Individual)
+    # Transferee: an individual with their own login (Individual Login query)
     # ===========================================
 
-    # --- Transferor ---
+    # --- Transferor (Agent) ---
     When the agent logs out and re-logs in as the transferee agent "aga6504"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | A1090588        |
-      | transfereeHerd | Y1310159        |
-      | transfereeName | Seamus Carolan  |
+      | transferorHerd | {transferor.herd}                   |
+      | transfereeHerd | {transferee.herd}                   |
+      | transfereeName | {transferee.name}                   |
+      | transfereeType | Individual                          |
       | transferType   | Division of Entitlements (Scission) |
-      | entitlements   | 0.01            |
-      | notes          | Test Notes      |
+      | entitlements   | 0.01                                |
+      | notes          | Test Notes                          |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (Individual — DANIELPAUL) ---
-    When the agent logs out and re-logs in as the individual transferee "DANIELPAUL"
+    # --- Transferee (Individual - own login) ---
+    When the agent logs out and re-logs in as the individual transferee "{transferee.login}"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     When the agent navigates through the farmer side navigation tabs
-      | Transfers                 |
+      | Transfers |
     And the individual completes the transferee acceptance flow
-      | transfereeHerd | Y1310159      |
-      | notes          | Approved Test |
+      | transfereeHerd | {transferee.herd} |
+      | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
     # SECTION 3 : Sale of Entitlements (212)
     # Covers: TC_23
-    # Transferee: TERENCE1 (Individual — different user)
+    # Transferee: an individual with their own login (Individual Login query)
     # ===========================================
 
-    # --- Transferor ---
+    # --- Transferor (Agent) ---
     When the agent logs out and re-logs in as the transferee agent "aga6504"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | A1100087        |
-      | transfereeHerd | Y1041344        |
-      | transfereeName | Felim Sullivan  |
+      | transferorHerd | {transferor.herd}    |
+      | transfereeHerd | {transferee.herd}    |
+      | transfereeName | {transferee.name}    |
+      | transfereeType | Individual           |
       | transferType   | Sale of Entitlements |
-      | entitlements   | 0.01            |
-      | notes          | Test Notes      |
+      | entitlements   | 0.01                 |
+      | notes          | Test Notes           |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (Individual — TERENCE1) ---
-    When the agent logs out and re-logs in as the individual transferee "TERENCE1"
+    # --- Transferee (Individual - own login) ---
+    When the agent logs out and re-logs in as the individual transferee "{transferee.login}"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     When the agent navigates through the farmer side navigation tabs
-      | Transfers                 |
+      | Transfers |
     And the individual completes the transferee acceptance flow
-      | transfereeHerd | Y1041344      |
-      | notes          | Approved Test |
+      | transfereeHerd | {transferee.herd} |
+      | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
     # SECTION 4 : Change of Legal Entity (206)
     # Covers: TC_24
-    # Transferee: PAUDYFROG (Individual)
+    # Transferee: an individual with their own login (Individual Login query)
     # ===========================================
 
-    # --- Transferor ---
+    # --- Transferor (Agent) ---
     When the agent logs out and re-logs in as the transferee agent "aga6504"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
     And the agent creates a transfer application with the following details
-      | transferorHerd | A1100478        |
-      | transfereeHerd | Y104069X        |
-      | transfereeName | Daniel Mulvany  |
+      | transferorHerd | {transferor.herd}      |
+      | transfereeHerd | {transferee.herd}      |
+      | transfereeName | {transferee.name}      |
+      | transfereeType | Individual             |
       | transferType   | Change of Legal Entity |
-      | entitlements   | 0.01            |
-      | notes          | Test Notes      |
+      | entitlements   | 0.01                   |
+      | notes          | Test Notes             |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (Individual — PAUDYFROG) ---
-    When the agent logs out and re-logs in as the individual transferee "PAUDYFROG"
+    # --- Transferee (Individual - own login) ---
+    When the agent logs out and re-logs in as the individual transferee "{transferee.login}"
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     When the agent navigates through the farmer side navigation tabs
-      | Transfers                 |
+      | Transfers |
     And the individual completes the transferee acceptance flow
-      | transfereeHerd | Y104069X      |
-      | notes          | Approved Test |
+      | transfereeHerd | {transferee.herd} |
+      | notes          | Approved Test     |
     Then the transfer should be submitted successfully
