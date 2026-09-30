@@ -1,290 +1,259 @@
-Feature: TC_10_ENTS - Transfer Application E2E Regression Pack (Individual to ETF Partner)
+// ===================================================================================================================================
+// File          : TC_11_ENTS.java
+// Package       : stepdefinitions.ENTS
+// Description   : ETF Partner-as-TRANSFEROR with MANUAL entitlements (TC_11_ENTS).
+//
+//                 Steps in this file (3):
+//                   1. the ETF partner logs in as transferor {string}                        (Background + each section)
+//                   2. the ETF partner creates a transfer with manual entitlements (DataTable)
+//                   3. the ETF partner logs back in as transferor                            (not used by a feature today)
+//
+//                 KEY DIFFERENCE from the standard transfer: the entitlement is typed in by hand
+//                 (Add Manual Entitlement -> Entitlement Type -> amount -> Net UV) instead of picking a row, and the
+//                 transferee search also takes an address.
+//
+//                 Playwright edition (30-09-2026, from the Selenium file):
+//                   - Same step texts, same ObjectRepository keys, same flow.
+//                   - The copied Keycloak login block and the local isVisible are replaced by EntsSession.loginAs; an
+//                     expired account fails the step with the login in the message.
+//                   - Step 2 opens the transferor herd with EntsSession.openTransferOutHerd (waits for the row of THAT
+//                     herd, skips rows marked expired) instead of clicking the first View link after Search.
+//                   - Step 2 checks the four manual-entitlement Object Repository keys BEFORE the first click and names
+//                     every missing one. They are not in the Playwright repository yet (30-09-2026) - see the
+//                     ObjectRepository paste block that came with this file.
+//                   - Lease year: kept as in Selenium - the lease year is picked whenever the Lease Year dropdown appears
+//                     (the Selenium code ignored the leaseYear row). leaseYear=Yes now also waits for it.
+//                   - Step 3 logs out first when a session is still open; the Selenium version typed into a login page
+//                     that was not on screen, and used iExitBISSLink / iLogoutBtn, which are not in the repository.
+//                   - Thread.sleep calls removed; the waits come from iAction and EntsSession.
+//
+//                 Runtime data (utilities.EntsTestData): a "transfereeAgent | aga6581" row picks the transferee from that
+//                 agent's Agent Login pool, and {transferee.herd} / {transferee.name} / {transferee.address} fill the
+//                 search. The transferor is picked from the logged-in partner's pool when transferorHerd is
+//                 {transferor.herd}, or kept as typed when it is a herd number (EntsTestData.nextTransfereeForFixedTransferor)
+//                 - the Selenium version used the partner's own herd C2057024 for every section.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
+// ===================================================================================================================================
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the Transferor is an
-  #   Individual (own login) and the Transferee is a herd managed by ETF partner agr15678, who accepts from the ETF
-  #   button after searching the herd in Transfer Out.
-  #
-  #   Transfer types covered:
-  #     Section 1 : Lease                  (211)  - Selenium: SOUTHVIEW1 to D1460081 (Timothy Mangan)     + lease year
-  #     Section 2 : Merger                 (203)  - Selenium: TERENCE1   to D1190050 (Thomas Treanor)     (heading said Gift; type kept)
-  #     Section 3 : Sale                   (212)  - Selenium: DANIELPAUL to D1190246 (Oliver Griffin)
-  #     Section 4 : Inheritance            (201)  - Selenium: SOUTHVIEW1 to J1350309 (Cadden Suppliers)
-  #     Section 5 : Merger                 (203)  - Selenium: TERENCE1   to J1360045 (Nestor Exports Ltd)
-  #     Section 6 : Division               (204)  - Selenium: DANIELPAUL to D1051289 (Browne Exports Ltd)
-  #     Section 7 : Change of Registration (205)  - Selenium: TERENCE1   to D1190050 (Thomas Treanor)
-  #     Section 8 : Change of Legal Entity (206)  - Selenium: DANIELPAUL to J1360045 (Nestor Exports Ltd)
-  #
-  # Migrated from: TC_10_ENTS.feature (legacy 8 separate scenarios)
-  #
-  # Runtime data (Playwright, 30-09-2026):
-  #   The login step runs before the create step, so the pair is built in two halves (EntsTestData):
-  #     "the individual logs in as transferor {transferor.login}" picks an unused herd from the Individual Login query
-  #       (holder has their own online login) and logs its owner in
-  #     the create step then picks the transferee: an unused herd from the Agent Login pool of agr15678
-  #       ("transfereeAgent | agr15678", completePairWithAgentTransferee)
-  #     {transferor.login}  {transferee.herd}  {transferee.name}  {transferee.agent}
-  #   Change from the Selenium file: the ETF partner side now opens Home -> My Clients -> Transfers after the login
-  #   (the same two steps TC_07_ENTS uses), because the acceptance step searches the herd in Transfer Out.
-  #   Every pick is written to runtime-data/ents_used_herds.csv and never reused. Put a herd number, name or login back
-  #   in any cell to pin it for debugging (the Selenium values are in the comments of each section).
-  #
-  # Step reuse:
-  #   Background login / navigation / side navigation -> stepdefinitions.TC_03
-  #   Individual login + create                       -> stepdefinitions.ENTS.TC_08_ENTS
-  #   Send / key / submit                             -> stepdefinitions.ENTS.TC_01_ENTS
-  #   Tab switching                                   -> stepdefinitions.TC_06
-  #   ETF partner login + acceptance                  -> stepdefinitions.ENTS.TC_07_ENTS
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
-  # --------------------------------------------------------------------------------------------------------------------
+package stepdefinitions.ENTS;
 
-  Background:
-    Given the agent user is on the login page
-    When the individual logs in as transferor "{transferor.login}"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers |
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import utilities.EntsTestData;
+import utilities.ObjReader;
 
-  @regression @transfers @individual-to-etf @e2e
-  Scenario: AT-ENTS-TRANSFERS-E2E-10 - Individual completes all transfer types to ETF
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Logger;
 
-    # ===========================================
-    # SECTION 1 : Lease of Entitlements (211)
-    # Selenium: SOUTHVIEW1 to D1460081 (Timothy Mangan)
-    # NOTE: Lease includes lease year selection
-    # ===========================================
+import static commonFunctions.CommonFunctions.iAction;
+import static stepdefinitions.ENTS.EntsSession.PROBE_SECONDS;
+import static stepdefinitions.ENTS.EntsSession.isVisible;
+import static stepdefinitions.ENTS.EntsSession.pause;
 
-    # --- Transferor (Individual - own login) ---
-    When the individual creates a transfer application with the following details
-      | transfereeHerd  | {transferee.herd}     |
-      | transfereeName  | {transferee.name}     |
-      | transfereeAgent | agr15678              |
-      | transferType    | Lease of Entitlements |
-      | entitlements    | 0.01                  |
-      | leaseYear       | Yes                   |
-      | notes           | Test Notes            |
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+public class TC_11_ENTS
+{
+    private static final Logger log = Logger.getLogger(TC_11_ENTS.class.getName());
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    // The ETF partner of the last "logs in as transferor" step - used by "logs back in as transferor"
+    private static String iPartnerUsername = "";
 
-    # ===========================================
-    # SECTION 2 : Merger of Entitlements (203)
-    # Selenium: TERENCE1 to D1190050 (Thomas Treanor) - Selenium heading said Gift, the type was Merger
-    # ===========================================
+    // Object Repository keys the manual-entitlement flow needs on top of the standard transfer keys
+    private static final String[] MANUAL_ENTITLEMENT_KEYS = {
+            "iTransfereeAddressField", "iTransferAddManualEntitlementBtn",
+            "iTransferEntitlementTypeDropdown", "iTransferNetUVField" };
 
-    # --- Transferor (Individual - own login) ---
-    When the individual logs in as transferor "{transferor.login}"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers |
-    And the individual creates a transfer application with the following details
-      | transfereeHerd  | {transferee.herd}                                                       |
-      | transfereeName  | {transferee.name}                                                       |
-      | transfereeAgent | agr15678                                                                |
-      | transferType    | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
-      | entitlements    | 0.01                                                                    |
-      | notes           | Test Notes                                                              |
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    // ===================================================================================================================================
+    //  ETF PARTNER LOGIN
+    // ===================================================================================================================================
 
-    # ===========================================
-    # SECTION 3 : Sale of Entitlements (212)
-    # Selenium: DANIELPAUL to D1190246 (Oliver Griffin)
-    # ===========================================
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the ETF partner logs in as transferor {string}
+    // Description   : Keycloak login as the ETF partner (username, password TD:Password, PIN or OTP, TOTP, T&C).
+    //                 When a session is still open (no username box on screen) loginAs opens the base URL first.
+    // Parameters    : pPartnerUsername (String) - ETF partner login, e.g. "agr15512"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login)
+    // ***************************************************************************************************************************************************************************************
+    @Given("the ETF partner logs in as transferor {string}")
+    public void theETFPartnerLogsInAsTransferor(String pPartnerUsername)
+    {
+        String iUsername = EntsTestData.resolve(pPartnerUsername);
+        log.info("[STEP] Given the ETF partner logs in as transferor: " + iUsername);
 
-    # --- Transferor (Individual - own login) ---
-    When the individual logs in as transferor "{transferor.login}"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers |
-    And the individual creates a transfer application with the following details
-      | transfereeHerd  | {transferee.herd}    |
-      | transfereeName  | {transferee.name}    |
-      | transfereeAgent | agr15678             |
-      | transferType    | Sale of Entitlements |
-      | entitlements    | 0.01                 |
-      | notes           | Test Notes           |
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        iPartnerUsername = iUsername;
+        EntsSession.loginAs(iUsername, "[LOGIN-ETF-TRANSFEROR]");
+    }
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
 
-    # ===========================================
-    # SECTION 4 : Inheritance (201)
-    # Selenium: SOUTHVIEW1 to J1350309 (Cadden Suppliers)
-    # ===========================================
+    // ===================================================================================================================================
+    //  ETF PARTNER CREATES THE TRANSFER (manual entitlements)
+    // ===================================================================================================================================
 
-    # --- Transferor (Individual - own login) ---
-    When the individual logs in as transferor "{transferor.login}"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers |
-    And the individual creates a transfer application with the following details
-      | transfereeHerd  | {transferee.herd}           |
-      | transfereeName  | {transferee.name}           |
-      | transfereeAgent | agr15678                    |
-      | transferType    | Inheritance of Entitlements |
-      | entitlements    | 0.01                        |
-      | notes           | Test Notes                  |
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the ETF partner creates a transfer with manual entitlements (DataTable)
+    // Description   : 1. Searches the transferor herd and opens its first not-expired row
+    //                 2. Create Transfer Application
+    //                 3. Searches the transferee by herd, name and (optional) address; selects the open row on a multi-match
+    //                 4. Picks the transfer type, Next
+    //                 5. Add Manual Entitlement: entitlement type, amount, Net UV, lease year when shown, Add, Next
+    //                 6. Types the notes
+    //
+    //                 DataTable keys:
+    //                   transferorHerd    (String) - ETF partner's herd, e.g. "C2057024", or {transferor.herd}
+    //                   transfereeHerd    (String) - transferee herd number, or {transferee.herd}
+    //                   transfereeName    (String) - transferee name as shown in the portal, or {transferee.name}
+    //                   transfereeAddress (String) - OPTIONAL. First address line, or {transferee.address}
+    //                   transfereeAgent   (String) - OPTIONAL. Agent who manages the transferee (needed with tokens)
+    //                   transferType      (String) - transfer type text, e.g. "Gift of Entitlements"
+    //                   entitlements      (String) - amount, e.g. "0.01"
+    //                   entitlementType   (String) - OPTIONAL, default "BISS"
+    //                   netUV             (String) - OPTIONAL, default "1"
+    //                   leaseYear         (String) - OPTIONAL. "Yes" for a Lease
+    //                   notes             (String) - notes for the transfer summary
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
+    // ***************************************************************************************************************************************************************************************
+    @When("the ETF partner creates a transfer with manual entitlements")
+    public void theETFPartnerCreatesATransferWithManualEntitlements(DataTable pDataTable)
+    {
+        log.info("[STEP] When the ETF partner creates a transfer with manual entitlements");
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        requireRepositoryKeys();
 
-    # ===========================================
-    # SECTION 5 : Merger of Entitlements (203)
-    # Selenium: TERENCE1 to J1360045 (Nestor Exports Ltd)
-    # ===========================================
+        Map<String, String> iRaw = pDataTable.asMap(String.class, String.class);
 
-    # --- Transferor (Individual - own login) ---
-    When the individual logs in as transferor "{transferor.login}"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers |
-    And the individual creates a transfer application with the following details
-      | transfereeHerd  | {transferee.herd}                                                       |
-      | transfereeName  | {transferee.name}                                                       |
-      | transfereeAgent | agr15678                                                                |
-      | transferType    | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
-      | entitlements    | 0.01                                                                    |
-      | notes           | Test Notes                                                              |
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        // Runtime pair: transferor from the partner's pool, or pinned; transferee from the named agent's pool
+        if (EntsTestData.tableHasToken(iRaw))
+        {
+            String iPurpose         = iRaw.getOrDefault("transferType", "").trim();
+            String iTransfereeAgent = iRaw.getOrDefault("transfereeAgent", "").trim();
+            String iTransferorCell  = iRaw.getOrDefault("transferorHerd", "").trim();
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+            if (EntsTestData.hasToken(iTransferorCell))
+            {
+                EntsTestData.nextCrossAgentPair(EntsTestData.loggedInUser(), iTransfereeAgent, iPurpose);
+            }
+            else
+            {
+                EntsTestData.nextTransfereeForFixedTransferor(iTransferorCell, iTransfereeAgent, iPurpose);
+            }
+        }
 
-    # ===========================================
-    # SECTION 6 : Division of Entitlements (204)
-    # Selenium: DANIELPAUL to D1051289 (Browne Exports Ltd)
-    # ===========================================
+        Map<String, String> iData = EntsTestData.resolveTable(iRaw);
 
-    # --- Transferor (Individual - own login) ---
-    When the individual logs in as transferor "{transferor.login}"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers |
-    And the individual creates a transfer application with the following details
-      | transfereeHerd  | {transferee.herd}                   |
-      | transfereeName  | {transferee.name}                   |
-      | transfereeAgent | agr15678                            |
-      | transferType    | Division of Entitlements (Scission) |
-      | entitlements    | 0.01                                |
-      | notes           | Test Notes                          |
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        String  iTransferorHerd = iData.get("transferorHerd").trim();
+        String  iTransfereeHerd = iData.get("transfereeHerd").trim();
+        String  iTransfereeName = iData.get("transfereeName").trim();
+        String  iTransferType   = iData.get("transferType").trim();
+        String  iEntitlements   = iData.get("entitlements").trim();
+        String  iEntType        = iData.getOrDefault("entitlementType", "BISS").trim();
+        String  iNetUV          = iData.getOrDefault("netUV", "1").trim();
+        String  iNotes          = iData.get("notes").trim();
+        String  iAddress        = iData.getOrDefault("transfereeAddress", "").trim();
+        boolean iHasLeaseYear   = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        // -- 1. Transferor herd: wait for ITS row, skip expired rows, click View ---------------------------------------
+        EntsSession.openTransferOutHerd(iTransferorHerd);
+        log.info("Transferor herd opened: " + iTransferorHerd);
 
-    # ===========================================
-    # SECTION 7 : Change of Registration (205)
-    # Selenium: TERENCE1 to D1190050 (Thomas Treanor)
-    # ===========================================
+        // -- 2. Create Transfer Application ---------------------------------------------------------------------------
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
 
-    # --- Transferor (Individual - own login) ---
-    When the individual logs in as transferor "{transferor.login}"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers |
-    And the individual creates a transfer application with the following details
-      | transfereeHerd  | {transferee.herd}              |
-      | transfereeName  | {transferee.name}              |
-      | transfereeAgent | agr15678                       |
-      | transferType    | Change of Registration Details |
-      | entitlements    | 0.01                           |
-      | notes           | Test Notes                     |
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        // -- 3. Transferee search (the address field is unique to ETF transfers) ---------------------------------------
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), iTransfereeHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), iTransfereeName);
+        if (!iAddress.isEmpty())
+        {
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeAddressField"), iAddress);
+        }
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
+        log.info("Transferee searched: " + iTransfereeName + " (" + iTransfereeHerd + ")"
+                + (iAddress.isEmpty() ? "" : " | address: " + iAddress));
+        EntsSession.selectOpenTransfereeMatch(iTransfereeHerd);
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        // -- 4. Transfer type, Next (same helper as TC_01_ENTS) -------------------------------------------------------
+        TC_01_ENTS.selectTransferType(iTransferType);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
 
-    # ===========================================
-    # SECTION 8 : Change of Legal Entity (206)
-    # Selenium: DANIELPAUL to J1360045 (Nestor Exports Ltd)
-    # ===========================================
+        // -- 5. MANUAL entitlement --------------------------------------------------------------------------------------
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferAddManualEntitlementBtn"), null);
+        iAction("LIST",    "XPATH", ObjReader.getLocator("iTransferEntitlementTypeDropdown"), iEntType);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), iEntitlements);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNetUVField"), iNetUV);
 
-    # --- Transferor (Individual - own login) ---
-    When the individual logs in as transferor "{transferor.login}"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    When the agent navigates through the farmer side navigation tabs
-      | Transfers |
-    And the individual creates a transfer application with the following details
-      | transfereeHerd  | {transferee.herd}      |
-      | transfereeName  | {transferee.name}      |
-      | transfereeAgent | agr15678               |
-      | transferType    | Change of Legal Entity |
-      | entitlements    | 0.01                   |
-      | notes           | Test Notes             |
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        // Selenium picked the lease year whenever the dropdown appeared (3 s check) - kept; leaseYear=Yes waits for it
+        String iLeaseDropdown = ObjReader.getLocator("iTransferLeaseYearDropdown");
+        if (iHasLeaseYear || isVisible(iLeaseDropdown, PROBE_SECONDS))
+        {
+            iAction("CLICK", "XPATH", iLeaseDropdown, null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearFirstOption"), null);
+            log.info("Lease year selected.");
+        }
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogAddBtn"), null);
+        pause(1500);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+
+        // -- 6. Notes ---------------------------------------------------------------------------------------------------
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+
+        log.info("ETF manual transfer created | Type=" + iTransferType + " | Transferor=" + iTransferorHerd
+                + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements + " " + iEntType + " | NetUV=" + iNetUV);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the ETF partner logs back in as transferor
+    // Description   : Logs in again as the ETF partner of the last "logs in as transferor" step. Logs out first when a
+    //                 session is still open (the Keycloak username box is not on screen). The BISS URL opens BISS
+    //                 directly, so no application search is needed after the login.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login)
+    // ***************************************************************************************************************************************************************************************
+    @When("the ETF partner logs back in as transferor")
+    public void theETFPartnerLogsBackInAsTransferor()
+    {
+        log.info("[STEP] When the ETF partner logs back in as transferor: " + iPartnerUsername);
+
+        if (iPartnerUsername.isBlank())
+        {
+            throw new IllegalStateException("[LOGIN-ETF-TRANSFEROR] No ETF partner is known yet - the step "
+                    + "'the ETF partner logs in as transferor' must run earlier in the scenario.");
+        }
+
+        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
+        {
+            EntsSession.logout();
+        }
+
+        EntsSession.loginAs(iPartnerUsername, "[LOGIN-ETF-TRANSFEROR]");
+    }
+
+
+    // ===================================================================================================================================
+    //  HELPERS
+    // ===================================================================================================================================
+
+    // Fails BEFORE the first click when a manual-entitlement key is missing from the Object Repository, naming all of them
+    private static void requireRepositoryKeys()
+    {
+        List<String> iMissing = new ArrayList<>();
+        for (String iKey : MANUAL_ENTITLEMENT_KEYS)
+        {
+            if (!ObjReader.containsKey(iKey)) iMissing.add(iKey);
+        }
+        if (!iMissing.isEmpty())
+        {
+            throw new IllegalStateException("[OR] 'the ETF partner creates a transfer with manual entitlements' needs these Object "
+                    + "Repository keys, which are not in ObjectRepository.properties: " + String.join(", ", iMissing)
+                    + ". Add them (see the TC_11_ENTS notes) before running this test case.");
+        }
+    }
+}
