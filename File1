@@ -1,320 +1,308 @@
-Feature: TC_07_ENTS - Transfer Application E2E Regression Pack (Agent to ETF Partner)
+Feature: TC_11_ENTS - Transfer Application E2E Regression Pack (ETF Partner to Agent)
 
   # --------------------------------------------------------------------------------------------------------------------
   # Purpose:
-  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the Transferor is an Agent
-  #   (aga6322) and the Transferee is a herd managed by an ETF Partner login.
-  #
-  #   Difference from Agent-to-Agent (TC_03 / TC_04) and Agent-to-Individual (TC_05 / TC_06):
-  #     - the ETF partner accepts from the ETF button ("Access an application using Transfer Key") on the partner
-  #       dashboard; when that button is not shown the standard View Transfer Application route is taken
-  #     - the partner searches the transferee herd in Transfer Out first, like an agent
+  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the Transferor is ETF partner
+  #   agr15512 and the Transferee is a client herd of agent aga6581.
+  #   KEY DIFFERENCE: the entitlement is typed in by hand (Add Manual Entitlement + Entitlement Type + Net UV) instead
+  #   of picking a row, and the transferee search also takes the address line.
   #
   #   Transfer types covered:
-  #     Section 1 : Change of Registration (205)  - Selenium: J1390696 to J1314060 (Teresa Noone)         partner aga6322
-  #     Section 2 : Inheritance            (201)  - Selenium: J1400039 to J1350023 (Frehill Suppliers)    partner aga6322
-  #     Section 3 : Gift                   (202)  - Selenium: JFP10136 to J199406X (Buckley Suppliers)    partner aga6454
-  #     Section 4 : Lease                  (211)  - Selenium: J1400195 to J1970609 (David Vaughan)        partner aga6454 + lease year
-  #     Section 5 : Merger                 (203)  - Selenium: J1400217 to J1930160 (Edward Grimes)        partner aga6066
-  #     Section 6 : Division               (204)  - Selenium: J140033X to V2631112 (Nora White)           partner aga6322
-  #     Section 7 : Sale                   (212)  - Selenium: JFP10136 to J1930305 (Michael Owen Galvin)  partner aga6066
-  #     Section 8 : Change of Legal Entity (206)  - Selenium: J1350350 to A1030887 (John Joseph Mcgovern) partner aga6505
+  #     Section 1 : Change of Legal Entity (206)  - Selenium: C2057024 to B136017X (Darragh Staunton, Knockeevan Park)
+  #     Section 2 : Change of Registration (205)  - Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
+  #     Section 3 : Lease                  (211)  - Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk) + lease year
+  #     Section 4 : Gift                   (202)  - Selenium: C2057024 to D1460081 (Timothy Mangan, Ballybuggy Lawn)
+  #     Section 5 : Merger                 (203)  - Selenium: C2057024 to D3320139 (Felix Mc Donagh, Ballyine Abbey)
+  #     Section 6 : Division               (204)  - Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
+  #     Section 7 : Inheritance            (201)  - Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
+  #     Section 8 : Sale                   (212)  - Selenium: C2057024 to D2760615 (Griffin Meats Ltd, Killnadrain Ave)
   #
-  # Migrated from: TC_07_ENTS.feature (legacy 8 separate scenarios)
-  #   TC_25 -> Section 1   TC_26 -> Section 2   TC_28 -> Section 3   TC_29 -> Section 4
-  #   TC_30 -> Section 5   TC_31 -> Section 6   TC_32 -> Section 7   TC_33 -> Section 8
+  # Migrated from: TC_11_ENTS.feature (legacy 8 separate scenarios)
   #
   # Runtime data (Playwright, 30-09-2026):
-  #   No herd or name is typed in this file. The ETF partner named in the transfereeAgent row manages the transferee
-  #   herd, so each section is a cross-agent pick (EntsTestData.nextCrossAgentPair): the transferor herd comes from
-  #   aga6322's Agent Login pool and the transferee herd from the partner's pool. When the partner is aga6322 itself
-  #   (Sections 1, 2 and 6, as in the Selenium file) it is a same-agent pick.
-  #     {transferor.herd}  {transferee.herd}  {transferee.name}  {transferee.agent}
-  #   The ETF login step uses {transferee.agent}, so it always logs in as the partner named in the create table.
-  #   The Selenium Section 4 transferor herd was pinned to agent aga6365; here every transferor comes from aga6322.
+  #   The transferee comes from the Agent Login pool of the agent in the transfereeAgent row (aga6581) and fills
+  #     {transferee.herd}  {transferee.name}  {transferee.address}  {transferee.agent}
+  #   The transferor comes from agr15512's own Agent Login pool ({transferor.herd}, EntsTestData.nextCrossAgentPair).
+  #   The Selenium file used the partner's own herd C2057024 in every section: to do the same, put C2057024 back in the
+  #   transferorHerd cell - the step then picks only the transferee (EntsTestData.nextTransfereeForFixedTransferor) and
+  #   does not write the transferor to the used-herds file.
+  #   Check first in SQL Developer that agr15512 has current herds: run the Agent Login query for agr15512, or pin C2057024.
   #   Every pick is written to runtime-data/ents_used_herds.csv and never reused. Put a herd number, name or login back
   #   in any cell to pin it for debugging (the Selenium values are in the comments of each section).
   #
   # Step reuse:
-  #   Background login / navigation        -> stepdefinitions.TC_03
-  #   Login as a named user                -> stepdefinitions.ENTS.TC_08_ENTS
-  #   Tab switching                        -> stepdefinitions.TC_06
-  #   Create / upload / send / key / submit -> stepdefinitions.ENTS.TC_01_ENTS
-  #   Transferor re-login between sections -> stepdefinitions.ENTS.TC_03_ENTS (the no-logout variant, as in Selenium)
-  #   ETF partner login + acceptance       -> stepdefinitions.ENTS.TC_07_ENTS
+  #   ETF partner login + manual-entitlement create   -> stepdefinitions.ENTS.TC_11_ENTS
+  #   Portal navigation                               -> stepdefinitions.TC_03
+  #   Upload / send / key / submit                    -> stepdefinitions.ENTS.TC_01_ENTS
+  #   Agent login (transferee) + acceptance           -> stepdefinitions.ENTS.TC_08_ENTS
+  #   Tab switching                                   -> stepdefinitions.TC_06
+  #
+  #   Object Repository: iTransfereeAddressField, iTransferAddManualEntitlementBtn, iTransferEntitlementTypeDropdown and
+  #   iTransferNetUVField must exist - the create step fails before its first click when one is missing.
   #
   # Author : Aniket Pathare | aniket.pathare@government.ie
   # Created: 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
   # --------------------------------------------------------------------------------------------------------------------
 
   Background:
-    Given the agent user is on the login page
-    When the individual logs in as transferor "aga6322"
+    Given the ETF partner logs in as transferor "agr15512"
     And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
 
-  @regression @transfers @agent-to-etf @e2e
-  Scenario: AT-ENTS-TRANSFERS-E2E-07 - Agent completes all Agent-to-ETF Partner transfer types
+  @regression @transfers @etf-to-agent @e2e
+  Scenario: AT-ENTS-TRANSFERS-E2E-11 - ETF Partner completes all transfer types to Agent
 
     # ===========================================
-    # SECTION 1 : Change of Registration (205)
-    # Covers: TC_25
-    # ETF Partner: aga6322 | Selenium: J1390696 to J1314060 (Teresa Noone)
+    # SECTION 1 : Change of Legal Entity (206)
+    # Selenium: C2057024 to B136017X (Darragh Staunton, Knockeevan Park)
     # ===========================================
 
-    # --- Transferor (Agent aga6322) ---
-    When the agent creates a transfer application with the following details
-      | transferorHerd  | {transferor.herd}              |
-      | transfereeHerd  | {transferee.herd}              |
-      | transfereeName  | {transferee.name}              |
-      | transfereeAgent | aga6322                        |
-      | transferType    | Change of Registration Details |
-      | entitlements    | 0.01                           |
-      | notes           | Test Notes                     |
+    # --- Transferor (ETF Partner agr15512) ---
+    When the ETF partner creates a transfer with manual entitlements
+      | transferorHerd    | {transferor.herd}      |
+      | transfereeHerd    | {transferee.herd}      |
+      | transfereeName    | {transferee.name}      |
+      | transfereeAddress | {transferee.address}   |
+      | transfereeAgent   | aga6581                |
+      | transferType      | Change of Legal Entity |
+      | entitlements      | 0.01                   |
+      | entitlementType   | BISS                   |
+      | netUV             | 1                      |
+      | notes             | Test Notes             |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
+    # --- Transferee (Agent aga6581) ---
+    When the agent logs in as transferee agent "{transferee.agent}"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
+    And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
-    # SECTION 2 : Inheritance (201)
-    # Covers: TC_26
-    # ETF Partner: aga6322 | Selenium: J1400039 to J1350023 (Frehill Suppliers)
+    # SECTION 2 : Change of Registration (205)
+    # Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
     # ===========================================
 
-    # --- Transferor (Agent aga6322) ---
-    When the agent logs out and re-log in as the transferee agent "aga6322"
+    # --- Transferor (ETF Partner agr15512) ---
+    Given the ETF partner logs in as transferor "agr15512"
     And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd  | {transferor.herd}           |
-      | transfereeHerd  | {transferee.herd}           |
-      | transfereeName  | {transferee.name}           |
-      | transfereeAgent | aga6322                     |
-      | transferType    | Inheritance of Entitlements |
-      | entitlements    | 0.01                        |
-      | notes           | Test Notes                  |
+    When the ETF partner creates a transfer with manual entitlements
+      | transferorHerd    | {transferor.herd}              |
+      | transfereeHerd    | {transferee.herd}              |
+      | transfereeName    | {transferee.name}              |
+      | transfereeAddress | {transferee.address}           |
+      | transfereeAgent   | aga6581                        |
+      | transferType      | Change of Registration Details |
+      | entitlements      | 0.01                           |
+      | entitlementType   | BISS                           |
+      | netUV             | 1                              |
+      | notes             | Test Notes                     |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
+    # --- Transferee (Agent aga6581) ---
+    When the agent logs in as transferee agent "{transferee.agent}"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
+    And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
-    # SECTION 3 : Gift of Entitlements (202)
-    # Covers: TC_28
-    # ETF Partner: aga6454 | Selenium: JFP10136 to J199406X (Buckley Suppliers)
-    # ===========================================
-
-    # --- Transferor (Agent aga6322) ---
-    When the agent logs out and re-log in as the transferee agent "aga6322"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd  | {transferor.herd}    |
-      | transfereeHerd  | {transferee.herd}    |
-      | transfereeName  | {transferee.name}    |
-      | transfereeAgent | aga6454              |
-      | transferType    | Gift of Entitlements |
-      | entitlements    | 0.01                 |
-      | notes           | Test Notes           |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
-
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
-
-    # ===========================================
-    # SECTION 4 : Lease of Entitlements (211)
-    # Covers: TC_29
-    # ETF Partner: aga6454 | Selenium: J1400195 to J1970609 (David Vaughan)
+    # SECTION 3 : Lease of Entitlements (211)
+    # Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
     # NOTE: Lease includes lease year selection
     # ===========================================
 
-    # --- Transferor (Agent aga6322) ---
-    When the agent logs out and re-log in as the transferee agent "aga6322"
+    # --- Transferor (ETF Partner agr15512) ---
+    Given the ETF partner logs in as transferor "agr15512"
     And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd  | {transferor.herd}     |
-      | transfereeHerd  | {transferee.herd}     |
-      | transfereeName  | {transferee.name}     |
-      | transfereeAgent | aga6454               |
-      | transferType    | Lease of Entitlements |
-      | entitlements    | 0.01                  |
-      | leaseYear       | Yes                   |
-      | notes           | Test Notes            |
+    When the ETF partner creates a transfer with manual entitlements
+      | transferorHerd    | {transferor.herd}     |
+      | transfereeHerd    | {transferee.herd}     |
+      | transfereeName    | {transferee.name}     |
+      | transfereeAddress | {transferee.address}  |
+      | transfereeAgent   | aga6581               |
+      | transferType      | Lease of Entitlements |
+      | entitlements      | 0.01                  |
+      | entitlementType   | BISS                  |
+      | netUV             | 1                     |
+      | leaseYear         | Yes                   |
+      | notes             | Test Notes            |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
+    # --- Transferee (Agent aga6581) ---
+    When the agent logs in as transferee agent "{transferee.agent}"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | {transferee.herd} |
+      | notes          | Approved Test     |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 4 : Gift of Entitlements (202)
+    # Selenium: C2057024 to D1460081 (Timothy Mangan, Ballybuggy Lawn)
+    # ===========================================
+
+    # --- Transferor (ETF Partner agr15512) ---
+    Given the ETF partner logs in as transferor "agr15512"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    When the ETF partner creates a transfer with manual entitlements
+      | transferorHerd    | {transferor.herd}    |
+      | transfereeHerd    | {transferee.herd}    |
+      | transfereeName    | {transferee.name}    |
+      | transfereeAddress | {transferee.address} |
+      | transfereeAgent   | aga6581              |
+      | transferType      | Gift of Entitlements |
+      | entitlements      | 0.01                 |
+      | entitlementType   | BISS                 |
+      | netUV             | 1                    |
+      | notes             | Test Notes           |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (Agent aga6581) ---
+    When the agent logs in as transferee agent "{transferee.agent}"
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
     # SECTION 5 : Merger of Entitlements (203)
-    # Covers: TC_30
-    # ETF Partner: aga6066 | Selenium: J1400217 to J1930160 (Edward Grimes)
+    # Selenium: C2057024 to D3320139 (Felix Mc Donagh, Ballyine Abbey)
     # ===========================================
 
-    # --- Transferor (Agent aga6322) ---
-    When the agent logs out and re-log in as the transferee agent "aga6322"
+    # --- Transferor (ETF Partner agr15512) ---
+    Given the ETF partner logs in as transferor "agr15512"
     And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd  | {transferor.herd}                                                       |
-      | transfereeHerd  | {transferee.herd}                                                       |
-      | transfereeName  | {transferee.name}                                                       |
-      | transfereeAgent | aga6066                                                                 |
-      | transferType    | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
-      | entitlements    | 0.01                                                                    |
-      | notes           | Test Notes                                                              |
+    When the ETF partner creates a transfer with manual entitlements
+      | transferorHerd    | {transferor.herd}                                                       |
+      | transfereeHerd    | {transferee.herd}                                                       |
+      | transfereeName    | {transferee.name}                                                       |
+      | transfereeAddress | {transferee.address}                                                    |
+      | transfereeAgent   | aga6581                                                                 |
+      | transferType      | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
+      | entitlements      | 0.01                                                                    |
+      | entitlementType   | BISS                                                                    |
+      | netUV             | 1                                                                       |
+      | notes             | Test Notes                                                              |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
+    # --- Transferee (Agent aga6581) ---
+    When the agent logs in as transferee agent "{transferee.agent}"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
+    And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
     # SECTION 6 : Division of Entitlements (204)
-    # Covers: TC_31
-    # ETF Partner: aga6322 | Selenium: J140033X to V2631112 (Nora White)
+    # Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
     # ===========================================
 
-    # --- Transferor (Agent aga6322) ---
-    When the agent logs out and re-log in as the transferee agent "aga6322"
+    # --- Transferor (ETF Partner agr15512) ---
+    Given the ETF partner logs in as transferor "agr15512"
     And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd  | {transferor.herd}                   |
-      | transfereeHerd  | {transferee.herd}                   |
-      | transfereeName  | {transferee.name}                   |
-      | transfereeAgent | aga6322                             |
-      | transferType    | Division of Entitlements (Scission) |
-      | entitlements    | 0.01                                |
-      | notes           | Test Notes                          |
+    When the ETF partner creates a transfer with manual entitlements
+      | transferorHerd    | {transferor.herd}                   |
+      | transfereeHerd    | {transferee.herd}                   |
+      | transfereeName    | {transferee.name}                   |
+      | transfereeAddress | {transferee.address}                |
+      | transfereeAgent   | aga6581                             |
+      | transferType      | Division of Entitlements (Scission) |
+      | entitlements      | 0.01                                |
+      | entitlementType   | BISS                                |
+      | netUV             | 1                                   |
+      | notes             | Test Notes                          |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
+    # --- Transferee (Agent aga6581) ---
+    When the agent logs in as transferee agent "{transferee.agent}"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
+    And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
-    # SECTION 7 : Sale of Entitlements (212)
-    # Covers: TC_32
-    # ETF Partner: aga6066 | Selenium: JFP10136 to J1930305 (Michael Owen Galvin)
+    # SECTION 7 : Inheritance (201)
+    # Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
     # ===========================================
 
-    # --- Transferor (Agent aga6322) ---
-    When the agent logs out and re-log in as the transferee agent "aga6322"
+    # --- Transferor (ETF Partner agr15512) ---
+    Given the ETF partner logs in as transferor "agr15512"
     And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd  | {transferor.herd}    |
-      | transfereeHerd  | {transferee.herd}    |
-      | transfereeName  | {transferee.name}    |
-      | transfereeAgent | aga6066              |
-      | transferType    | Sale of Entitlements |
-      | entitlements    | 0.01                 |
-      | notes           | Test Notes           |
+    When the ETF partner creates a transfer with manual entitlements
+      | transferorHerd    | {transferor.herd}           |
+      | transfereeHerd    | {transferee.herd}           |
+      | transfereeName    | {transferee.name}           |
+      | transfereeAddress | {transferee.address}        |
+      | transfereeAgent   | aga6581                     |
+      | transferType      | Inheritance of Entitlements |
+      | entitlements      | 0.01                        |
+      | entitlementType   | BISS                        |
+      | netUV             | 1                           |
+      | notes             | Test Notes                  |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
+    # --- Transferee (Agent aga6581) ---
+    When the agent logs in as transferee agent "{transferee.agent}"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
+    And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test     |
     Then the transfer should be submitted successfully
 
     # ===========================================
-    # SECTION 8 : Change of Legal Entity (206)
-    # Covers: TC_33
-    # ETF Partner: aga6505 | Selenium: J1350350 to A1030887 (John Joseph Mcgovern)
+    # SECTION 8 : Sale of Entitlements (212)
+    # Selenium: C2057024 to D2760615 (Griffin Meats Ltd, Killnadrain Ave)
     # ===========================================
 
-    # --- Transferor (Agent aga6322) ---
-    When the agent logs out and re-log in as the transferee agent "aga6322"
+    # --- Transferor (ETF Partner agr15512) ---
+    Given the ETF partner logs in as transferor "agr15512"
     And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent creates a transfer application with the following details
-      | transferorHerd  | {transferor.herd}      |
-      | transfereeHerd  | {transferee.herd}      |
-      | transfereeName  | {transferee.name}      |
-      | transfereeAgent | aga6505                |
-      | transferType    | Change of Legal Entity |
-      | entitlements    | 0.01                   |
-      | notes           | Test Notes             |
+    When the ETF partner creates a transfer with manual entitlements
+      | transferorHerd    | {transferor.herd}    |
+      | transfereeHerd    | {transferee.herd}    |
+      | transfereeName    | {transferee.name}    |
+      | transfereeAddress | {transferee.address} |
+      | transfereeAgent   | aga6581              |
+      | transferType      | Sale of Entitlements |
+      | entitlements      | 0.01                 |
+      | entitlementType   | BISS                 |
+      | netUV             | 1                    |
+      | notes             | Test Notes           |
     And the agent uploads the transferor signature document
     And the agent sends the transfer for acceptance
     Then the transfer key should be captured
 
-    # --- Transferee (ETF Partner) ---
-    When the agent logs out and re-logs in as the ETF partner "{transferee.agent}"
+    # --- Transferee (Agent aga6581) ---
+    When the agent logs in as transferee agent "{transferee.agent}"
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
     And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
+    And the agent completes the same agent transferee acceptance flow
       | transfereeHerd | {transferee.herd} |
       | notes          | Approved Test     |
     Then the transfer should be submitted successfully
