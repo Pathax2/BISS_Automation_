@@ -1,158 +1,251 @@
-// ===================================================================================================================================
-// File          : TC_05_ENTS.java
-// Package       : stepdefinitions.ENTS
-// Description   : Step definitions for TC_05_ENTS - Transfer Application E2E (Agent to Individual).
-//
-//                 Only the steps unique to an Agent-to-Individual transfer live here. The difference from the
-//                 agent-to-agent flow (TC_03_ENTS / TC_04_ENTS):
-//                   - the transferee logs in with their OWN individual login (e.g. "PAUDYFROG"), not an agent login
-//                   - a personal details dialog can be shown after the individual logs in
-//                   - the individual opens "Transfers" from the farmer side navigation (no My Clients tab switch)
-//                   - the individual sees the transfer on their own Transfers page, so there is no herd search
-//
-//                 Steps in this file (2):
-//                   1. the agent logs out and re-logs in as the individual transferee {string}
-//                   2. the individual completes the transferee acceptance flow (DataTable)
-//
-//                 Every other step of TC_05_ENTS.feature / TC_06_ENTS.feature is already defined:
-//                   login / portal navigation / side navigation -> stepdefinitions.TC_03
-//                   tab switching                               -> stepdefinitions.TC_06
-//                   login as a named user                       -> stepdefinitions.ENTS.TC_08_ENTS
-//                   create / upload / send / key / submit       -> stepdefinitions.ENTS.TC_01_ENTS
-//                   transferor re-login between sections        -> stepdefinitions.ENTS.TC_03_ENTS
-//
-//                 Playwright edition (30-09-2026):
-//                   - Same step texts, same ObjectRepository keys, same flow.
-//                   - The copied login block (username, PIN loop, new-user Next screens, T&C, TOTP, Account Expired)
-//                     is replaced by the shared EntsSession.loginAs / EntsSession.logout. loginAs also fills the
-//                     mobile number form when Keycloak asks for it.
-//                   - Account Expired: Selenium called Hooks.markAgentExpired for the BISS runtime agent (a different
-//                     user) and logged in again as the same expired individual. loginAs now fails the step with the
-//                     login in the message.
-//                   - The personal details dialog is closed when shown (EntsSession.closePersonalDetailsIfShown). The
-//                     Selenium notes mentioned it but the code never closed it.
-//                   - The key comes from TC_01_ENTS.iCapturedTransferKey and is checked before it is typed.
-//                   - Thread.sleep, WebDriverWait, findElement and the private isVisible are gone (Playwright waits).
-//                   - The unused private handlePostLoginOTP() and the local performLogout() copy are gone.
-//                   - Runtime data: the individual login is the token {transferee.login}, picked together with the
-//                     transferee herd from the Individual Login query (utilities.EntsTestData.nextAgentToIndividualPair).
-//                     A plain login such as "PAUDYFROG" still works, to pin a user for debugging.
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
-// ===================================================================================================================================
+Feature: TC_08_ENTS - Transfer Application E2E (Individual to Agent)
 
-package stepdefinitions.ENTS;
+  # Migrated from: TC_08_ENTS.feature (legacy 8 scenarios)
+  # Transferor: Individual (various usernames) | Transferee: Agent (aga6325)
+  # All 8 transfer types covered: 206, 201, 202, 211, 203, 204, 212, 205
+  #
+  # New steps: individual logs in as transferor, individual creates transfer,
+  #            agent logs in as transferee agent
+  # Reused: TC_01_ENTS (send/capture), TC_05_ENTS (individual login pattern)
+  #
+  # Author: Aniket Pathare | Created: 31-03-2026
 
-import io.cucumber.datatable.DataTable;
-import io.cucumber.java.en.*;
-import org.junit.jupiter.api.Assertions;
-import utilities.ConfigManager;
-import utilities.EntsTestData;
-import utilities.ObjReader;
+  Background:
+    Given the agent user is on the login page
+    When the individual logs in as transferor "FARMBLUE"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+  @regression @transfers @individual-to-agent @e2e
+  Scenario: AT-ENTS-TRANSFERS-E2E-08 - Individual completes all transfer types to Agent
 
-import java.util.Map;
-import java.util.logging.Logger;
+    # ===========================================
+    # SECTION 1 : Change of Legal Entity (206)
+    # ===========================================
 
-import static commonFunctions.CommonFunctions.iAction;
-import static stepdefinitions.ENTS.EntsSession.PROBE_SECONDS;
-import static stepdefinitions.ENTS.EntsSession.isVisible;
+    # --- Transferor (Individual) ---
 
-public class TC_05_ENTS
-{
-    private static final Logger log = Logger.getLogger(TC_05_ENTS.class.getName());
+    And the individual creates a transfer application with the following details
+      | transfereeHerd | Z1114042       |
+      | transfereeName | Owens Mart Ltd       |
+      | transferType   | Change of Legal Entity |
+      | entitlements   | 0.01           |
+      | notes          | Test Notes     |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
+    # --- Transferee (Agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | Z1114042 |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-    // ===================================================================================================================================
-    //  INDIVIDUAL LOGIN - log out of the agent session, log in as the individual
-    // ===================================================================================================================================
+    # ===========================================
+    # SECTION 2 : Inheritance (201)
+    # ===========================================
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent logs out and re-logs in as the individual transferee {string}
-    // Description   : Logs out of the current session and logs in as the individual transferee:
-    //                   username -> Continue -> password (TD:Password) -> Login -> PIN / mobile number / TOTP / T&C,
-    //                   or OTP only (EntsSession.loginAs, same sequence as the Selenium copy).
-    //                 Then closes the personal details dialog when it is shown (waits up to ents.personal.details.seconds,
-    //                 default 5).
-    // Parameters    : pUsername (String) - individual login, e.g. "PAUDYFROG", or {transferee.login}
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent logs out and re-logs in as the individual transferee {string}")
-    public void theAgentLogsOutAndReLogsInAsTheIndividualTransferee(String pUsername)
-    {
-        String iUsername = EntsTestData.resolve(pUsername);
-        log.info("[STEP] When the agent logs out and re-logs in as the individual transferee: " + iUsername);
+    # --- Transferor (Individual) ---
+    When the individual logs in as transferor "JAMESSKEHILL"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+    And the individual creates a transfer application with the following details
+      | transfereeHerd | Z2170744       |
+      | transfereeName | Hugh Patrick Gore    |
+      | transferType   | Inheritance of Entitlements |
+      | entitlements   | 0.01           |
+      | notes          | Test Notes     |
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-        Assertions.assertFalse(iUsername == null || iUsername.isEmpty(),
-                "No individual login to use. Give a login in the feature file or use {transferee.login} after the create step.");
+    # --- Transferee (Agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | Z2170744 |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-        EntsSession.logout();
-        EntsSession.loginAs(iUsername, "[LOGIN-INDIVIDUAL]");
-        EntsSession.closePersonalDetailsIfShown(ConfigManager.getInt("ents.personal.details.seconds", 5));
+    # ===========================================
+    # SECTION 3 : Gift (202)
+    # ===========================================
 
-        log.info("Logged in as the individual transferee: " + iUsername);
-    }
+    # --- Transferor (Individual) ---
+    When the individual logs in as transferor "EUGENECARR"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+    And the individual creates a transfer application with the following details
+      | transfereeHerd | Z1180657       |
+      | transfereeName | Patrick Keenan       |
+      | transferType   | Gift of Entitlements|
+      | entitlements   | 0.01           |
+      | notes          | Test Notes     |
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
+    # --- Transferee (Agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | Z1180657 |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-    // ===================================================================================================================================
-    //  INDIVIDUAL TRANSFEREE ACCEPTANCE
-    // ===================================================================================================================================
+    # ===========================================
+    # SECTION 4 : Lease (211)
+    # ===========================================
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the individual completes the transferee acceptance flow (DataTable)
-    // Description   : The individual is on their own Transfers page (side navigation step), so there is no herd search.
-    //                   ETF button shown : ETF -> transfer key -> View Transfer Application
-    //                   otherwise        : View Transfer Application (2) -> transfer key -> View Transfer Application
-    //                 Then notes, Submit Application to DAFM, T&C and confirm. Same order as the Selenium version and as
-    //                 TC_03_ENTS "the agent completes the cross-agent transferee acceptance flow".
-    //
-    //                 DataTable keys:
-    //                   transfereeHerd (String) - herd number, or {transferee.herd} (log only - no search on this page)
-    //                   notes          (String) - transferee notes, e.g. "Approved Test"
-    //
-    //                 Depends on the key captured by TC_01_ENTS "the transfer key should be captured".
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
-    // ***************************************************************************************************************************************************************************************
-    @And("the individual completes the transferee acceptance flow")
-    public void theIndividualCompletesTheTransfereeAcceptanceFlow(DataTable pDataTable)
-    {
-        log.info("[STEP] And the individual completes the transferee acceptance flow");
+    # --- Transferor (Individual) ---
+    When the individual logs in as transferor "CATHERINEMORAN2"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+    And the individual creates a transfer application with the following details
+      | transfereeHerd | Z1190016       |
+      | transfereeName | Brendan Fitzjohn     |
+      | transferType   | Lease of Entitlements|
+      | entitlements   | 0.01           |
+      | leaseYear      | Yes            |
+      | notes          | Test Notes     |
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+    # --- Transferee (Agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | Z1190016 |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-        String iTransfereeHerd = iData.getOrDefault("transfereeHerd", "").trim();
-        String iNotes          = iData.get("notes").trim();
-        String iTransferKey    = TC_01_ENTS.iCapturedTransferKey;
+    # ===========================================
+    # SECTION 5 : Merger (203)
+    # ===========================================
 
-        Assertions.assertFalse(iTransferKey == null || iTransferKey.isEmpty(),
-                "Transfer key must have been captured in the Transferor flow before the individual can accept.");
+    # --- Transferor (Individual) ---
+    When the individual logs in as transferor "HNOW1280483"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+    And the individual creates a transfer application with the following details
+      | transfereeHerd | Z1270559       |
+      | transfereeName | Thomas Cooke   |
+      | transferType   | Merger of 2 or more holdings (forming an unregistered Farm Partnership)|
+      | entitlements   | 0.01           |
+      | notes          | Test Notes     |
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-        if (isVisible(ObjReader.getLocator("iETFBtn"), PROBE_SECONDS))
-        {
-            // Partner dashboard: ETF button, then the key
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
-            log.info("ETF button clicked.");
-        }
-        else
-        {
-            // Standard Transfers page: View Transfer Application, then the key
-            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
-            iAction("CLICK",       "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
-        }
+    # --- Transferee (Agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | Z1270559 |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iTransferKey);
-        log.info("Transfer key entered: " + iTransferKey);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+    # ===========================================
+    # SECTION 6 : Division (204)
+    # ===========================================
 
-        // Notes, Submit Application to DAFM, T&C, confirm
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"),      iNotes);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"),   null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+    # --- Transferor (Individual) ---
+    When the individual logs in as transferor "ANGELAMCGLYNN"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+    And the individual creates a transfer application with the following details
+      | transfereeHerd | Z1330942       |
+      | transfereeName | Joanne Moroney       |
+      | transferType   | Division of Entitlements (Scission)|
+      | entitlements   | 0.01           |
+      | notes          | Test Notes     |
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-        log.info("Individual transferee acceptance completed for herd: " + iTransfereeHerd
-                + " | login=" + EntsTestData.loggedInUser());
-    }
-}
+    # --- Transferee (Agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | Z1330942 |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 7 : Sale (212)
+    # ===========================================
+
+    # --- Transferor (Individual) ---
+    When the individual logs in as transferor "JHARKIN1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+    And the individual creates a transfer application with the following details
+      | transfereeHerd | Z1334069       |
+      | transfereeName | Ronan O'Neill        |
+      | transferType   | Sale of Entitlements |
+      | entitlements   | 0.01           |
+      | notes          | Test Notes     |
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (Agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | Z1334069 |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
+
+    # ===========================================
+    # SECTION 8 : Change of Registration (205)
+    # ===========================================
+
+    # --- Transferor (Individual) ---
+    When the individual logs in as transferor "SOUTHVIEW1"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    When the agent navigates through the farmer side navigation tabs
+      | Transfers                 |
+    And the individual creates a transfer application with the following details
+      | transfereeHerd | Z2120933       |
+      | transfereeName | Richard Keenan       |
+      | transferType   | Change of Registration Details|
+      | entitlements   | 0.01           |
+      | notes          | Test Notes     |
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
+
+    # --- Transferee (Agent) ---
+    When the agent logs out and re-logs in as the transferee agent "aga6325"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the agent completes the same agent transferee acceptance flow
+      | transfereeHerd | Z2120933 |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
