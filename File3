@@ -51,6 +51,13 @@ import java.util.Set;
 //                                          login for an agent-to-individual transfer (TC_05_ENTS / TC_06_ENTS)
 //                   {transferor.login}   - the user who creates the transfer: the agent, or the individual's own login
 //                                          when the transferor is an individual (TC_08 / TC_09 / TC_10_ENTS)
+//                   {auto.agent}         - the agent with the MOST usable herds, other than the logged-in agent
+//                                          (01-10-2026). Use it in the transfereeAgent row and in the re-login step
+//                                          instead of hard-coding an agent with few herds (aga6325 has 5). Picked once
+//                                          per scenario, so every step of the scenario gets the same agent. Ranking:
+//                                          vault stock (ENTS_AGENT pools), else the ranking TC_00_DATA stored, else
+//                                          the live query "ENTS Top agents". Expired logins are skipped.
+//                   {auto.agent.2}       - the second best agent, {auto.agent.3} the third, and so on
 //                 Any other value is returned unchanged, so a feature file can still pin a herd for debugging.
 //
 //                 Negative case (TC_02_ENTS Section 2): nextNoEntitlementPair picks the transferor from the agent's herds
@@ -163,6 +170,10 @@ public final class EntsTestData
     // Agent login -> rows of the Agent Login query (fetched once per run, the query takes several seconds)
     private static final Map<String, List<Herd>> AGENT_POOLS = new HashMap<>();
 
+    // {auto.agent}: picked once per scenario (index -> login), ranking cached for the run
+    private static final Map<Integer, String> AUTO_AGENTS   = new HashMap<>();
+    private static       List<String>         RANKED_AGENTS = null;
+
     // Agent login -> herds of that agent with NO entitlements in the scheme year (TC_02_ENTS negative case)
     private static final Map<String, List<Herd>> NO_ENTS_POOLS = new HashMap<>();
 
@@ -191,6 +202,7 @@ public final class EntsTestData
     {
         iCurrentPair  = null;
         iLoggedInUser = "";
+        AUTO_AGENTS.clear();
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -254,6 +266,7 @@ public final class EntsTestData
     {
         if (pValue == null) return null;
         if (!hasToken(pValue)) return pValue.trim();
+        if (isAutoAgentToken(pValue)) return resolveAgent(pValue);
 
         String iToken = pValue.trim().toLowerCase(Locale.ROOT);
 
@@ -286,8 +299,116 @@ public final class EntsTestData
                 throw new IllegalArgumentException(LOG_PREFIX + "Unknown token " + pValue.trim()
                         + ". Use {transferor.herd}, {transferor.name}, {transferee.herd}, {transferee.name}, "
                         + "{transferor.address}, {transferee.address}, {agent}, {transferor.agent}, {transferor.login}, "
-                        + "{transferee.agent} or {transferee.login}.");
+                        + "{transferee.agent}, {transferee.login} or {auto.agent}.");
         }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isAutoAgentToken / resolveAgent / rankedAgents
+    // Description   : {auto.agent} = the agent with the most usable herds, other than the logged-in agent and the
+    //                 current transferor agent; {auto.agent.N} = the N-th best. The pick is made once per scenario and
+    //                 kept, so the transfereeAgent row, the re-login step and the acceptance steps all get the same
+    //                 agent. Plain logins are returned unchanged, so every pair method can call resolveAgent safely.
+    //
+    //                 Ranking, first that answers:
+    //                   1. Test Data Vault - ENTS_AGENT pools by AVAILABLE rows (what can actually be used today)
+    //                   2. vault.meta top.agents - stored by TC_00_DATA from the "ENTS Top agents" query
+    //                   3. live query "ENTS Top agents" (cached for the run)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean isAutoAgentToken(String pValue)
+    {
+        return pValue != null && pValue.trim().toLowerCase(Locale.ROOT).startsWith("{auto.agent");
+    }
+
+    public static synchronized String resolveAgent(String pValue)
+    {
+        if (!isAutoAgentToken(pValue)) return pValue == null ? "" : pValue.trim();
+
+        String iToken = pValue.trim().toLowerCase(Locale.ROOT);
+        int    iIndex = 1;
+        if (iToken.startsWith("{auto.agent.") && iToken.endsWith("}"))
+        {
+            try { iIndex = Math.max(1, Integer.parseInt(iToken.substring("{auto.agent.".length(), iToken.length() - 1).trim())); }
+            catch (NumberFormatException e)
+            {
+                throw new IllegalArgumentException(LOG_PREFIX + "Unknown token " + pValue.trim() + ". Use {auto.agent} or {auto.agent.2}, {auto.agent.3}, ...");
+            }
+        }
+        if (AUTO_AGENTS.containsKey(iIndex)) return AUTO_AGENTS.get(iIndex);
+
+        // Never the agent who is logged in or who owns the transferor herd - a transfer needs two different agents
+        Set<String> iExclude = new HashSet<>();
+        if (!iLoggedInUser.isEmpty()) iExclude.add(iLoggedInUser.toLowerCase(Locale.ROOT));
+        if (iCurrentPair != null && iCurrentPair.agent != null) iExclude.add(iCurrentPair.agent.toLowerCase(Locale.ROOT));
+
+        int iRank = 0;
+        for (String iAgent : rankedAgents())
+        {
+            if (iExclude.contains(iAgent.toLowerCase(Locale.ROOT)) || TestDataVault.isLoginExpired(iAgent)) continue;
+            iRank++;
+            if (iRank == iIndex)
+            {
+                AUTO_AGENTS.put(iIndex, iAgent);
+                CommonFunctions.log.info(LOG_PREFIX + pValue.trim() + " -> " + iAgent
+                        + (iExclude.isEmpty() ? "" : " (skipped " + iExclude + ")") + " - kept for the rest of the scenario.");
+                return iAgent;
+            }
+        }
+        throw new IllegalStateException(LOG_PREFIX + "No agent with usable herds found for " + pValue.trim()
+                + " (excluded " + iExclude + "). Run TC_00_DATA, or check the \"ENTS Top agents\" query.");
+    }
+
+    public static synchronized List<String> rankedAgents()
+    {
+        // 1. the vault: what is really available right now
+        if (TestDataVault.isEnabled())
+        {
+            List<Map.Entry<String, Integer>> iPools = new ArrayList<>();
+            for (Map.Entry<String, Integer> iEntry : TestDataVault.availableCounts().entrySet())
+            {
+                if (iEntry.getKey().startsWith(TestDataVault.POOL_ENTS_AGENT + "/") && iEntry.getValue() > 0) iPools.add(iEntry);
+            }
+            if (!iPools.isEmpty())
+            {
+                iPools.sort((a, b) -> b.getValue() - a.getValue() != 0 ? b.getValue() - a.getValue() : a.getKey().compareTo(b.getKey()));
+                List<String> iRanked = new ArrayList<>();
+                for (Map.Entry<String, Integer> iEntry : iPools) iRanked.add(iEntry.getKey().substring(TestDataVault.POOL_ENTS_AGENT.length() + 1));
+                CommonFunctions.log.info(LOG_PREFIX + "Agent ranking from the vault: " + iPools);
+                return iRanked;
+            }
+            // 2. the ranking TC_00_DATA stored
+            List<String> iStored = TestDataVault.topAgents();
+            if (!iStored.isEmpty())
+            {
+                CommonFunctions.log.info(LOG_PREFIX + "Agent ranking from vault.meta: " + iStored);
+                return iStored;
+            }
+        }
+        // 3. live
+        if (RANKED_AGENTS == null)
+        {
+            RANKED_AGENTS = topAgentsLive(ConfigManager.getInt("data.auto.agents.rank", 10));
+            CommonFunctions.log.info(LOG_PREFIX + "Agent ranking from the Top agents query: " + RANKED_AGENTS);
+        }
+        return RANKED_AGENTS;
+    }
+
+    // Runs "ENTS Top agents" and returns the logins, most herds first (shared with DataHarvester)
+    public static List<String> topAgentsLive(int pHowMany)
+    {
+        String iYear = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
+        String iType = ConfigManager.getOrDefault("ents.cust.type", "").trim();
+        String iTwo  = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
+        String iLike = ConfigManager.getOrDefault("data.auto.agents.like", "ag%").trim();
+        List<String> iRanked = new ArrayList<>();
+        for (Map<String, Object> iRow : DBRouter.query("ENTS", "ENTS Top agents", String.valueOf(pHowMany), iYear, iType, iTwo, iLike))
+        {
+            String iLogin = text(iRow, "AGENT_LOGIN");
+            if (!iLogin.isEmpty()) iRanked.add(iLogin);
+        }
+        return iRanked;
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -451,7 +572,7 @@ public final class EntsTestData
         }
 
         String iOrAgent = pTransferorAgent.trim();
-        String iEeAgent = pTransfereeAgent.trim();
+        String iEeAgent = resolveAgent(pTransfereeAgent);   // {auto.agent} -> the agent with the most herds
         if (iOrAgent.equalsIgnoreCase(iEeAgent))
         {
             return nextSameAgentPair(iOrAgent, pPurpose);
@@ -566,7 +687,7 @@ public final class EntsTestData
             throw new IllegalArgumentException(LOG_PREFIX + "The transfereeAgent row is empty - give the login of the agent who manages the transferee.");
         }
 
-        String      iAgent    = pAgent.trim();
+        String      iAgent    = resolveAgent(pAgent);   // {auto.agent} -> the agent with the most herds
         Set<String> iUsedPlus = new HashSet<>(usedHerds());
         iUsedPlus.add(iCurrentPair.transferor.herdNumber);
 
@@ -626,7 +747,7 @@ public final class EntsTestData
             throw new IllegalArgumentException(LOG_PREFIX + "The transfereeAgent row is empty - give the login of the agent who manages the transferee.");
         }
 
-        String      iAgent    = pTransfereeAgent.trim();
+        String      iAgent    = resolveAgent(pTransfereeAgent);   // {auto.agent} -> the agent with the most herds
         Set<String> iUsedPlus = new HashSet<>(usedHerds());
         iUsedPlus.add(pTransferorHerd.trim());
 
