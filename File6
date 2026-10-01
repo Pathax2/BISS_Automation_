@@ -1,593 +1,107 @@
 // ===================================================================================================================================
-// File          : EntsSession.java
-// Package       : stepdefinitions.ENTS
-// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
+// File          : TC_00_DATA.java
+// Package       : stepdefinitions
+// Description   : Step definitions for TC_00_DATA - fills the Test Data Vault before the test cases run.
 //
-//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
-//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
-//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
-//                 themselves keep the same Gherkin text as before.
+//                 Three steps, no browser:
+//                   Given the test data vault is checked for freshness    -> logs whether the jar is fresh or why it is stale
+//                   When  the test data for every selected test case is extracted -> utilities.DataHarvester.run(...)
+//                   Then  the test data stock report should be printed    -> stock report + LOW STOCK warnings
 //
-//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
-//
-//                 24-09-2026: selectOpenTransfereeMatch added. The Transferee Search dialog can return the same herd
-//                 twice ("2 matches found. Please select one:"); the row with no End Date is selected.
-//
-//                 30-09-2026 (TC_05_ENTS / TC_06_ENTS, individual logins):
-//                   - loginAs fills the "mobile number" form when Keycloak shows it after the PIN (same form and value
-//                     as TC_03.enterMobileNumberIfAsked: login.test.mobile, default 1111111111).
-//                   - logout skips the Exit / Logout clicks when the Exit link is not on screen (already logged out, e.g.
-//                     right after "the transfer should be submitted successfully"), instead of waiting for them to fail.
-//                   - closePersonalDetailsIfShown closes the personal details dialog an individual can get after login.
-//                   - acceptWithTransferKey holds the transferee acceptance screens (ETF button or View, key, notes,
-//                     Submit to DAFM, T&C, confirm) that TC_05, TC_07 and TC_08 all share.
+//                 Hooks skips the browser, TestData.xlsx row and Word report for test case IDs containing "_DATA".
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 22-09-2026 | Updated: 24-09-2026 (transferee multi-match), 30-09-2026 (individual logins)
+// Date Created  : 01-10-2026
 // ===================================================================================================================================
 
-package stepdefinitions.ENTS;
+package stepdefinitions;
 
-import com.microsoft.playwright.Locator;
 import commonFunctions.CommonFunctions;
-import commonFunctions.UiHelpers;
-import stepdefinitions.Hooks;
+import io.cucumber.java.en.Given;
+import io.cucumber.java.en.Then;
+import io.cucumber.java.en.When;
+import org.junit.jupiter.api.Assertions;
 import utilities.ConfigManager;
-import utilities.EntsTestData;
-import utilities.ObjReader;
+import utilities.DataHarvester;
+import utilities.TestDataVault;
 
 import java.util.List;
 import java.util.logging.Logger;
 
-import static commonFunctions.CommonFunctions.iAction;
-
-final class EntsSession
+public class TC_00_DATA
 {
-    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
+    private static final Logger log = Logger.getLogger(TC_00_DATA.class.getName());
 
-    // How long an "if present" check waits before deciding the element is not there
-    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
+    private String iStockReport = "";
 
-    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
-    static final String TRANSFERS_TAB_XPATH =
-            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
-
-    private EntsSession() { }
-
-
-    // ===================================================================================================================================
-    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
-    // ===================================================================================================================================
-
-    // Locator for a raw XPath
-    static Locator xp(String pXpath)
-    {
-        return UiHelpers.byXpath(pXpath);
-    }
-
-    // True when the first match becomes visible within pSeconds - never throws
-    static boolean isVisible(String pXpath, int pSeconds)
-    {
-        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
-    }
-
-    // Immediate count, no waiting - same as findElements(...).size()
-    static int countOf(String pXpath)
-    {
-        return xp(pXpath).count();
-    }
-
-    // Replacement for Thread.sleep
-    static void pause(long pMilliseconds)
-    {
-        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
-    }
-
-
-    // ===================================================================================================================================
-    //  LOGIN
-    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : loginAs
-    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
-    //                 Same sequence as the Selenium ENTS login steps:
-    //                   username -> Continue -> password (TD:Password) -> Login
-    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
-    //                   otherwise :  OTP 111111 -> Login
-    //                 If the username box is not on screen (for example after an earlier section left the portal open),
-    //                 the base URL is opened first.
-    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
-    //
-    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
-    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
-    //                 and then logged in again as the same expired ENTS user, which could never succeed.
-    //
-    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
-    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Step          : Given the test data vault is checked for freshness
+    // Description   : Logs the state of the jar: where it is, when it was filled and whether the weekly refresh day or
+    //                 data.force.refresh says it must be refilled. The decision itself is taken by DataHarvester.run.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
+    // Date Created  : 01-10-2026
     // ***************************************************************************************************************************************************************************************
-    static void loginAs(String pUsername, String pLogPrefix)
+    @Given("the test data vault is checked for freshness")
+    public void theTestDataVaultIsCheckedForFreshness()
     {
-        log.info(pLogPrefix + " Logging in as: " + pUsername);
+        log.info("[STEP] Given the test data vault is checked for freshness");
 
-        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
-        {
-            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
-            UiHelpers.navigateTo(Hooks.iUrl);
-        }
+        Assertions.assertTrue(TestDataVault.isEnabled(),
+                "data.vault.enabled=false - set it to true in application.properties to use TC_00_DATA.");
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
-
-        // -- Account Expired -------------------------------------------------------------------------------------
-        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
-        if (isVisible(iExpiredXpath, PROBE_SECONDS))
-        {
-            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
-                    + ". Use another login in the feature file or ask for the account to be renewed.");
-        }
-
-        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
-        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
-        {
-            log.info(pLogPrefix + " PIN screen detected.");
-            fillPinSlots(pLogPrefix);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
-            log.info(pLogPrefix + " PIN login submitted.");
-
-            enterMobileNumberIfAsked(pLogPrefix);
-
-            acceptTermsIfShown(pLogPrefix, 2);
-
-            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
-            for (int iNext = 1; iNext <= 7; iNext++)
-            {
-                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
-                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
-            }
-
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
-            log.info(pLogPrefix + " TOTP submitted.");
-
-            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
-        }
-        else
-        {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
-            log.info(pLogPrefix + " OTP login submitted.");
-        }
-
-        EntsTestData.setLoggedInUser(pUsername);
-        log.info(pLogPrefix + " Login complete: " + pUsername);
+        String iStale = TestDataVault.staleReason();
+        log.info("[DATA] Vault folder : " + TestDataVault.dir().toAbsolutePath());
+        log.info("[DATA] Filled       : " + (TestDataVault.filledAt().isEmpty() ? "never" : TestDataVault.filledAt()));
+        log.info("[DATA] Refresh day  : " + ConfigManager.getOrDefault("data.refresh.day", "MONDAY"));
+        log.info("[DATA] Freshness    : " + (iStale.isEmpty() ? "fresh - pools below target are topped up" : "STALE - " + iStale + " - the jar will be refilled"));
     }
 
-    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
-    private static void fillPinSlots(String pLogPrefix)
-    {
-        for (int idx = 1; idx <= 7; idx++)
-        {
-            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
-
-            if (!isVisible(iSlotXpath, 1))
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
-                continue;
-            }
-
-            Locator iInput = xp(iSlotXpath).first();
-            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
-            {
-                iInput.fill("");
-                iInput.pressSequentially("1");
-                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
-            }
-            else
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
-            }
-        }
-    }
-
-    // Mobile number form shown by Keycloak after the PIN for some users (seen for individuals, TC_03_IND 25-09-2026)
-    private static final String MOBILE_NUMBER_INPUT_XPATH = "//form[@id='kc-totp-login-form']//input[@id='mobile_number']";
-    private static final String MOBILE_VALIDATE_BTN_XPATH = "//form[@id='kc-totp-login-form']//button[@id='kc-login']";
-
-    // Enters login.test.mobile (default 1111111111) and clicks Validate when the mobile number form is shown
-    private static void enterMobileNumberIfAsked(String pLogPrefix)
-    {
-        if (!isVisible(MOBILE_NUMBER_INPUT_XPATH, 2)) return;
-
-        String iMobile = ConfigManager.getOrDefault("login.test.mobile", "1111111111").trim();
-        iAction("TEXTBOX", "XPATH", MOBILE_NUMBER_INPUT_XPATH, iMobile);
-        iAction("CLICK",   "XPATH", MOBILE_VALIDATE_BTN_XPATH, null);
-        log.info(pLogPrefix + " Mobile number form shown - entered " + iMobile + " and clicked Validate.");
-    }
-
-    // Ticks and accepts Terms & Conditions when the screen is shown
-    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
-    {
-        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
-            log.info(pLogPrefix + " Terms & Conditions accepted.");
-        }
-    }
-
-
-    // ===================================================================================================================================
-    //  LOGOUT
-    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : logout
-    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
-    //                 base URL so the next login starts on a clean Keycloak page.
-    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
-    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Step          : When the test data for every selected test case is extracted
+    // Description   : Runs the harvest: demand scan, parallel fetch, spot check, Excel view. The BISS blacklist and the
+    //                 expired logins known to this run are passed in so those herds and logins are never stored.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // Date Created  : 01-10-2026
     // ***************************************************************************************************************************************************************************************
-    static void logout()
+    @When("the test data for every selected test case is extracted")
+    public void theTestDataForEverySelectedTestCaseIsExtracted()
     {
-        log.info("[RELOGIN] Logging out current session...");
-        try
-        {
-            if (!isVisible(ObjReader.getLocator("iExitLink"), PROBE_SECONDS))
-            {
-                // Already logged out (e.g. the submit step logged out) - nothing to click
-                log.info("[RELOGIN] Exit link not on screen - already logged out, skipping the Exit / Logout clicks.");
-                UiHelpers.clearCookies();
-                UiHelpers.navigateTo(Hooks.iUrl);
-                EntsTestData.setLoggedInUser("");
-                return;
-            }
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+        log.info("[STEP] When the test data for every selected test case is extracted");
 
-            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
-            {
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
-            }
-            log.info("[RELOGIN] Logout complete.");
-        }
-        catch (Exception e)
-        {
-            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
-        }
+        boolean iForce = ConfigManager.getBool("data.force.refresh", false);
+        iStockReport = DataHarvester.run(iForce, Hooks.BLACKLISTED_HERDS, Hooks.EXPIRED_AGENTS);
 
-        UiHelpers.clearCookies();
-        UiHelpers.navigateTo(Hooks.iUrl);
-        EntsTestData.setLoggedInUser("");
+        Assertions.assertFalse(iStockReport == null || iStockReport.isEmpty(), "The harvest produced no stock report.");
     }
 
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : closePersonalDetailsIfShown
-    // Description   : Closes the personal details dialog an individual can get after login (the Selenium TC_05_ENTS notes
-    //                 mention a "Close personal details" dialog). Waits up to pSeconds; does nothing when it is not shown.
-    //                 The XPath is taken from the Selenium notes, not from the DOM - send the DOM if it does not match.
-    // Parameters    : pSeconds (int) - how long to wait for the dialog
+    // Step          : Then the test data stock report should be printed
+    // Description   : Prints the stock report and one warning per LOW STOCK / EMPTY pool. The step passes even when a
+    //                 pool is low - the test cases fall back to live queries - so the rest of the run is never blocked
+    //                 by this step. It fails only when nothing at all was stored (no pool could be fetched).
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 30-09-2026
+    // Date Created  : 01-10-2026
     // ***************************************************************************************************************************************************************************************
-    static final String PERSONAL_DETAILS_CLOSE_XPATH =
-            "//button[contains(@aria-label,'Close personal details')] | "
-                    + "//mat-dialog-container//button[contains(normalize-space(),'Close personal details')] | "
-                    + "//mat-dialog-container[.//*[contains(normalize-space(),'ersonal details')]]//button[normalize-space()='Close']";
-
-    static void closePersonalDetailsIfShown(int pSeconds)
+    @Then("the test data stock report should be printed")
+    public void theTestDataStockReportShouldBePrinted()
     {
-        if (!isVisible(PERSONAL_DETAILS_CLOSE_XPATH, pSeconds))
+        log.info("[STEP] Then the test data stock report should be printed");
+
+        String iReport = iStockReport.isEmpty() ? TestDataVault.stockReport() : iStockReport;
+        System.out.println(iReport);
+        CommonFunctions.log.info(iReport);
+
+        List<String> iLow = TestDataVault.lowStockPools();
+        for (String iPool : iLow)
         {
-            log.info("[LOGIN-INDIVIDUAL] No personal details dialog shown.");
-            return;
-        }
-        iAction("CLICK", "XPATH", "(" + PERSONAL_DETAILS_CLOSE_XPATH + ")[1]", null);
-        log.info("[LOGIN-INDIVIDUAL] Personal details dialog closed.");
-    }
-
-
-    // ===================================================================================================================================
-    //  TRANSFEREE ACCEPTANCE SCREENS
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : acceptWithTransferKey
-    // Description   : The transferee's acceptance screens, once the transferee herd (or the individual's own Transfers
-    //                 page) is open:
-    //                   ETF button shown : ETF -> transfer key -> View Transfer Application
-    //                   otherwise        : View Transfer Application (2) -> transfer key -> View Transfer Application
-    //                 then notes, Submit Application to DAFM, T&C, confirm. Same order as every Selenium acceptance step.
-    // Parameters    : pTransferKey (String) - key captured by "the transfer key should be captured"
-    //                 pNotes       (String) - transferee notes, e.g. "Approved Test"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 30-09-2026 (one copy for TC_05, TC_07 and TC_08)
-    // ***************************************************************************************************************************************************************************************
-    static void acceptWithTransferKey(String pTransferKey, String pNotes)
-    {
-        if (pTransferKey == null || pTransferKey.isBlank())
-        {
-            throw new IllegalStateException("[TRANSFER] No transfer key captured - the transferor flow must run first.");
+            log.warning("[DATA] LOW STOCK: " + iPool + " - that test case will use live queries once the pool is empty.");
         }
 
-        if (isVisible(ObjReader.getLocator("iETFBtn"), PROBE_SECONDS))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
-            log.info("[TRANSFER] ETF button clicked.");
-        }
-        else
-        {
-            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
-            iAction("CLICK",       "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
-        }
-
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), pTransferKey);
-        log.info("[TRANSFER] Transfer key entered: " + pTransferKey);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
-
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"),      pNotes);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"),   null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
-        log.info("[TRANSFER] Submitted to DAFM with notes: " + pNotes);
-    }
-
-
-    // ===================================================================================================================================
-    //  TRANSFER OUT LIST - search one herd and open it
-    // ===================================================================================================================================
-
-    // Cells of a Transfer Out row (Angular mat-table column classes, checked against the DOM on 22-09-2026)
-    static final String VIEW_LINK_XPATH    = "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']";
-    static final String NAME_CELL_XPATH    = "//td[contains(@class,'mat-column-name')]";
-    static final String EXPIRED_CELL_XPATH = "//td[contains(@class,'mat-column-expired')]";
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutAllRowsXpath
-    // Description   : XPath of EVERY Transfer Out row of one herd, expired or not: rows whose Herd No. cell is exactly
-    //                 the herd and that have a View link.
-    //                 One herd can have several rows, one per holder. Seen 22-09-2026 for D3990193: "Thomas Morris"
-    //                 (Expired icon shown) and "Jean Doolaghty" (not expired). Both rows hold the same herd number.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static String transferOutAllRowsXpath(String pHerd)
-    {
-        return "//tr[." + VIEW_LINK_XPATH + "]"
-                + "[.//td[contains(@class,'mat-column-herdNo')][normalize-space()='" + pHerd + "']]";
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutRowXpath
-    // Description   : XPath of the NOT-EXPIRED Transfer Out row(s) of one herd. The row to open, name to read and View
-    //                 link to click always come from here.
-    //                 A row is expired when its Expired cell holds the red icon
-    //                   <mat-icon aria-label="red check mark for expired"> do_not_disturb_on </mat-icon>
-    //                 and not expired when that cell is empty.
-    //                 Clicking "the first View link" is not safe either: until the search result arrives the list still
-    //                 shows unfiltered rows, including TRN rows (seen 22-09-2026: a click opened TRN 26D0957T).
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
-    // ***************************************************************************************************************************************************************************************
-    static String transferOutRowXpath(String pHerd)
-    {
-        return transferOutAllRowsXpath(pHerd) + "[not(." + EXPIRED_CELL_XPATH + "//mat-icon)]";
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : searchTransferOut
-    // Description   : Types the herd in the Transfer Out search box, clicks Search and waits until a row for THAT herd
-    //                 is shown (up to ents.search.seconds). Returns false when it never appears.
-    //                 Then goes through every row of the herd and logs Name + Expired for each, so the log shows which
-    //                 row will be used. Expired rows are not rejected here - see activeTransferOutRows.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (logs every row)
-    // ***************************************************************************************************************************************************************************************
-    static boolean searchTransferOut(String pHerd)
-    {
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
-        if (!isVisible(transferOutAllRowsXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 8)))
-        {
-            return false;
-        }
-
-        List<Locator> iRows = xp(transferOutAllRowsXpath(pHerd)).all();
-        for (int i = 0; i < iRows.size(); i++)
-        {
-            Locator iRow     = iRows.get(i);
-            boolean iExpired = iRow.locator("xpath=." + EXPIRED_CELL_XPATH + "//mat-icon").count() > 0;
-            String  iName    = "";
-            try
-            {
-                iName = iRow.locator("xpath=." + NAME_CELL_XPATH).first().innerText().trim().replaceAll("\\s+", " ");
-            }
-            catch (Exception iEx)
-            {
-                iName = "?";
-            }
-            log.info("[TRANSFER] " + pHerd + " row " + (i + 1) + "/" + iRows.size() + ": Name='" + iName + "' | "
-                    + (iExpired ? "EXPIRED - skipped" : "not expired"));
-        }
-        return true;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : activeTransferOutRows
-    // Description   : Number of NOT-expired rows of the herd currently on screen (call after searchTransferOut).
-    //                 0 means every row of the herd is expired.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static int activeTransferOutRows(String pHerd)
-    {
-        return countOf(transferOutRowXpath(pHerd));
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : transferOutName
-    // Description   : Name cell of the first NOT-expired row of the herd, or "" when there is none
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static String transferOutName(String pHerd)
-    {
-        String iCell = transferOutRowXpath(pHerd) + NAME_CELL_XPATH;
-        try
-        {
-            if (countOf(iCell) > 0) return xp(iCell).first().innerText().trim().replaceAll("\\s+", " ");
-        }
-        catch (Exception iEx)
-        {
-            log.warning("[TRANSFER] Could not read the portal name of " + pHerd + ": " + iEx.getMessage());
-        }
-        return "";
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clickTransferOutView
-    // Description   : Clicks View in the first NOT-expired row of the herd (the list must already show it)
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void clickTransferOutView(String pHerd)
-    {
-        if (activeTransferOutRows(pHerd) == 0)
-        {
-            throw new IllegalStateException("[TRANSFER] Every Transfer Out row of herd " + pHerd + " is marked expired - nothing to open.");
-        }
-        iAction("CLICK", "XPATH", "(" + transferOutRowXpath(pHerd) + VIEW_LINK_XPATH + ")[1]", null);
-        log.info("[TRANSFER] Opened herd " + pHerd + " ('" + transferOutName(pHerd) + "' row) from Transfer Out.");
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : openTransferOutHerd
-    // Description   : searchTransferOut + clicks View in the first NOT-expired row of that herd. Fails with the herd
-    //                 number and agent in the message when the herd is not in the list or every row is expired.
-    // Parameters    : pHerd (String) - herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
-    // ***************************************************************************************************************************************************************************************
-    static void openTransferOutHerd(String pHerd)
-    {
-        if (!searchTransferOut(pHerd))
-        {
-            throw new IllegalStateException("[TRANSFER] Herd " + pHerd + " is not in the Transfer Out list of " + EntsTestData.loggedInUser() + " (waited " + ConfigManager.getInt("ents.search.seconds", 8) + " s).");
-        }
-        clickTransferOutView(pHerd);
-    }
-
-
-    // ===================================================================================================================================
-    //  NAVIGATION
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : openBissMyClientsTransfers
-    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
-    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void openBissMyClientsTransfers()
-    {
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
-    }
-
-    // ===================================================================================================================================
-    //  TRANSFEREE SEARCH DIALOG
-    // ===================================================================================================================================
-
-    // Heading shown when the transferee search returns more than one row, e.g. "2 matches found. Please select one:"
-    static final String TRANSFEREE_MATCHES_HEADING_XPATH = "//h3[contains(normalize-space(),'matches found')]";
-
-    // Result rows of the "matches found" table (first table after the heading)
-    static final String TRANSFEREE_MATCH_ROWS_XPATH = TRANSFEREE_MATCHES_HEADING_XPATH + "/following::table[1]//tbody/tr";
-
-    // Date cell of a row = the td holding a date. Its text is "14/09/2015 - " when open, "13/03/2015 - 13/09/2015" when ended.
-    // normalize-space(substring-after(.,'-')) is empty only when nothing follows the dash, i.e. there is no End Date.
-    static final String OPEN_ROW_FILTER  = "[td[contains(.,'/')][normalize-space(substring-after(.,'-'))='']]";
-    static final String ENDED_ROW_FILTER = "[td[contains(.,'/')][normalize-space(substring-after(.,'-'))!='']]";
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : transfereeOpenMatchSelectXpath
-    // Description   : XPath of the Select button on the transferee row of pHerd that has no End Date.
-    //                 Example for D2681103:
-    //                 //h3[contains(normalize-space(),'matches found')]/following::table[1]//tbody/tr
-    //                   [.//span[normalize-space()='D2681103']][td[contains(.,'/')][normalize-space(substring-after(.,'-'))='']]
-    //                   //button[normalize-space()='Select']
-    // Parameters    : pHerd (String) - transferee herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 24-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static String transfereeOpenMatchSelectXpath(String pHerd)
-    {
-        return TRANSFEREE_MATCH_ROWS_XPATH
-                + "[.//span[normalize-space()='" + pHerd + "']]"
-                + OPEN_ROW_FILTER
-                + "//button[normalize-space()='Select']";
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : selectOpenTransfereeMatch
-    // Description   : Call right after the transferee dialog Search button (iTransferDialogSearchBtn).
-    //                   - No "matches found" heading (single match): does nothing, the flow goes on as before.
-    //                   - "N matches found. Please select one:": clicks Select on the row of pHerd with NO End Date.
-    //                   - Every row of pHerd has an End Date: fails the step with the row count, because selecting an
-    //                     ended holder would create the transfer against the wrong customer.
-    //                   - More than one open row: selects the first one and logs a warning.
-    // Parameters    : pHerd (String) - transferee herd number
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 24-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void selectOpenTransfereeMatch(String pHerd)
-    {
-        if (!isVisible(TRANSFEREE_MATCHES_HEADING_XPATH, PROBE_SECONDS))
-        {
-            log.info("[TRANSFER] Transferee search: single match for " + pHerd + " - nothing to select.");
-            return;
-        }
-
-        String iHeading = xp(TRANSFEREE_MATCHES_HEADING_XPATH).first().innerText().trim();
-        String iHerdRows = TRANSFEREE_MATCH_ROWS_XPATH + "[.//span[normalize-space()='" + pHerd + "']]";
-        int iAllRows    = countOf(iHerdRows);
-        int iEndedRows  = countOf(iHerdRows + ENDED_ROW_FILTER);
-        String iSelectXpath = transfereeOpenMatchSelectXpath(pHerd);
-        int iOpenRows   = countOf(iSelectXpath);
-
-        log.info("[TRANSFER] Transferee search: '" + iHeading + "' | herd " + pHerd + " rows=" + iAllRows
-                + " open=" + iOpenRows + " ended=" + iEndedRows);
-
-        if (iOpenRows == 0)
-        {
-            throw new RuntimeException("[TRANSFER] Transferee " + pHerd + ": '" + iHeading + "' but no row without an End Date ("
-                    + iAllRows + " row(s) for this herd, " + iEndedRows + " ended). XPath: " + iSelectXpath);
-        }
-        if (iOpenRows > 1)
-        {
-            log.warning("[TRANSFER] Transferee " + pHerd + " has " + iOpenRows + " rows without an End Date - selecting the first.");
-        }
-
-        iAction("CLICK", "XPATH", "(" + iSelectXpath + ")[1]", null);
-        log.info("[TRANSFER] Transferee " + pHerd + ": Select clicked on the row without an End Date.");
+        boolean iAnyRows = !TestDataVault.availableCounts().isEmpty();
+        Assertions.assertTrue(iAnyRows || ConfigManager.getBool("data.allow.empty", false),
+                "The vault holds no available rows after the harvest. Check the database connection and the [HARVEST] lines above.");
     }
 }
