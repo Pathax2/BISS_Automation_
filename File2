@@ -231,6 +231,7 @@ public final class DataHarvester
     private static final Pattern P_SECTION           = Pattern.compile("creates a transfer (application with the following details|with manual entitlements)");
     private static final Pattern P_INDIVIDUAL        = Pattern.compile("\\{transferor\\.login}|\\{transferee\\.login}|transfereeType\\s*\\|\\s*Individual");
     private static final Pattern P_NO_ENTS           = Pattern.compile("herd without entitlements");
+    private static final Pattern P_AUTO_AGENT        = Pattern.compile("\\{auto\\.agent(?:\\.(\\d+))?}");
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : scanDemand
@@ -243,6 +244,7 @@ public final class DataHarvester
     {
         Map<String, Need> iNeeds = new LinkedHashMap<>();
         String iYear = System.getProperty("herd.year", ConfigManager.getOrDefault("herd.year", String.valueOf(LocalDate.now().getYear()))).trim();
+        List<String> iTopAgents = null;   // fetched once, only when a feature uses {auto.agent}
 
         for (String iTestCase : selectedTestCases())
         {
@@ -264,6 +266,31 @@ public final class DataHarvester
                         if (isAgentLogin(iLogin)) iAgents.add(iLogin);
                     }
                 }
+                // {auto.agent} / {auto.agent.N}: the N best agents by herd count, other than the feature's own agents.
+                // At run time EntsTestData.resolveAgent ranks by vault stock, so the agents filled here are the ones
+                // it will find at the top. One extra agent is filled as a spare.
+                Matcher iAuto = P_AUTO_AGENT.matcher(iFeature);
+                int iAutoMax = 0;
+                while (iAuto.find()) iAutoMax = Math.max(iAutoMax, iAuto.group(1) == null ? 1 : Integer.parseInt(iAuto.group(1)));
+                if (iAutoMax > 0)
+                {
+                    if (iTopAgents == null)
+                    {
+                        iTopAgents = EntsTestData.topAgentsLive(ConfigManager.getInt("data.auto.agents.rank", 10));
+                        TestDataVault.storeTopAgents(iTopAgents);
+                        CommonFunctions.log.info(LOG + "Top agents by herd count: " + iTopAgents);
+                    }
+                    int iAdded = 0;
+                    for (String iTop : iTopAgents)
+                    {
+                        boolean iOwn = false;
+                        for (String iAgent : iAgents) if (iAgent.equalsIgnoreCase(iTop)) iOwn = true;
+                        if (iOwn) continue;
+                        iAgents.add(iTop);
+                        if (++iAdded > iAutoMax) break;   // the N asked for, plus one spare
+                    }
+                }
+
                 for (String iAgent : iAgents)
                 {
                     need(iNeeds, TestDataVault.POOL_ENTS_AGENT, iAgent, iSections * 2, iTestCase);
