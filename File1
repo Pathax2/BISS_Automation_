@@ -1,308 +1,805 @@
-Feature: TC_11_ENTS - Transfer Application E2E Regression Pack (ETF Partner to Agent)
+package utilities;
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Single end-to-end regression journey covering Transfer of Entitlements flows where the Transferor is ETF partner
-  #   agr15512 and the Transferee is a client herd of agent aga6581.
-  #   KEY DIFFERENCE: the entitlement is typed in by hand (Add Manual Entitlement + Entitlement Type + Net UV) instead
-  #   of picking a row, and the transferee search also takes the address line.
-  #
-  #   Transfer types covered:
-  #     Section 1 : Change of Legal Entity (206)  - Selenium: C2057024 to B136017X (Darragh Staunton, Knockeevan Park)
-  #     Section 2 : Change of Registration (205)  - Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
-  #     Section 3 : Lease                  (211)  - Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk) + lease year
-  #     Section 4 : Gift                   (202)  - Selenium: C2057024 to D1460081 (Timothy Mangan, Ballybuggy Lawn)
-  #     Section 5 : Merger                 (203)  - Selenium: C2057024 to D3320139 (Felix Mc Donagh, Ballyine Abbey)
-  #     Section 6 : Division               (204)  - Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
-  #     Section 7 : Inheritance            (201)  - Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
-  #     Section 8 : Sale                   (212)  - Selenium: C2057024 to D2760615 (Griffin Meats Ltd, Killnadrain Ave)
-  #
-  # Migrated from: TC_11_ENTS.feature (legacy 8 separate scenarios)
-  #
-  # Runtime data (Playwright, 30-09-2026):
-  #   The transferee comes from the Agent Login pool of the agent in the transfereeAgent row (aga6581) and fills
-  #     {transferee.herd}  {transferee.name}  {transferee.address}  {transferee.agent}
-  #   The transferor comes from agr15512's own Agent Login pool ({transferor.herd}, EntsTestData.nextCrossAgentPair).
-  #   The Selenium file used the partner's own herd C2057024 in every section: to do the same, put C2057024 back in the
-  #   transferorHerd cell - the step then picks only the transferee (EntsTestData.nextTransfereeForFixedTransferor) and
-  #   does not write the transferor to the used-herds file.
-  #   Check first in SQL Developer that agr15512 has current herds: run the Agent Login query for agr15512, or pin C2057024.
-  #   Every pick is written to runtime-data/ents_used_herds.csv and never reused. Put a herd number, name or login back
-  #   in any cell to pin it for debugging (the Selenium values are in the comments of each section).
-  #
-  # Step reuse:
-  #   ETF partner login + manual-entitlement create   -> stepdefinitions.ENTS.TC_11_ENTS
-  #   Portal navigation                               -> stepdefinitions.TC_03
-  #   Upload / send / key / submit                    -> stepdefinitions.ENTS.TC_01_ENTS
-  #   Agent login (transferee) + acceptance           -> stepdefinitions.ENTS.TC_08_ENTS
-  #   Tab switching                                   -> stepdefinitions.TC_06
-  #
-  #   Object Repository: iTransfereeAddressField, iTransferAddManualEntitlementBtn, iTransferEntitlementTypeDropdown and
-  #   iTransferNetUVField must exist - the create step fails before its first click when one is missing.
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
-  # --------------------------------------------------------------------------------------------------------------------
+import commonFunctions.CommonFunctions;
+import org.apache.poi.xssf.usermodel.XSSFRow;
+import org.apache.poi.xssf.usermodel.XSSFSheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
-  Background:
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.Random;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.function.Consumer;
 
-  @regression @transfers @etf-to-agent @e2e
-  Scenario: AT-ENTS-TRANSFERS-E2E-11 - ETF Partner completes all transfer types to Agent
+// =====================================================================================================================================
+// File          : TestDataVault.java
+// Package       : utilities
+// Description   : The "jar" of test data, filled BEFORE the first browser opens and emptied row by row during the run.
+//
+//                 Why: every ENTS / BISS test case used to run its Oracle queries in the middle of the scenario (5-6 s
+//                 each, one after the other) and only found out that a herd was unusable after login and navigation.
+//                 The vault holds the rows of every query up front, with a status per row, so a test case takes a row
+//                 from memory in a millisecond and a bad row is skipped instead of failing the run.
+//
+//                 Files (runtime-data/vault/, never committed - they hold farmer names and herds):
+//                   herds.csv   one row per herd: pool,key,herd,name,address,login,status,test_case,purpose,reason,fetched_at,updated_at
+//                   people.csv  one row per login: login,type,status,last_checked,note
+//                   vault.meta  when the jar was filled + the database fingerprints at that moment
+//                   TestDataVault_view.xlsx  a copy of both tables for people to open in Excel (never read back)
+//                   archive/<date>/           the previous jar, moved aside when the jar is refilled
+//
+//                 Pools (pool / key):
+//                   ENTS_AGENT        / agent login   herds of one agent with entitlements   (ENTS Agent Login herds)
+//                   ENTS_NO_ENTS      / agent login   herds of one agent WITHOUT entitlements (TC_02_ENTS negative case)
+//                   ENTS_INDIVIDUAL   / -             herds whose holder has an online login  (ENTS Individual Login herds)
+//                   BISS_NOT_STARTED  / scheme year   Not Started agent herds + INET agent login
+//                   BISS_IND_CISYF    / scheme year   Not Started individual CISYF herds + the holder's own login
+//
+//                 Statuses: AVAILABLE -> RESERVED (a test has taken it) -> USED (the test finished with it)
+//                                                                       -> BAD  (it failed a check; the reason is kept)
+//                 A RESERVED row is never handed out again, so a run that stops halfway cannot pass a half-used herd
+//                 to the next run. release() puts a RESERVED row back only when nothing was done with it.
+//
+//                 Freshness (isStale): the jar is refilled when
+//                   - data.force.refresh=true
+//                   - it was filled before the most recent data.refresh.day (default MONDAY - the weekly DB refresh)
+//                   - a database fingerprint stored in vault.meta no longer matches (DataHarvester checks this)
+//
+//                 Settings (application.properties, all optional):
+//                   data.vault.enabled=true            false = the test cases query Oracle as before
+//                   data.vault.dir=runtime-data/vault
+//                   data.refresh.day=MONDAY
+//                   data.force.refresh=false
+//                   data.low.stock=5                   stock report warns below this many AVAILABLE rows
+//
+//                 Thread safety: every public method is synchronized, and herds.csv is written under a file lock
+//                 (vault.lock) so two framework processes on one machine cannot both take the same herd.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 01-10-2026
+// =====================================================================================================================================
 
-    # ===========================================
-    # SECTION 1 : Change of Legal Entity (206)
-    # Selenium: C2057024 to B136017X (Darragh Staunton, Knockeevan Park)
-    # ===========================================
+public final class TestDataVault
+{
+    private TestDataVault() { }
 
-    # --- Transferor (ETF Partner agr15512) ---
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}      |
-      | transfereeHerd    | {transferee.herd}      |
-      | transfereeName    | {transferee.name}      |
-      | transfereeAddress | {transferee.address}   |
-      | transfereeAgent   | aga6581                |
-      | transferType      | Change of Legal Entity |
-      | entitlements      | 0.01                   |
-      | entitlementType   | BISS                   |
-      | netUV             | 1                      |
-      | notes             | Test Notes             |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    private static final String LOG = "[VAULT] ";
+    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    public static final String POOL_ENTS_AGENT       = "ENTS_AGENT";
+    public static final String POOL_ENTS_NO_ENTS     = "ENTS_NO_ENTS";
+    public static final String POOL_ENTS_INDIVIDUAL  = "ENTS_INDIVIDUAL";
+    public static final String POOL_BISS_NOT_STARTED = "BISS_NOT_STARTED";
+    public static final String POOL_BISS_IND_CISYF   = "BISS_IND_CISYF";
 
-    # ===========================================
-    # SECTION 2 : Change of Registration (205)
-    # Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
-    # ===========================================
+    public static final String AVAILABLE = "AVAILABLE";
+    public static final String RESERVED  = "RESERVED";
+    public static final String USED      = "USED";
+    public static final String BAD       = "BAD";
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}              |
-      | transfereeHerd    | {transferee.herd}              |
-      | transfereeName    | {transferee.name}              |
-      | transfereeAddress | {transferee.address}           |
-      | transfereeAgent   | aga6581                        |
-      | transferType      | Change of Registration Details |
-      | entitlements      | 0.01                           |
-      | entitlementType   | BISS                           |
-      | netUV             | 1                              |
-      | notes             | Test Notes                     |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    private static final String HERDS_HEADER  = "pool,key,herd,name,address,login,status,test_case,purpose,reason,fetched_at,updated_at";
+    private static final String PEOPLE_HEADER = "login,type,status,last_checked,note";
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    // =================================================================================================
+    // ROW TYPES
+    // =================================================================================================
 
-    # ===========================================
-    # SECTION 3 : Lease of Entitlements (211)
-    # Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
-    # NOTE: Lease includes lease year selection
-    # ===========================================
+    public static final class Row
+    {
+        public final String pool;
+        public final String key;
+        public final String herd;
+        public final String name;
+        public final String address;
+        public final String login;
+        public String status;
+        public String testCase;
+        public String purpose;
+        public String reason;
+        public final String fetchedAt;
+        public String updatedAt;
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}     |
-      | transfereeHerd    | {transferee.herd}     |
-      | transfereeName    | {transferee.name}     |
-      | transfereeAddress | {transferee.address}  |
-      | transfereeAgent   | aga6581               |
-      | transferType      | Lease of Entitlements |
-      | entitlements      | 0.01                  |
-      | entitlementType   | BISS                  |
-      | netUV             | 1                     |
-      | leaseYear         | Yes                   |
-      | notes             | Test Notes            |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        public Row(String pPool, String pKey, String pHerd, String pName, String pAddress, String pLogin)
+        {
+            pool      = n(pPool).toUpperCase(Locale.ROOT);
+            key       = n(pKey);
+            herd      = n(pHerd);
+            name      = n(pName);
+            address   = n(pAddress);
+            login     = n(pLogin);
+            status    = AVAILABLE;
+            testCase  = "";
+            purpose   = "";
+            reason    = "";
+            fetchedAt = now();
+            updatedAt = fetchedAt;
+        }
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        private Row(String[] pCells)
+        {
+            pool      = cell(pCells, 0).toUpperCase(Locale.ROOT);
+            key       = cell(pCells, 1);
+            herd      = cell(pCells, 2);
+            name      = cell(pCells, 3);
+            address   = cell(pCells, 4);
+            login     = cell(pCells, 5);
+            status    = cell(pCells, 6).isEmpty() ? AVAILABLE : cell(pCells, 6).toUpperCase(Locale.ROOT);
+            testCase  = cell(pCells, 7);
+            purpose   = cell(pCells, 8);
+            reason    = cell(pCells, 9);
+            fetchedAt = cell(pCells, 10);
+            updatedAt = cell(pCells, 11);
+        }
 
-    # ===========================================
-    # SECTION 4 : Gift of Entitlements (202)
-    # Selenium: C2057024 to D1460081 (Timothy Mangan, Ballybuggy Lawn)
-    # ===========================================
+        String toCsv()
+        {
+            return String.join(",", csv(pool), csv(key), csv(herd), csv(name), csv(address), csv(login), csv(status),
+                    csv(testCase), csv(purpose), csv(reason), csv(fetchedAt), csv(updatedAt));
+        }
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}    |
-      | transfereeHerd    | {transferee.herd}    |
-      | transfereeName    | {transferee.name}    |
-      | transfereeAddress | {transferee.address} |
-      | transfereeAgent   | aga6581              |
-      | transferType      | Gift of Entitlements |
-      | entitlements      | 0.01                 |
-      | entitlementType   | BISS                 |
-      | netUV             | 1                    |
-      | notes             | Test Notes           |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        boolean matches(String pPool, String pKey)
+        {
+            return pool.equalsIgnoreCase(n(pPool)) && key.equalsIgnoreCase(n(pKey));
+        }
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        @Override
+        public String toString() { return herd + " (" + name + (login.isEmpty() ? "" : ", " + login) + ")"; }
+    }
 
-    # ===========================================
-    # SECTION 5 : Merger of Entitlements (203)
-    # Selenium: C2057024 to D3320139 (Felix Mc Donagh, Ballyine Abbey)
-    # ===========================================
+    public static final class Person
+    {
+        public final String login;
+        public final String type;        // AGENT | INDIVIDUAL | ETF
+        public String status;            // ACTIVE | EXPIRED
+        public String lastChecked;
+        public String note;
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}                                                       |
-      | transfereeHerd    | {transferee.herd}                                                       |
-      | transfereeName    | {transferee.name}                                                       |
-      | transfereeAddress | {transferee.address}                                                    |
-      | transfereeAgent   | aga6581                                                                 |
-      | transferType      | Merger of 2 or more holdings (forming an unregistered Farm Partnership) |
-      | entitlements      | 0.01                                                                    |
-      | entitlementType   | BISS                                                                    |
-      | netUV             | 1                                                                       |
-      | notes             | Test Notes                                                              |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+        Person(String pLogin, String pType)
+        {
+            login = n(pLogin); type = n(pType).toUpperCase(Locale.ROOT); status = "ACTIVE"; lastChecked = now(); note = "";
+        }
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+        private Person(String[] pCells)
+        {
+            login = cell(pCells, 0); type = cell(pCells, 1).toUpperCase(Locale.ROOT);
+            status = cell(pCells, 2).isEmpty() ? "ACTIVE" : cell(pCells, 2).toUpperCase(Locale.ROOT);
+            lastChecked = cell(pCells, 3); note = cell(pCells, 4);
+        }
 
-    # ===========================================
-    # SECTION 6 : Division of Entitlements (204)
-    # Selenium: C2057024 to B1470189 (Simon Thornton, Tullycleave St)
-    # ===========================================
+        String toCsv() { return String.join(",", csv(login), csv(type), csv(status), csv(lastChecked), csv(note)); }
+    }
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}                   |
-      | transfereeHerd    | {transferee.herd}                   |
-      | transfereeName    | {transferee.name}                   |
-      | transfereeAddress | {transferee.address}                |
-      | transfereeAgent   | aga6581                             |
-      | transferType      | Division of Entitlements (Scission) |
-      | entitlements      | 0.01                                |
-      | entitlementType   | BISS                                |
-      | netUV             | 1                                   |
-      | notes             | Test Notes                          |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    // =================================================================================================
+    // STATE
+    // =================================================================================================
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    private static final List<Row>            HERDS  = new ArrayList<>();
+    private static final Map<String, Person>  PEOPLE = new LinkedHashMap<>();
+    private static final Properties           META   = new Properties();
+    private static boolean                    iLoaded = false;
 
-    # ===========================================
-    # SECTION 7 : Inheritance (201)
-    # Selenium: C2057024 to B1870136 (Michael Mc Cullagh, Oranmore Pk)
-    # ===========================================
+    // =================================================================================================
+    // SETTINGS
+    // =================================================================================================
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}           |
-      | transfereeHerd    | {transferee.herd}           |
-      | transfereeName    | {transferee.name}           |
-      | transfereeAddress | {transferee.address}        |
-      | transfereeAgent   | aga6581                     |
-      | transferType      | Inheritance of Entitlements |
-      | entitlements      | 0.01                        |
-      | entitlementType   | BISS                        |
-      | netUV             | 1                           |
-      | notes             | Test Notes                  |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    public static boolean isEnabled()
+    {
+        return ConfigManager.getBool("data.vault.enabled", true);
+    }
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    public static Path dir()
+    {
+        return Paths.get(ConfigManager.getOrDefault("data.vault.dir", "runtime-data/vault"));
+    }
 
-    # ===========================================
-    # SECTION 8 : Sale of Entitlements (212)
-    # Selenium: C2057024 to D2760615 (Griffin Meats Ltd, Killnadrain Ave)
-    # ===========================================
+    private static Path herdsFile()  { return dir().resolve("herds.csv"); }
+    private static Path peopleFile() { return dir().resolve("people.csv"); }
+    private static Path metaFile()   { return dir().resolve("vault.meta"); }
+    private static Path lockFile()   { return dir().resolve("vault.lock"); }
+    private static Path viewFile()   { return dir().resolve("TestDataVault_view.xlsx"); }
 
-    # --- Transferor (ETF Partner agr15512) ---
-    Given the ETF partner logs in as transferor "agr15512"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    When the ETF partner creates a transfer with manual entitlements
-      | transferorHerd    | {transferor.herd}    |
-      | transfereeHerd    | {transferee.herd}    |
-      | transfereeName    | {transferee.name}    |
-      | transfereeAddress | {transferee.address} |
-      | transfereeAgent   | aga6581              |
-      | transferType      | Sale of Entitlements |
-      | entitlements      | 0.01                 |
-      | entitlementType   | BISS                 |
-      | netUV             | 1                    |
-      | notes             | Test Notes           |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
+    // =================================================================================================
+    // LOAD / SAVE
+    // =================================================================================================
 
-    # --- Transferee (Agent aga6581) ---
-    When the agent logs in as transferee agent "{transferee.agent}"
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the agent completes the same agent transferee acceptance flow
-      | transfereeHerd | {transferee.herd} |
-      | notes          | Approved Test     |
-    Then the transfer should be submitted successfully
+    // Loads the CSV files once per run (and again after a refill). Missing files = an empty jar.
+    private static void load()
+    {
+        if (iLoaded) return;
+        HERDS.clear();
+        PEOPLE.clear();
+        META.clear();
+
+        try
+        {
+            if (Files.exists(herdsFile()))
+            {
+                for (String iLine : Files.readAllLines(herdsFile(), StandardCharsets.UTF_8))
+                {
+                    if (iLine.isBlank() || iLine.startsWith("pool,")) continue;
+                    HERDS.add(new Row(splitCsv(iLine)));
+                }
+            }
+            if (Files.exists(peopleFile()))
+            {
+                for (String iLine : Files.readAllLines(peopleFile(), StandardCharsets.UTF_8))
+                {
+                    if (iLine.isBlank() || iLine.startsWith("login,")) continue;
+                    Person iPerson = new Person(splitCsv(iLine));
+                    if (!iPerson.login.isEmpty()) PEOPLE.put(iPerson.login.toLowerCase(Locale.ROOT), iPerson);
+                }
+            }
+            if (Files.exists(metaFile()))
+            {
+                try (java.io.Reader iReader = Files.newBufferedReader(metaFile(), StandardCharsets.UTF_8)) { META.load(iReader); }
+            }
+        }
+        catch (IOException e)
+        {
+            CommonFunctions.log.warning(LOG + "Could not read the vault files in " + dir() + " (" + e.getMessage() + ") - starting with an empty jar.");
+            HERDS.clear();
+            PEOPLE.clear();
+        }
+
+        iLoaded = true;
+        CommonFunctions.log.info(LOG + "Loaded " + HERDS.size() + " herd row(s) and " + PEOPLE.size() + " login(s) from " + dir()
+                + (META.isEmpty() ? " (jar never filled)" : " | filled " + META.getProperty("filled_at", "?")));
+    }
+
+    // Rewrites all three files under the file lock
+    private static void save()
+    {
+        withFileLock(() ->
+        {
+            try
+            {
+                Files.createDirectories(dir());
+                List<String> iHerdLines = new ArrayList<>();
+                iHerdLines.add(HERDS_HEADER);
+                for (Row iRow : HERDS) iHerdLines.add(iRow.toCsv());
+                Files.write(herdsFile(), iHerdLines, StandardCharsets.UTF_8);
+
+                List<String> iPeopleLines = new ArrayList<>();
+                iPeopleLines.add(PEOPLE_HEADER);
+                for (Person iPerson : PEOPLE.values()) iPeopleLines.add(iPerson.toCsv());
+                Files.write(peopleFile(), iPeopleLines, StandardCharsets.UTF_8);
+
+                try (java.io.Writer iWriter = Files.newBufferedWriter(metaFile(), StandardCharsets.UTF_8))
+                {
+                    META.store(iWriter, "TestDataVault - when the jar was filled and the database fingerprints at that moment");
+                }
+            }
+            catch (IOException e)
+            {
+                CommonFunctions.log.warning(LOG + "Could not write the vault files in " + dir() + ": " + e.getMessage());
+            }
+        });
+    }
+
+    // Forces the next call to read the files again (another process may have changed them)
+    public static synchronized void reload()
+    {
+        iLoaded = false;
+        load();
+    }
+
+    // =================================================================================================
+    // FILLING THE JAR
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : putPool
+    // Description   : Replaces the AVAILABLE rows of one pool/key with freshly fetched rows. Rows of that pool that are
+    //                 RESERVED, USED or BAD are kept, and a fresh row whose herd is already USED / BAD / RESERVED in the
+    //                 jar is not added again (the herd is not fresh, whatever the query says).
+    // Parameters    : pPool, pKey - pool and key | pRows - fresh rows from DataHarvester
+    // Returns       : number of AVAILABLE rows of the pool after the call
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized int putPool(String pPool, String pKey, List<Row> pRows)
+    {
+        load();
+        HERDS.removeIf(r -> r.matches(pPool, pKey) && AVAILABLE.equals(r.status));
+
+        Set<String> iTaken = new java.util.HashSet<>();
+        for (Row iRow : HERDS)
+        {
+            if (!AVAILABLE.equals(iRow.status)) iTaken.add(iRow.herd.toUpperCase(Locale.ROOT));
+        }
+
+        int iAdded = 0;
+        for (Row iRow : pRows)
+        {
+            if (iRow.herd.isEmpty() || iTaken.contains(iRow.herd.toUpperCase(Locale.ROOT))) continue;
+            iTaken.add(iRow.herd.toUpperCase(Locale.ROOT));
+            HERDS.add(iRow);
+            iAdded++;
+            if (!iRow.login.isEmpty()) rememberPerson(iRow.login, typeFor(pPool));
+        }
+        save();
+        CommonFunctions.log.info(LOG + "Pool " + pPool + "/" + pKey + " filled: " + iAdded + " fresh row(s), "
+                + countStatus(pPool, pKey, AVAILABLE) + " available");
+        return countStatus(pPool, pKey, AVAILABLE);
+    }
+
+    private static String typeFor(String pPool)
+    {
+        String iPool = n(pPool).toUpperCase(Locale.ROOT);
+        if (iPool.equals(POOL_ENTS_INDIVIDUAL) || iPool.equals(POOL_BISS_IND_CISYF)) return "INDIVIDUAL";
+        return "AGENT";
+    }
+
+    private static void rememberPerson(String pLogin, String pType)
+    {
+        String iKey = n(pLogin).toLowerCase(Locale.ROOT);
+        if (iKey.isEmpty()) return;
+        Person iPerson = PEOPLE.get(iKey);
+        if (iPerson == null)
+        {
+            PEOPLE.put(iKey, new Person(pLogin, pType));
+        }
+        else
+        {
+            iPerson.lastChecked = now();
+        }
+    }
+
+    // Records when the jar was filled and the database fingerprints (DataHarvester)
+    public static synchronized void markFilled(Map<String, String> pFingerprints)
+    {
+        load();
+        META.setProperty("filled_at", now());
+        META.setProperty("filled_on", LocalDate.now().toString());
+        for (Map.Entry<String, String> iEntry : pFingerprints.entrySet())
+        {
+            META.setProperty("fingerprint." + iEntry.getKey(), n(iEntry.getValue()));
+        }
+        save();
+    }
+
+    public static synchronized String storedFingerprint(String pDb)
+    {
+        load();
+        return META.getProperty("fingerprint." + pDb, "");
+    }
+
+    public static synchronized String filledAt()
+    {
+        load();
+        return META.getProperty("filled_at", "");
+    }
+
+    // =================================================================================================
+    // FRESHNESS
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isStale
+    // Description   : True when the jar must be refilled before it is used:
+    //                   - data.force.refresh=true
+    //                   - the jar was never filled
+    //                   - it was filled before the most recent data.refresh.day (default MONDAY), i.e. before the
+    //                     weekly database refresh
+    //                 The fingerprint comparison is done by DataHarvester (it needs the database).
+    // Returns       : the reason when stale, "" when fresh
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized String staleReason()
+    {
+        load();
+        if (ConfigManager.getBool("data.force.refresh", false)) return "data.force.refresh=true";
+
+        String iFilledOn = META.getProperty("filled_on", "");
+        if (iFilledOn.isEmpty()) return "the jar has never been filled";
+
+        LocalDate iFilled;
+        try { iFilled = LocalDate.parse(iFilledOn); }
+        catch (Exception e) { return "vault.meta has an unreadable filled_on value (" + iFilledOn + ")"; }
+
+        DayOfWeek iDay;
+        try { iDay = DayOfWeek.valueOf(ConfigManager.getOrDefault("data.refresh.day", "MONDAY").trim().toUpperCase(Locale.ROOT)); }
+        catch (Exception e) { iDay = DayOfWeek.MONDAY; }
+
+        LocalDate iLastRefresh = LocalDate.now().with(TemporalAdjusters.previousOrSame(iDay));
+        if (iFilled.isBefore(iLastRefresh))
+        {
+            return "filled on " + iFilled + ", before the last " + iDay + " refresh (" + iLastRefresh + ")";
+        }
+        return "";
+    }
+
+    public static boolean isStale() { return !staleReason().isEmpty(); }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : archiveAndClear
+    // Description   : Moves the current files to archive/<yyyy-MM-dd_HHmmss>/ and starts an empty jar. Also archives
+    //                 the ENTS used-herds file when it exists: after a database refresh the herds used last week are
+    //                 back in their original state, so an empty used list is the correct one.
+    // Parameters    : pReason (String) - written to the log and to a README in the archive folder
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void archiveAndClear(String pReason)
+    {
+        load();
+        Path iArchive = dir().resolve("archive").resolve(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss")));
+        try
+        {
+            Files.createDirectories(iArchive);
+            for (Path iFile : new Path[]{ herdsFile(), peopleFile(), metaFile(), viewFile() })
+            {
+                if (Files.exists(iFile)) Files.move(iFile, iArchive.resolve(iFile.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+            }
+            Path iUsed = Paths.get(ConfigManager.getOrDefault("ents.used.herds.file", "runtime-data/ents_used_herds.csv"));
+            if (Files.exists(iUsed))
+            {
+                Files.move(iUsed, iArchive.resolve(iUsed.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+            }
+            Files.write(iArchive.resolve("README.txt"), ("Archived " + now() + " - " + pReason + System.lineSeparator()).getBytes(StandardCharsets.UTF_8));
+            CommonFunctions.log.info(LOG + "Archived the old jar to " + iArchive + " (" + pReason + ")");
+        }
+        catch (IOException e)
+        {
+            CommonFunctions.log.warning(LOG + "Could not archive the old jar (" + e.getMessage() + ") - clearing it in place.");
+        }
+        HERDS.clear();
+        PEOPLE.clear();
+        META.clear();
+        iLoaded = true;
+        save();
+    }
+
+    // =================================================================================================
+    // TAKING ROWS
+    // =================================================================================================
+
+    public static synchronized boolean hasPool(String pPool, String pKey)
+    {
+        load();
+        for (Row iRow : HERDS) if (iRow.matches(pPool, pKey)) return true;
+        return false;
+    }
+
+    public static synchronized int countStatus(String pPool, String pKey, String pStatus)
+    {
+        load();
+        int iCount = 0;
+        for (Row iRow : HERDS) if (iRow.matches(pPool, pKey) && iRow.status.equals(pStatus)) iCount++;
+        return iCount;
+    }
+
+    // Copies of the AVAILABLE rows of a pool (the caller must not change them - use reserve / markUsed / markBad)
+    public static synchronized List<Row> available(String pPool, String pKey)
+    {
+        load();
+        List<Row> iRows = new ArrayList<>();
+        for (Row iRow : HERDS) if (iRow.matches(pPool, pKey) && AVAILABLE.equals(iRow.status)) iRows.add(iRow);
+        return iRows;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : reserve
+    // Description   : Takes one random AVAILABLE row of the pool, not in pExcludeHerds and whose login is not in
+    //                 pExcludeLogins, marks it RESERVED for the test case and saves. Null when the pool has nothing left.
+    // Parameters    : pPool, pKey | pExcludeHerds (Set, may be null) | pExcludeLogins (Set, may be null)
+    //                 pTestCase (String) | pPurpose (String) - e.g. the transfer type
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized Row reserve(String pPool, String pKey, Set<String> pExcludeHerds, Set<String> pExcludeLogins,
+                                           String pTestCase, String pPurpose)
+    {
+        load();
+        List<Row> iCandidates = new ArrayList<>();
+        for (Row iRow : HERDS)
+        {
+            if (!iRow.matches(pPool, pKey) || !AVAILABLE.equals(iRow.status)) continue;
+            if (pExcludeHerds != null && pExcludeHerds.contains(iRow.herd)) continue;
+            if (pExcludeLogins != null && !iRow.login.isEmpty() && pExcludeLogins.contains(iRow.login)) continue;
+            Person iPerson = PEOPLE.get(iRow.login.toLowerCase(Locale.ROOT));
+            if (iPerson != null && "EXPIRED".equals(iPerson.status)) continue;
+            iCandidates.add(iRow);
+        }
+        if (iCandidates.isEmpty()) return null;
+
+        Collections.shuffle(iCandidates, new Random(System.nanoTime()));
+        Row iRow = iCandidates.get(0);
+        iRow.status    = RESERVED;
+        iRow.testCase  = n(pTestCase);
+        iRow.purpose   = n(pPurpose);
+        iRow.reason    = "";
+        iRow.updatedAt = now();
+        save();
+        CommonFunctions.log.info(LOG + "Reserved " + iRow + " from " + iRow.pool + "/" + iRow.key + " for " + iRow.testCase
+                + " [" + iRow.purpose + "] | " + (iCandidates.size() - 1) + " available left");
+        return iRow;
+    }
+
+    // Marks the row of this herd (RESERVED or AVAILABLE) as RESERVED - used when a test picked the herd some other way
+    public static synchronized void reserveHerd(String pHerd, String pTestCase, String pPurpose)
+    {
+        update(pHerd, r -> { if (!USED.equals(r.status) && !BAD.equals(r.status)) { r.status = RESERVED; r.testCase = n(pTestCase); r.purpose = n(pPurpose); } });
+    }
+
+    public static synchronized void markUsed(String pHerd)
+    {
+        update(pHerd, r -> { r.status = USED; });
+    }
+
+    public static synchronized void markBad(String pHerd, String pReason)
+    {
+        update(pHerd, r -> { r.status = BAD; r.reason = n(pReason); });
+    }
+
+    // Puts a RESERVED row back to AVAILABLE (only when nothing was done with the herd)
+    public static synchronized void release(String pHerd)
+    {
+        update(pHerd, r -> { if (RESERVED.equals(r.status)) { r.status = AVAILABLE; r.testCase = ""; r.purpose = ""; } });
+    }
+
+    private static void update(String pHerd, Consumer<Row> pChange)
+    {
+        load();
+        boolean iChanged = false;
+        for (Row iRow : HERDS)
+        {
+            if (iRow.herd.equalsIgnoreCase(n(pHerd)))
+            {
+                String iBefore = iRow.status;
+                pChange.accept(iRow);
+                iRow.updatedAt = now();
+                iChanged = true;
+                CommonFunctions.log.info(LOG + iRow.herd + " (" + iRow.pool + "/" + iRow.key + "): " + iBefore + " -> " + iRow.status
+                        + (iRow.reason.isEmpty() ? "" : " | " + iRow.reason));
+            }
+        }
+        if (iChanged) save();
+    }
+
+    // =================================================================================================
+    // PEOPLE
+    // =================================================================================================
+
+    public static synchronized void markLoginExpired(String pLogin, String pNote)
+    {
+        load();
+        String iKey = n(pLogin).toLowerCase(Locale.ROOT);
+        if (iKey.isEmpty()) return;
+        Person iPerson = PEOPLE.get(iKey);
+        if (iPerson == null)
+        {
+            iPerson = new Person(pLogin, "AGENT");
+            PEOPLE.put(iKey, iPerson);
+        }
+        iPerson.status      = "EXPIRED";
+        iPerson.lastChecked = now();
+        iPerson.note        = n(pNote);
+        save();
+        CommonFunctions.log.warning(LOG + "Login " + pLogin + " marked EXPIRED - its rows are skipped from now on.");
+    }
+
+    public static synchronized boolean isLoginExpired(String pLogin)
+    {
+        load();
+        Person iPerson = PEOPLE.get(n(pLogin).toLowerCase(Locale.ROOT));
+        return iPerson != null && "EXPIRED".equals(iPerson.status);
+    }
+
+    // =================================================================================================
+    // REPORTING
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : stockReport
+    // Description   : One line per pool: available / reserved / used / bad, with a LOW STOCK flag below data.low.stock
+    //                 and an EMPTY flag at zero. Printed by TC_00_DATA and available to any step.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized String stockReport()
+    {
+        load();
+        int iLow = ConfigManager.getInt("data.low.stock", 5);
+        Map<String, int[]> iCounts = new TreeMap<>();
+        for (Row iRow : HERDS)
+        {
+            int[] iC = iCounts.computeIfAbsent(iRow.pool + "/" + iRow.key, k -> new int[4]);
+            switch (iRow.status)
+            {
+                case AVAILABLE: iC[0]++; break;
+                case RESERVED:  iC[1]++; break;
+                case USED:      iC[2]++; break;
+                default:        iC[3]++; break;
+            }
+        }
+
+        StringBuilder iReport = new StringBuilder();
+        iReport.append(System.lineSeparator())
+               .append("================ TEST DATA VAULT - STOCK ================").append(System.lineSeparator())
+               .append(String.format("  %-34s %9s %9s %6s %5s  %s", "pool/key", "available", "reserved", "used", "bad", ""))
+               .append(System.lineSeparator());
+        for (Map.Entry<String, int[]> iEntry : iCounts.entrySet())
+        {
+            int[] iC   = iEntry.getValue();
+            String iFlag = iC[0] == 0 ? "EMPTY" : iC[0] < iLow ? "LOW STOCK" : "";
+            iReport.append(String.format("  %-34s %9d %9d %6d %5d  %s", iEntry.getKey(), iC[0], iC[1], iC[2], iC[3], iFlag))
+                   .append(System.lineSeparator());
+        }
+        int iExpired = 0;
+        for (Person iPerson : PEOPLE.values()) if ("EXPIRED".equals(iPerson.status)) iExpired++;
+        iReport.append("  logins: ").append(PEOPLE.size()).append(" known, ").append(iExpired).append(" expired")
+               .append(" | filled ").append(META.getProperty("filled_at", "never"))
+               .append(" | ").append(dir().toAbsolutePath()).append(System.lineSeparator())
+               .append("=========================================================");
+        return iReport.toString();
+    }
+
+    public static synchronized List<String> lowStockPools()
+    {
+        load();
+        int iLow = ConfigManager.getInt("data.low.stock", 5);
+        Map<String, Integer> iAvail = new TreeMap<>();
+        for (Row iRow : HERDS)
+        {
+            String iKey = iRow.pool + "/" + iRow.key;
+            iAvail.putIfAbsent(iKey, 0);
+            if (AVAILABLE.equals(iRow.status)) iAvail.put(iKey, iAvail.get(iKey) + 1);
+        }
+        List<String> iLowPools = new ArrayList<>();
+        for (Map.Entry<String, Integer> iEntry : iAvail.entrySet())
+        {
+            if (iEntry.getValue() < iLow) iLowPools.add(iEntry.getKey() + " (" + iEntry.getValue() + " available)");
+        }
+        return iLowPools;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : writeExcelView
+    // Description   : Writes TestDataVault_view.xlsx (sheets Herds, People, Stock) for people to open and filter.
+    //                 It is a copy for viewing only: the framework reads the CSV files, never this workbook, so it may
+    //                 stay open in Excel during a run without locking anything.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void writeExcelView()
+    {
+        load();
+        try (XSSFWorkbook iBook = new XSSFWorkbook())
+        {
+            XSSFSheet iHerds = iBook.createSheet("Herds");
+            writeRow(iHerds, 0, HERDS_HEADER.split(","));
+            int iR = 1;
+            for (Row iRow : HERDS)
+            {
+                writeRow(iHerds, iR++, new String[]{ iRow.pool, iRow.key, iRow.herd, iRow.name, iRow.address, iRow.login,
+                        iRow.status, iRow.testCase, iRow.purpose, iRow.reason, iRow.fetchedAt, iRow.updatedAt });
+            }
+
+            XSSFSheet iPeople = iBook.createSheet("People");
+            writeRow(iPeople, 0, PEOPLE_HEADER.split(","));
+            iR = 1;
+            for (Person iPerson : PEOPLE.values())
+            {
+                writeRow(iPeople, iR++, new String[]{ iPerson.login, iPerson.type, iPerson.status, iPerson.lastChecked, iPerson.note });
+            }
+
+            XSSFSheet iStock = iBook.createSheet("Stock");
+            iR = 0;
+            for (String iLine : stockReport().split("\\R"))
+            {
+                if (!iLine.isBlank()) writeRow(iStock, iR++, new String[]{ iLine });
+            }
+
+            Files.createDirectories(dir());
+            try (FileOutputStream iOut = new FileOutputStream(viewFile().toFile()))
+            {
+                iBook.write(iOut);
+            }
+            CommonFunctions.log.info(LOG + "Excel view written: " + viewFile().toAbsolutePath());
+        }
+        catch (Exception e)
+        {
+            // The view is a convenience; the CSV files are the store. Excel having the file open is the usual cause.
+            CommonFunctions.log.warning(LOG + "Could not write the Excel view (" + e.getMessage() + ") - the CSV files are up to date.");
+        }
+    }
+
+    private static void writeRow(XSSFSheet pSheet, int pRowIndex, String[] pValues)
+    {
+        XSSFRow iRow = pSheet.createRow(pRowIndex);
+        for (int i = 0; i < pValues.length; i++) iRow.createCell(i).setCellValue(pValues[i]);
+    }
+
+    // =================================================================================================
+    // FILE LOCK (two framework processes on one machine)
+    // =================================================================================================
+
+    private static void withFileLock(Runnable pAction)
+    {
+        try
+        {
+            Files.createDirectories(dir());
+            try (RandomAccessFile iRaf = new RandomAccessFile(lockFile().toFile(), "rw");
+                 FileChannel iChannel = iRaf.getChannel())
+            {
+                FileLock iLock = null;
+                try
+                {
+                    iLock = iChannel.lock();
+                    pAction.run();
+                }
+                finally
+                {
+                    if (iLock != null && iLock.isValid()) iLock.release();
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            // No lock = still save; the lock only matters when two processes write at the same time
+            CommonFunctions.log.warning(LOG + "File lock unavailable (" + e.getMessage() + ") - saving without it.");
+            pAction.run();
+        }
+    }
+
+    // =================================================================================================
+    // SMALL HELPERS
+    // =================================================================================================
+
+    static String now() { return LocalDateTime.now().format(TS); }
+
+    private static String n(String pValue) { return pValue == null ? "" : pValue.trim(); }
+
+    private static String cell(String[] pCells, int pIndex) { return pIndex < pCells.length ? n(pCells[pIndex]) : ""; }
+
+    // Commas and line breaks would break the simple CSV - replaced with a space, like EntsTestData does
+    private static String csv(String pValue)
+    {
+        return n(pValue).replace(',', ' ').replace('\n', ' ').replace('\r', ' ');
+    }
+
+    private static String[] splitCsv(String pLine) { return pLine.split(",", -1); }
+
+    // Used by the harvester to build rows from query results
+    public static String text(Map<String, Object> pRow, String pColumn)
+    {
+        return Objects.toString(pRow.get(pColumn), "").trim();
+    }
+
+    // Visible for the harvester's log lines
+    public static synchronized Map<String, Integer> availableCounts()
+    {
+        load();
+        Map<String, Integer> iCounts = new HashMap<>();
+        for (Row iRow : HERDS)
+        {
+            if (AVAILABLE.equals(iRow.status)) iCounts.merge(iRow.pool + "/" + iRow.key, 1, Integer::sum);
+        }
+        return iCounts;
+    }
+}
