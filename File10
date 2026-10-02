@@ -1,74 +1,694 @@
-Feature: TC_23_ENTS - Verify Appeal submission for Category C
+package utilities;
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Single end-to-end regression journey covering all Transfer of Entitlements flows
-  #   within the same agent in the BISS Application Portal and then submitting the APPEAL
-  #
-  #   Each section performs the full Transferor → Transferee cycle:
-  #     Transferor : Search herd → Create Transfer → Search transferee → Select type →
-  #                  Add entitlement → Notes → Upload document → Send for acceptance
-  #     Transferee : Navigate to Transfers → Search herd → View → Enter transfer key →
-  #                  Notes → Submit to DAFM
-  #
-  #   Transfer types covered:
-  #     Section 1 : Change of Legal Entity  (code 206)
-  #     Section 2 : Change of Registration  (code 201)
-  #     Section 3 : Inheritance             (code 201)
-  #     Section 4 : Gift                    (code 202)
-  #     Section 5 : Lease                   (code 211) — includes lease year selection
-  #     Section 6 : Division                (code 204)
-  #     Section 7 : Sale                    (code 212)
-  #
-  # Migrated from: TC_01_ENTS.feature (legacy 8 separate scenarios)
-  #   TC_01 → Section 1    TC_02 → Section 2    TC_03 → Section 3    TC_04 → Section 4
-  #   TC_05 → Section 5    TC_07 → Section 6    TC_08 → Section 7
-  #
-  # Notes:
-  #   1. Herd numbers are hardcoded test fixtures — update in TestData.xlsx if they expire.
-  #   2. Each transfer uses 0.01 entitlement units as a minimal regression test value.
-  #   3. The transferee acceptance uses the transfer key captured during the transferor flow.
-  #   4. Steps are designed for reuse across TC_02_ENTS (different agent transfers) if needed.
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 31-03-2026
-  # --------------------------------------------------------------------------------------------------------------------
+import commonFunctions.CommonFunctions;
+import database.DBRouter;
 
-  Background:
-    Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "NR/CISYF" tab on the My Clients page
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-  @regression @transfers @e2e @tc13
-  Scenario: AT-ENTS-Appeal-E2E - Verify Appeal submission for Category C
+// =====================================================================================================================================
+// File          : DataHarvester.java
+// Package       : utilities
+// Description   : Fills the TestDataVault BEFORE the first browser opens (run by TC_00_DATA, or by a nightly job).
+//
+//                 1. DEMAND SCAN   reads ExecutionControl.xlsx and the feature files, and works out which pools are needed
+//                                  and how many rows each. data.demand.scope decides which rows count:
+//                                    all      (default) every TestCase_ID in the sheet, whatever its Execution flag, so a
+//                                             TC_00_DATA run on its own fills the jar for the whole week
+//                                    selected only Execution=Y rows (or -Dtestcase.ids when that is set)
+//                                    logs in as transferor "aga6060"            -> ENTS_AGENT / aga6060
+//                                    transfereeAgent | aga6325                  -> ENTS_AGENT / aga6325
+//                                    re-logs in as the transferee agent "x"     -> ENTS_AGENT / x
+//                                    ETF partner "x", ETF partner logs in as "x" -> ENTS_AGENT / x
+//                                    {transferor.login}, {transferee.login},
+//                                    transfereeType | Individual                -> ENTS_INDIVIDUAL
+//                                    "herd without entitlements" (TC_02_ENTS)   -> ENTS_NO_ENTS / <agent>
+//                                    {auto.agent}                               -> the best agents of "ENTS Top agents"
+//                                    "searches for the NRCISYF herd ..." (@tc13) -> ENTS_YOUNG_FARMER, 1 + one per
+//                                                                                 submission / saved draft (02-10-2026)
+//                                    BISS test case (no _ENTS)                   -> BISS_NOT_STARTED / herd.year
+//                                    BISS test case with _IND                    -> BISS_IND_CISYF  / herd.year
+//                                  Rows needed = sections x 2 for ENTS, 1 for BISS; fetched = max(data.min.rows,
+//                                  needed x data.spare.factor), capped at ents.pool.size.
+//                                  An ENTS_AGENT need whose Agent Login query returns nothing (ETF partners such as
+//                                  agr15512 are not in herd_agt) is fetched with "ENTS ETF partner herds" and stored as
+//                                  pool ENTS_ETF / <login> (01-10-2026).
+//                 2. FRESHNESS     data.force.refresh, the weekly refresh day (TestDataVault.staleReason) and the database
+//                                  fingerprints (data.fingerprint.sql.<DB>): when any says the jar is out of date, the old
+//                                  jar is archived and every pool is fetched again.
+//                 3. PARALLEL FETCH every pool that is below its target runs at the same time (data.threads, default 6)
+//                                  through the thread-safe DBRouter.query, so the wall time is the slowest query, not
+//                                  the sum. BISS pools also look up the INET login of each herd in parallel.
+//                 4. SPOT CHECK    when the jar was NOT refilled, data.spot.check rows per pool are checked against the
+//                                  database (ENTS: current agent link; BISS: INET login). A failed row is marked BAD; when
+//                                  more than half of a pool's checked rows fail, that pool is fetched again.
+//                 5. REPORT        vault.meta (filled date + fingerprints), the Excel view and the stock report.
+//
+//                 Nothing here opens a browser. Credentials stay in db.properties (DBRouter); passwords are never read.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 01-10-2026
+// =====================================================================================================================================
 
-    And the agent searches for the NRCISYF herd and opens the application
-    And the agent opens the NRCISYF Apply or Edit dialog
-    And the agent resets all category selections
-    And the agent selects NRCISYF categories
-      | C. Complementary income Support for Young Farmers |
-    And the agent proceeds past the category selection
+public final class DataHarvester
+{
+    private DataHarvester() { }
 
-    And the agent selects farming entity "Individual"
-    And the agent proceeds to the qualification step
-    When the agent completes the qualification details
-      | hasQualification   | Yes                             |
-      | dateOfCompletion   | 01/01/2026                      |
-      | certificateAwarded | Yes                             |
-      | college            | Athlone Institute of Technology |
-      | qualification      | FETAC Certificate in Farming    |
+    private static final String LOG = "[HARVEST] ";
 
-    And the agent proceeds to the summary step
-    When the agent uploads NRCISYF documents
-      | Upload Invoice/Receipt                                             |
-      | Upload Bank Statement Extract with Invoice/Receipt Passing through |
-      | Qualifications certificate or Confirmation of Education Form       |
-      | Personal and Sensitive Documentation                               |
+    // One pool/key the selected test cases need, and how many rows
+    public static final class Need
+    {
+        public final String pool;
+        public final String key;
+        public int rows;
+        public final Set<String> testCases = new LinkedHashSet<>();
 
-    And the agent saves and proceeds to the declaration step
-    And the agent submits the NRCISYF application with declaration
-    Then the NRCISYF application should be submitted successfully
-    And Validate if Appeal can be made sucessfully
+        Need(String pPool, String pKey) { pool = pPool; key = pKey; }
+
+        String id() { return pool + "/" + key; }
+    }
+
+    // =================================================================================================
+    // PUBLIC ENTRY POINT
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : run
+    // Description   : The whole harvest: freshness -> demand -> fetch (parallel) -> spot check -> report.
+    // Parameters    : pForce         (boolean) - true = refill everything whatever the freshness checks say
+    //                 pBlacklist     (Set)     - BISS herds never to hand out (Hooks.BLACKLISTED_HERDS)
+    //                 pExpiredLogins (Set)     - logins known to be expired in this run (Hooks.EXPIRED_AGENTS)
+    // Returns       : the stock report text (also logged)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static String run(boolean pForce, Set<String> pBlacklist, Set<String> pExpiredLogins)
+    {
+        long iStart = System.currentTimeMillis();
+
+        // -- 1. Freshness ---------------------------------------------------------------------------------------------
+        Map<String, String> iFingerprints = fingerprints();
+        String iStale = pForce ? "refill forced" : TestDataVault.staleReason();
+        if (iStale.isEmpty()) iStale = fingerprintChange(iFingerprints);
+
+        boolean iRefillAll = !iStale.isEmpty();
+        if (iRefillAll)
+        {
+            CommonFunctions.log.warning(LOG + "Jar out of date: " + iStale + " -> archiving it and fetching every pool again.");
+            TestDataVault.archiveAndClear(iStale);
+        }
+        else
+        {
+            CommonFunctions.log.info(LOG + "Jar is fresh (filled " + TestDataVault.filledAt() + ") - topping up pools that are low.");
+        }
+
+        // -- 2. Demand ------------------------------------------------------------------------------------------------
+        Map<String, Need> iNeeds = scanDemand();
+        if (iNeeds.isEmpty())
+        {
+            CommonFunctions.log.warning(LOG + "No test case in scope needs vault data. With data.demand.scope=selected only Execution=Y rows "
+                    + "count - set it to all (the default) to fill the jar for every test case in ExecutionControl.xlsx.");
+        }
+
+        // -- 3. Fetch what is below target, in parallel ---------------------------------------------------------------
+        List<Need> iToFetch = new ArrayList<>();
+        for (Need iNeed : iNeeds.values())
+        {
+            int iTarget    = target(iNeed.rows);
+            int iAvailable = availableFor(iNeed);
+            if (iRefillAll || iAvailable < iTarget)
+            {
+                iToFetch.add(iNeed);
+                CommonFunctions.log.info(LOG + iNeed.id() + ": " + iAvailable + " available, target " + iTarget
+                        + " (needed by " + iNeed.testCases + ") -> fetching");
+            }
+            else
+            {
+                CommonFunctions.log.info(LOG + iNeed.id() + ": " + iAvailable + " available, target " + iTarget + " -> enough");
+            }
+        }
+        fetchAll(iToFetch, pBlacklist, pExpiredLogins);
+
+        // -- 4. Spot check the rows that were already in the jar ---------------------------------------------------------
+        if (!iRefillAll)
+        {
+            List<Need> iStalePools = spotCheck(iNeeds.values(), iToFetch);
+            if (!iStalePools.isEmpty())
+            {
+                CommonFunctions.log.warning(LOG + "Spot check found " + iStalePools.size() + " stale pool(s) - fetching them again.");
+                fetchAll(iStalePools, pBlacklist, pExpiredLogins);
+            }
+        }
+
+        // -- 5. Record + report ---------------------------------------------------------------------------------------
+        if (iRefillAll || !iToFetch.isEmpty() || TestDataVault.filledAt().isEmpty())
+        {
+            TestDataVault.markFilled(iFingerprints);
+        }
+        TestDataVault.writeExcelView();
+
+        String iReport = TestDataVault.stockReport();
+        CommonFunctions.log.info(LOG + "Harvest finished in " + (System.currentTimeMillis() - iStart) / 1000 + " s" + iReport);
+        for (String iLow : TestDataVault.lowStockPools())
+        {
+            CommonFunctions.log.warning(LOG + "LOW STOCK: " + iLow);
+        }
+        return iReport;
+    }
+
+    // =================================================================================================
+    // 1. FINGERPRINTS
+    // =================================================================================================
+
+    // One cheap "always goes up" value per database. Blank setting = that database is not fingerprinted.
+    private static Map<String, String> fingerprints()
+    {
+        Map<String, String> iPrints = new LinkedHashMap<>();
+        Map<String, String> iSql = new LinkedHashMap<>();
+        iSql.put("DATA", ConfigManager.getOrDefault("data.fingerprint.sql.DATA", "SELECT MAX(app_id) FROM vwbs_application"));
+        iSql.put("INET", ConfigManager.getOrDefault("data.fingerprint.sql.INET", ""));
+        iSql.put("ENTS", ConfigManager.getOrDefault("data.fingerprint.sql.ENTS", "SELECT MAX(ohs_own_id) FROM tden_owner_history"));
+
+        for (Map.Entry<String, String> iEntry : iSql.entrySet())
+        {
+            String iQuery = iEntry.getValue().trim();
+            if (iQuery.isEmpty()) continue;
+            try
+            {
+                List<Map<String, Object>> iRows = DBRouter.queryRaw(iEntry.getKey(), iQuery);
+                String iValue = iRows.isEmpty() ? "" : String.valueOf(iRows.get(0).values().iterator().next());
+                iPrints.put(iEntry.getKey(), iValue);
+                CommonFunctions.log.info(LOG + "Fingerprint " + iEntry.getKey() + " = " + iValue);
+            }
+            catch (Exception e)
+            {
+                CommonFunctions.log.warning(LOG + "Fingerprint query for " + iEntry.getKey() + " failed (" + e.getMessage()
+                        + ") - skipping this check. Set data.fingerprint.sql." + iEntry.getKey() + " to a cheap query, or blank to disable.");
+            }
+        }
+        return iPrints;
+    }
+
+    // "" when every stored fingerprint still matches, otherwise the reason
+    private static String fingerprintChange(Map<String, String> pCurrent)
+    {
+        for (Map.Entry<String, String> iEntry : pCurrent.entrySet())
+        {
+            String iStored = TestDataVault.storedFingerprint(iEntry.getKey());
+            if (!iStored.isEmpty() && !iStored.equals(iEntry.getValue()))
+            {
+                return "database " + iEntry.getKey() + " was refreshed (fingerprint " + iStored + " -> " + iEntry.getValue() + ")";
+            }
+        }
+        return "";
+    }
+
+    // =================================================================================================
+    // 2. DEMAND SCAN
+    // =================================================================================================
+
+    private static final Pattern P_LOGIN_TRANSFEROR  = Pattern.compile("logs in as transferor \"([^\"{}]+)\"");
+    private static final Pattern P_TRANSFEREE_AGENT  = Pattern.compile("transfereeAgent\\s*\\|\\s*([A-Za-z0-9]+)");
+    private static final Pattern P_RELOGIN_AGENT     = Pattern.compile("re-logs? in as the transferee agent \"([^\"{}]+)\"");
+    private static final Pattern P_LOGIN_AGENT       = Pattern.compile("logs in as transferee agent \"([^\"{}]+)\"");
+    private static final Pattern P_ETF_PARTNER       = Pattern.compile("ETF partner \"([^\"{}]+)\"");
+    private static final Pattern P_SECTION           = Pattern.compile("creates a transfer (application with the following details|with manual entitlements)");
+    private static final Pattern P_INDIVIDUAL        = Pattern.compile("\\{transferor\\.login}|\\{transferee\\.login}|transfereeType\\s*\\|\\s*Individual");
+    private static final Pattern P_NO_ENTS           = Pattern.compile("herd without entitlements");
+    private static final Pattern P_NRCISYF_HERD      = Pattern.compile("searches for the NRCISYF herd and opens the application");
+    private static final Pattern P_NRCISYF_CONSUME   = Pattern.compile("submits the NRCISYF application with declaration|saves and exits the NRCISYF application");
+    private static final Pattern P_AUTO_AGENT        = Pattern.compile("\\{auto\\.agent(?:\\.(\\d+))?}");
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : scanDemand
+    // Description   : Reads the selected ExecutionControl rows and their feature files; returns one Need per pool/key.
+    //                 data.extra.agents (comma-separated logins) is always added, for agents used outside feature files.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Map<String, Need> scanDemand()
+    {
+        Map<String, Need> iNeeds = new LinkedHashMap<>();
+        String iYear = System.getProperty("herd.year", ConfigManager.getOrDefault("herd.year", String.valueOf(LocalDate.now().getYear()))).trim();
+        List<String> iTopAgents = null;   // fetched once, only when a feature uses {auto.agent}
+
+        for (String iTestCase : selectedTestCases())
+        {
+            String iUpper = iTestCase.toUpperCase(Locale.ROOT);
+            if (iUpper.contains("_DATA")) continue;
+
+            String iFeature = featureText(iTestCase);
+
+            if (iUpper.contains("_ENTS"))
+            {
+                int iSections = Math.max(1, count(P_SECTION, iFeature));
+                Set<String> iAgents = new LinkedHashSet<>();
+                for (Pattern iPattern : new Pattern[]{ P_LOGIN_TRANSFEROR, P_TRANSFEREE_AGENT, P_RELOGIN_AGENT, P_LOGIN_AGENT, P_ETF_PARTNER })
+                {
+                    Matcher iMatcher = iPattern.matcher(iFeature);
+                    while (iMatcher.find())
+                    {
+                        String iLogin = iMatcher.group(1).trim();
+                        if (isAgentLogin(iLogin)) iAgents.add(iLogin);
+                    }
+                }
+                // {auto.agent} / {auto.agent.N}: the N best agents by herd count, other than the feature's own agents.
+                // At run time EntsTestData.resolveAgent ranks by vault stock, so the agents filled here are the ones
+                // it will find at the top. One extra agent is filled as a spare.
+                Matcher iAuto = P_AUTO_AGENT.matcher(iFeature);
+                int iAutoMax = 0;
+                while (iAuto.find()) iAutoMax = Math.max(iAutoMax, iAuto.group(1) == null ? 1 : Integer.parseInt(iAuto.group(1)));
+                if (iAutoMax > 0)
+                {
+                    if (iTopAgents == null)
+                    {
+                        iTopAgents = EntsTestData.topAgentsLive(ConfigManager.getInt("data.auto.agents.rank", 10));
+                        TestDataVault.storeTopAgents(iTopAgents);
+                        CommonFunctions.log.info(LOG + "Top agents by herd count: " + iTopAgents);
+                    }
+                    int iAdded = 0;
+                    for (String iTop : iTopAgents)
+                    {
+                        boolean iOwn = false;
+                        for (String iAgent : iAgents) if (iAgent.equalsIgnoreCase(iTop)) iOwn = true;
+                        if (iOwn) continue;
+                        iAgents.add(iTop);
+                        if (++iAdded > iAutoMax) break;   // the N asked for, plus one spare
+                    }
+                }
+
+                for (String iAgent : iAgents)
+                {
+                    need(iNeeds, TestDataVault.POOL_ENTS_AGENT, iAgent, iSections * 2, iTestCase);
+                    if (P_NO_ENTS.matcher(iFeature).find())
+                    {
+                        need(iNeeds, TestDataVault.POOL_ENTS_NO_ENTS, iAgent, iSections, iTestCase);
+                    }
+                }
+                if (P_INDIVIDUAL.matcher(iFeature).find())
+                {
+                    need(iNeeds, TestDataVault.POOL_ENTS_INDIVIDUAL, "", iSections * 2, iTestCase);
+                }
+                // NR/CISYF (@tc13): one herd to start with, plus one for every submission or saved draft
+                if (P_NRCISYF_HERD.matcher(iFeature).find())
+                {
+                    need(iNeeds, TestDataVault.POOL_ENTS_YOUNG_FARMER, "", 1 + count(P_NRCISYF_CONSUME, iFeature), iTestCase);
+                }
+            }
+            else if (iUpper.contains("_IND"))
+            {
+                need(iNeeds, TestDataVault.POOL_BISS_IND_CISYF, iYear, 1, iTestCase);
+            }
+            else if (iFeature.contains("@preliminary") || iFeature.contains("@tc13"))
+            {
+                CommonFunctions.log.info(LOG + iTestCase + " uses the @preliminary / @tc13 hooks - left on the live query path.");
+            }
+            else
+            {
+                need(iNeeds, TestDataVault.POOL_BISS_NOT_STARTED, iYear, 1, iTestCase);
+            }
+        }
+
+        for (String iExtra : ConfigManager.getOrDefault("data.extra.agents", "").split("[,;\\s]+"))
+        {
+            if (!iExtra.isBlank()) need(iNeeds, TestDataVault.POOL_ENTS_AGENT, iExtra.trim(), 2, "data.extra.agents");
+        }
+
+        StringBuilder iSummary = new StringBuilder(LOG + "Demand: ");
+        for (Need iNeed : iNeeds.values()) iSummary.append(iNeed.id()).append("=").append(iNeed.rows).append(" ");
+        CommonFunctions.log.info(iSummary.toString().trim());
+        return iNeeds;
+    }
+
+    private static void need(Map<String, Need> pNeeds, String pPool, String pKey, int pRows, String pTestCase)
+    {
+        Need iNeed = pNeeds.computeIfAbsent(pPool + "/" + pKey, k -> new Need(pPool, pKey));
+        iNeed.rows += pRows;
+        iNeed.testCases.add(pTestCase);
+    }
+
+    private static boolean isAgentLogin(String pLogin)
+    {
+        String iLower = pLogin.toLowerCase(Locale.ROOT);
+        return iLower.startsWith("aga") || iLower.startsWith("agr");
+    }
+
+    private static int count(Pattern pPattern, String pText)
+    {
+        int iCount = 0;
+        Matcher iMatcher = pPattern.matcher(pText);
+        while (iMatcher.find()) iCount++;
+        return iCount;
+    }
+
+    // The test cases the jar is filled for: every row of ExecutionControl.xlsx (data.demand.scope=all, default),
+    // only Execution=Y rows (data.demand.scope=selected), or exactly -Dtestcase.ids when that is set
+    private static List<String> selectedTestCases()
+    {
+        List<String> iSelected = new ArrayList<>();
+        String iIds = ConfigManager.getOrDefault("testcase.ids", "").trim();
+        if (!iIds.isEmpty())
+        {
+            for (String iId : iIds.split("[,;\\s]+")) if (!iId.isBlank()) iSelected.add(iId.trim());
+            CommonFunctions.log.info(LOG + "Demand scope: testcase.ids " + iSelected);
+            return iSelected;
+        }
+
+        boolean iAllRows = !"selected".equalsIgnoreCase(ConfigManager.getOrDefault("data.demand.scope", "all").trim());
+        String  iPath    = ConfigManager.getOrDefault("execution.control.path", "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
+        String  iSheet   = ConfigManager.getOrDefault("execution.control.sheet", "Sheet1");
+        int     iSkipped = 0;
+        try
+        {
+            ExcelUtilities iExcel = new ExcelUtilities(iPath);
+            int iRows = iExcel.getRowCount(iSheet);
+            for (int iRow = 1; iRow <= iRows; iRow++)
+            {
+                String iId = iExcel.getCellValue(iSheet, iRow, "TestCase_ID").trim();
+                if (iId.isEmpty()) continue;
+                if (!iAllRows)
+                {
+                    String iFlag = iExcel.getCellValue(iSheet, iRow, "Execution").trim();
+                    if (!iFlag.equalsIgnoreCase("Y")) { iSkipped++; continue; }
+                }
+                iSelected.add(iId);
+            }
+        }
+        catch (Exception e)
+        {
+            CommonFunctions.log.warning(LOG + "Could not read " + iPath + " (" + e.getMessage() + ") - demand scan limited to data.extra.agents.");
+        }
+        CommonFunctions.log.info(LOG + "Demand scope: " + (iAllRows ? "all " + iSelected.size() + " test case(s) in ExecutionControl.xlsx"
+                : iSelected.size() + " Execution=Y test case(s), " + iSkipped + " skipped (data.demand.scope=selected)"));
+        return iSelected;
+    }
+
+    // The feature file text of a test case ("" when it cannot be found - the harvest goes on without it)
+    private static String featureText(String pTestCase)
+    {
+        String iRoot = ConfigManager.getOrDefault("feature.directory.path", "src/test/resources/Test_Cases/");
+        try (java.util.stream.Stream<java.nio.file.Path> iWalk = Files.walk(Paths.get(iRoot)))
+        {
+            java.nio.file.Path iMatch = iWalk.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().equalsIgnoreCase(pTestCase + ".feature"))
+                    .findFirst().orElse(null);
+            if (iMatch == null)
+            {
+                CommonFunctions.log.warning(LOG + "Feature file for " + pTestCase + " not found under " + iRoot);
+                return "";
+            }
+            return new String(Files.readAllBytes(iMatch), StandardCharsets.UTF_8);
+        }
+        catch (IOException e)
+        {
+            CommonFunctions.log.warning(LOG + "Could not read the feature file of " + pTestCase + ": " + e.getMessage());
+            return "";
+        }
+    }
+
+    // =================================================================================================
+    // 3. FETCH (parallel)
+    // =================================================================================================
+
+    // AVAILABLE rows for a need; an agent need also counts the ETF pool of the same login
+    private static int availableFor(Need pNeed)
+    {
+        int iCount = TestDataVault.countStatus(pNeed.pool, pNeed.key, TestDataVault.AVAILABLE);
+        if (TestDataVault.POOL_ENTS_AGENT.equals(pNeed.pool))
+        {
+            iCount += TestDataVault.countStatus(TestDataVault.POOL_ENTS_ETF, pNeed.key, TestDataVault.AVAILABLE);
+        }
+        return iCount;
+    }
+
+    private static int target(int pNeeded)
+    {
+        int iSpare = Math.max(1, ConfigManager.getInt("data.spare.factor", 3));
+        int iMin   = ConfigManager.getInt("data.min.rows", 10);
+        int iCap   = ConfigManager.getInt("ents.pool.size", 200);
+        return Math.min(iCap, Math.max(iMin, pNeeded * iSpare));
+    }
+
+    private static void fetchAll(List<Need> pNeeds, Set<String> pBlacklist, Set<String> pExpiredLogins)
+    {
+        if (pNeeds.isEmpty()) return;
+
+        int iThreads = Math.max(1, Math.min(ConfigManager.getInt("data.threads", 6), pNeeds.size()));
+        ExecutorService iPool = Executors.newFixedThreadPool(iThreads);
+        Map<Need, Future<List<TestDataVault.Row>>> iFutures = new LinkedHashMap<>();
+        long iStart = System.currentTimeMillis();
+
+        for (Need iNeed : pNeeds)
+        {
+            iFutures.put(iNeed, iPool.submit(() -> fetchPool(iNeed, pBlacklist, pExpiredLogins)));
+        }
+        iPool.shutdown();
+
+        for (Map.Entry<Need, Future<List<TestDataVault.Row>>> iEntry : iFutures.entrySet())
+        {
+            Need iNeed = iEntry.getKey();
+            try
+            {
+                List<TestDataVault.Row> iRows = iEntry.getValue().get(ConfigManager.getInt("data.fetch.timeout.seconds", 300), TimeUnit.SECONDS);
+                // The rows carry their own pool: an agent need can come back as ENTS_ETF rows (ETF partner)
+                String iTargetPool = iRows.isEmpty() ? iNeed.pool : iRows.get(0).pool;
+                TestDataVault.putPool(iTargetPool, iNeed.key, iRows);
+            }
+            catch (Exception e)
+            {
+                String iCause = e.getCause() == null ? e.getMessage() : e.getCause().getMessage();
+                CommonFunctions.log.severe(LOG + iNeed.id() + " could not be fetched: " + iCause
+                        + " - the test cases that need it (" + iNeed.testCases + ") will fall back to live queries.");
+            }
+        }
+        CommonFunctions.log.info(LOG + pNeeds.size() + " pool(s) fetched in " + (System.currentTimeMillis() - iStart) / 1000
+                + " s with " + iThreads + " thread(s).");
+    }
+
+    // The rows of one pool (runs on a worker thread - only DBRouter.query, nothing shared)
+    private static List<TestDataVault.Row> fetchPool(Need pNeed, Set<String> pBlacklist, Set<String> pExpiredLogins)
+    {
+        int    iLimit = target(pNeed.rows);
+        String iYear  = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
+        String iType  = ConfigManager.getOrDefault("ents.cust.type", "").trim();
+        String iTwo   = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
+        List<TestDataVault.Row> iRows = new ArrayList<>();
+        long iStart = System.currentTimeMillis();
+
+        switch (pNeed.pool)
+        {
+            case TestDataVault.POOL_ENTS_AGENT:
+            {
+                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS Agent Login herds", pNeed.key, String.valueOf(iLimit), iYear, iType, iTwo))
+                {
+                    iRows.add(new TestDataVault.Row(pNeed.pool, pNeed.key, TestDataVault.text(r, "HERD_NUMBER"),
+                            TestDataVault.text(r, "HERD_NAME"), TestDataVault.text(r, "ADDRESSLINE1"), pNeed.key));
+                }
+                if (iRows.isEmpty())
+                {
+                    // Not in herd_agt - try the login as an ETF partner (tden_herd_etf_link)
+                    for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS ETF partner herds", pNeed.key, String.valueOf(iLimit), iYear, iTwo))
+                    {
+                        iRows.add(new TestDataVault.Row(TestDataVault.POOL_ENTS_ETF, pNeed.key, TestDataVault.text(r, "HERD_NUMBER"),
+                                TestDataVault.text(r, "HERD_NAME"), TestDataVault.text(r, "ADDRESSLINE1"), pNeed.key));
+                    }
+                    CommonFunctions.log.info(LOG + pNeed.key + " is not in herd_agt - ETF partner query: " + iRows.size() + " herd(s)");
+                }
+                break;
+            }
+            case TestDataVault.POOL_ENTS_NO_ENTS:
+            {
+                String iNoEntsYear = iYear.isEmpty() ? String.valueOf(LocalDate.now().getYear()) : iYear;
+                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS Agent herds without entitlements", pNeed.key, String.valueOf(iLimit), iNoEntsYear, iType))
+                {
+                    iRows.add(new TestDataVault.Row(pNeed.pool, pNeed.key, TestDataVault.text(r, "HERD_NUMBER"),
+                            TestDataVault.text(r, "HERD_NAME"), TestDataVault.text(r, "ADDRESSLINE1"), pNeed.key));
+                }
+                break;
+            }
+            case TestDataVault.POOL_ENTS_YOUNG_FARMER:
+            {
+                // Simon's Young Farmer query: herd + its agent in one row (nrcisyf.herds limits it to a fixed list)
+                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS Young Farmer herds", String.valueOf(iLimit),
+                        ConfigManager.getOrDefault("nrcisyf.herds", "").trim()))
+                {
+                    String iHerd  = TestDataVault.text(r, "HERD_ID");
+                    String iLogin = TestDataVault.text(r, "LOGIN_ID").toLowerCase(Locale.ROOT);
+                    if (iHerd.isEmpty() || iLogin.isEmpty()) continue;
+                    if (pBlacklist != null && pBlacklist.contains(iHerd)) continue;
+                    if (pExpiredLogins != null && pExpiredLogins.contains(iLogin)) continue;
+                    iRows.add(new TestDataVault.Row(pNeed.pool, pNeed.key, iHerd, "", "", iLogin));
+                }
+                break;
+            }
+            case TestDataVault.POOL_ENTS_INDIVIDUAL:
+            {
+                int iIndLimit = Math.max(iLimit, ConfigManager.getInt("ents.individual.pool.size", 0));
+                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS Individual Login herds", String.valueOf(iIndLimit), iTwo, iType))
+                {
+                    String iLogin = TestDataVault.text(r, "LOGIN_ID");
+                    if (iLogin.isEmpty() || (pExpiredLogins != null && pExpiredLogins.contains(iLogin))) continue;
+                    iRows.add(new TestDataVault.Row(pNeed.pool, "", TestDataVault.text(r, "HERD_NUMBER"),
+                            TestDataVault.text(r, "NAME"), TestDataVault.text(r, "ADDRESS"), iLogin));
+                }
+                break;
+            }
+            case TestDataVault.POOL_BISS_NOT_STARTED:
+            {
+                List<String> iHerds = new ArrayList<>();
+                for (Map<String, Object> r : DBRouter.query("DATA", "List of herds with no errors at all", pNeed.key, String.valueOf(iLimit)))
+                {
+                    String iHerd = TestDataVault.text(r, "APP_HERD_NO");
+                    if (!iHerd.isEmpty() && (pBlacklist == null || !pBlacklist.contains(iHerd)) && !iHerds.contains(iHerd)) iHerds.add(iHerd);
+                }
+                Collections.shuffle(iHerds);
+                iRows.addAll(lookupLogins(pNeed, iHerds, "Get Login Id for herd", "USERNAME", pExpiredLogins));
+                break;
+            }
+            case TestDataVault.POOL_BISS_IND_CISYF:
+            {
+                List<String> iHerds = new ArrayList<>();
+                for (Map<String, Object> r : DBRouter.query("DATA", "List of not started individual herds with CISYF flag", pNeed.key, String.valueOf(iLimit)))
+                {
+                    String iHerd = TestDataVault.text(r, "APP_HERD_NO");
+                    if (!iHerd.isEmpty() && (pBlacklist == null || !pBlacklist.contains(iHerd)) && !iHerds.contains(iHerd)) iHerds.add(iHerd);
+                }
+                iRows.addAll(lookupLogins(pNeed, iHerds, "Get Individual Login for herd", "LOGIN", pExpiredLogins));
+                break;
+            }
+            default:
+                throw new IllegalArgumentException(LOG + "Unknown pool " + pNeed.pool);
+        }
+
+        CommonFunctions.log.info(LOG + pNeed.id() + ": " + iRows.size() + " row(s) in " + (System.currentTimeMillis() - iStart) / 1000 + " s");
+        return iRows;
+    }
+
+    // BISS: one INET lookup per herd, a few at a time. Herds without a usable login are dropped.
+    private static List<TestDataVault.Row> lookupLogins(Need pNeed, List<String> pHerds, String pLabel, String pColumn, Set<String> pExpiredLogins)
+    {
+        List<TestDataVault.Row> iRows = Collections.synchronizedList(new ArrayList<>());
+        int iThreads = Math.max(1, Math.min(ConfigManager.getInt("data.inet.threads", 4), Math.max(1, pHerds.size())));
+        ExecutorService iPool = Executors.newFixedThreadPool(iThreads);
+        List<Future<?>> iFutures = new ArrayList<>();
+
+        for (String iHerd : pHerds)
+        {
+            iFutures.add(iPool.submit((Callable<Void>) () ->
+            {
+                for (Map<String, Object> r : DBRouter.query("INET", pLabel, iHerd))
+                {
+                    String iLogin = TestDataVault.text(r, pColumn);
+                    if (iLogin.isEmpty() || (pExpiredLogins != null && pExpiredLogins.contains(iLogin))) continue;
+                    iRows.add(new TestDataVault.Row(pNeed.pool, pNeed.key, iHerd, "", "", iLogin));
+                    break;
+                }
+                return null;
+            }));
+        }
+        iPool.shutdown();
+        for (Future<?> iFuture : iFutures)
+        {
+            try { iFuture.get(ConfigManager.getInt("data.fetch.timeout.seconds", 300), TimeUnit.SECONDS); }
+            catch (Exception e) { CommonFunctions.log.warning(LOG + pNeed.id() + " INET lookup failed for one herd: " + e.getMessage()); }
+        }
+        return new ArrayList<>(iRows);
+    }
+
+    // =================================================================================================
+    // 4. SPOT CHECK
+    // =================================================================================================
+
+    // Checks a few AVAILABLE rows of every pool that was not just fetched; returns the pools that look stale
+    private static List<Need> spotCheck(Iterable<Need> pNeeds, List<Need> pJustFetched)
+    {
+        int iSample = ConfigManager.getInt("data.spot.check", 5);
+        List<Need> iStale = new ArrayList<>();
+        if (iSample <= 0) return iStale;
+
+        for (Need iNeed : pNeeds)
+        {
+            if (pJustFetched.contains(iNeed)) continue;
+            List<TestDataVault.Row> iRows = TestDataVault.available(iNeed.pool, iNeed.key);
+            if (iRows.isEmpty()) continue;
+            Collections.shuffle(iRows);
+
+            int iChecked = 0, iBad = 0;
+            for (TestDataVault.Row iRow : iRows.subList(0, Math.min(iSample, iRows.size())))
+            {
+                String iProblem;
+                try { iProblem = checkRow(iRow); }
+                catch (Exception e) { CommonFunctions.log.warning(LOG + "Spot check of " + iRow.herd + " failed to run: " + e.getMessage()); continue; }
+
+                iChecked++;
+                if (!iProblem.isEmpty())
+                {
+                    iBad++;
+                    TestDataVault.markBad(iRow.herd, "spot-check: " + iProblem);
+                }
+            }
+            CommonFunctions.log.info(LOG + "Spot check " + iNeed.id() + ": " + iBad + " bad of " + iChecked + " checked");
+            if (iChecked > 0 && iBad * 2 > iChecked) iStale.add(iNeed);
+        }
+        return iStale;
+    }
+
+    // "" when the row still looks usable, otherwise what is wrong
+    private static String checkRow(TestDataVault.Row pRow)
+    {
+        switch (pRow.pool)
+        {
+            case TestDataVault.POOL_ENTS_AGENT:
+            case TestDataVault.POOL_ENTS_NO_ENTS:
+                return DBRouter.query("ENTS", "ENTS herd has current agent link", pRow.herd, pRow.key).isEmpty()
+                        ? "agent link to " + pRow.key + " has ended" : "";
+            case TestDataVault.POOL_BISS_NOT_STARTED:
+            {
+                for (Map<String, Object> r : DBRouter.query("INET", "Get Login Id for herd", pRow.herd))
+                {
+                    if (TestDataVault.text(r, "USERNAME").equalsIgnoreCase(pRow.login)) return "";
+                }
+                return "INET no longer maps the herd to " + pRow.login;
+            }
+            case TestDataVault.POOL_BISS_IND_CISYF:
+            {
+                for (Map<String, Object> r : DBRouter.query("INET", "Get Individual Login for herd", pRow.herd))
+                {
+                    if (TestDataVault.text(r, "LOGIN").equalsIgnoreCase(pRow.login)) return "";
+                }
+                return "INET no longer maps the herd to " + pRow.login;
+            }
+            case TestDataVault.POOL_ENTS_YOUNG_FARMER:
+            {
+                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS herd has NRCISYF application", pRow.herd))
+                {
+                    String iCount = TestDataVault.text(r, "CNT");
+                    if (!iCount.isEmpty() && !"0".equals(iCount)) return "has an NR/CISYF application now";
+                }
+                return DBRouter.query("ENTS", "ENTS herd has current agent link", pRow.herd, pRow.login).isEmpty()
+                        ? "agent link to " + pRow.login + " has ended" : "";
+            }
+            default:
+                return "";   // individuals: no cheap check defined
+        }
+    }
+}
