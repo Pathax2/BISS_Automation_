@@ -1,75 +1,279 @@
-Feature: TC_25_ENTS - Verify Appeal submission for Category BC
+// ===================================================================================================================================
+// File          : TC_08_ENTS.java
+// Package       : stepdefinitions.ENTS
+// Description   : Individual-as-TRANSFEROR and Agent-as-TRANSFEREE steps (TC_08_ENTS, TC_09_ENTS, TC_10_ENTS).
+//
+//                 Steps in this file (4):
+//                   1. the individual logs in as transferor {string}      (also the login step of every other ENTS feature)
+//                   2. the individual creates a transfer application with the following details (DataTable)
+//                   3. the agent logs in as transferee agent {string}
+//                   4. the agent completes the same agent transferee acceptance flow (DataTable)
+//
+//                 Playwright edition (30-09-2026, from the Selenium file):
+//                   - Same step texts, same ObjectRepository keys, same flow.
+//                   - The three copied Keycloak login blocks (username, PIN loop, TOTP, T&C, Account Expired) and the
+//                     local performLogout / isVisible are replaced by EntsSession.loginAs / logout. loginAs also fills
+//                     the mobile number form when Keycloak asks for it. An expired account fails the step with the
+//                     login in the message (the Selenium copies marked the BISS runtime agent, a different user).
+//                   - Step 1 closes the personal details dialog when the login is an individual (not aga* / agr*).
+//                   - Step 2 has no herd search and no document upload, exactly like the Selenium version: the individual
+//                     is already on their own Transfers page and goes straight to Create Transfer. Transfer type,
+//                     highest-entitlement row, lease year and the "Leased entitlements can only be transferred by ..."
+//                     recovery are the same helpers TC_01_ENTS uses (selectTransferType, addEntitlementAndContinue,
+//                     handleLeasedEntitlementsError), so the two create steps cannot drift apart.
+//                   - Step 3 only logs out and logs in, as in Selenium; the feature file opens Home -> My Clients ->
+//                     Transfers itself.
+//                   - Step 4 searches the herd with EntsSession.openTransferOutHerd (waits for the row of THAT herd,
+//                     skips rows marked expired) instead of clicking the first View link, and the acceptance screens
+//                     are EntsSession.acceptWithTransferKey (shared with TC_05 and TC_07).
+//                   - Thread.sleep, WebDriverWait and findElement are gone (Playwright waits).
+//
+//                 Runtime data (utilities.EntsTestData) - the pair is built in two halves because the login comes first:
+//                   {transferor.login} in step 1 -> EntsTestData.nextIndividualTransferor picks an unused herd from the
+//                                                   Individual Login query and logs its owner in
+//                   step 2 with a "transfereeAgent | aga6325" row  -> completePairWithAgentTransferee (TC_08 / TC_10)
+//                   step 2 with a "transfereeType  | Individual" row -> completePairWithIndividualTransferee (TC_09)
+//                   {transferee.agent} / {transferee.login} then name the user who accepts.
+//                 Plain values (a login such as "FARMBLUE", a herd, a name) are used as they are, to pin a case.
+//
+//                 02-10-2026: step 2 uses EntsSession.searchTransferee. On "No transferee matches were found" a runtime
+//                 transferee is replaced by another herd of the same agent (EntsTestData.replaceTransferee, old one BAD
+//                 in the vault) and searched again in the same dialog, up to ents.transferee.retries (default 3).
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data), 02-10-2026 (transferee no match)
+// ===================================================================================================================================
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Purpose:
-  #   Single end-to-end regression journey covering all Transfer of Entitlements flows
-  #   within the same agent in the BISS Application Portal and then submitting the APPEAL
-  #
-  #   Each section performs the full Transferor → Transferee cycle:
-  #     Transferor : Search herd → Create Transfer → Search transferee → Select type →
-  #                  Add entitlement → Notes → Upload document → Send for acceptance
-  #     Transferee : Navigate to Transfers → Search herd → View → Enter transfer key →
-  #                  Notes → Submit to DAFM
-  #
-  #   Transfer types covered:
-  #     Section 1 : Change of Legal Entity  (code 206)
-  #     Section 2 : Change of Registration  (code 201)
-  #     Section 3 : Inheritance             (code 201)
-  #     Section 4 : Gift                    (code 202)
-  #     Section 5 : Lease                   (code 211) — includes lease year selection
-  #     Section 6 : Division                (code 204)
-  #     Section 7 : Sale                    (code 212)
-  #
-  # Migrated from: TC_01_ENTS.feature (legacy 8 separate scenarios)
-  #   TC_01 → Section 1    TC_02 → Section 2    TC_03 → Section 3    TC_04 → Section 4
-  #   TC_05 → Section 5    TC_07 → Section 6    TC_08 → Section 7
-  #
-  # Notes:
-  #   1. Herd numbers are hardcoded test fixtures — update in TestData.xlsx if they expire.
-  #   2. Each transfer uses 0.01 entitlement units as a minimal regression test value.
-  #   3. The transferee acceptance uses the transfer key captured during the transferor flow.
-  #   4. Steps are designed for reuse across TC_02_ENTS (different agent transfers) if needed.
-  #
-  # Author : Aniket Pathare | aniket.pathare@government.ie
-  # Created: 31-03-2026
-  # --------------------------------------------------------------------------------------------------------------------
+package stepdefinitions.ENTS;
 
-  Background:
-    Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "NR/CISYF" tab on the My Clients page
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import org.junit.jupiter.api.Assertions;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
+import utilities.ObjReader;
 
-  @regression @transfers @e2e @tc13
-  Scenario: AT-ENTS-Appeal-E2E - Verify Appeal submission for Category BC
+import java.util.Locale;
+import java.util.Map;
+import java.util.logging.Logger;
 
-    And the agent searches for the NRCISYF herd and opens the application
-    And the agent opens the NRCISYF Apply or Edit dialog
-    And the agent resets all category selections
-    And the agent selects NRCISYF categories
-      | B. National Reserve (as New Farmer)               |
-      | C. Complementary income Support for Young Farmers |
-    And the agent proceeds past the category selection
+import static commonFunctions.CommonFunctions.iAction;
 
-    And the agent selects farming entity "Individual"
-    And the agent proceeds to the qualification step
-    When the agent completes the qualification details
-      | hasQualification   | Yes                             |
-      | dateOfCompletion   | 01/01/2026                      |
-      | certificateAwarded | Yes                             |
-      | college            | Athlone Institute of Technology |
-      | qualification      | FETAC Certificate in Farming    |
+public class TC_08_ENTS
+{
+    private static final Logger log = Logger.getLogger(TC_08_ENTS.class.getName());
 
-    And the agent proceeds to the summary step
-    When the agent uploads NRCISYF documents
-      | Upload Invoice/Receipt                                             |
-      | Upload Bank Statement Extract with Invoice/Receipt Passing through |
-      | Qualifications certificate or Confirmation of Education Form       |
-      | Personal and Sensitive Documentation                               |
+    // Token that makes step 1 pick an individual from the Individual Login query before logging in
+    private static final String TRANSFEROR_LOGIN_TOKEN = "{transferor.login}";
 
-    And the agent saves and proceeds to the declaration step
-    And the agent submits the NRCISYF application with declaration
-    Then the NRCISYF application should be submitted successfully
-    And Validate if Appeal can be made sucessfully
+
+    // ===================================================================================================================================
+    //  LOGIN AS THE TRANSFEROR (agent, individual or ETF partner)
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the individual logs in as transferor {string}
+    // Description   : Logs in from the Keycloak page as the given user. The password comes from the TestData Password
+    //                 column (TD:Password), the same for every user.
+    //                 {transferor.login}: picks an unused individual (herd + login) from the Individual Login query first
+    //                 (EntsTestData.nextIndividualTransferor) and logs that individual in; the create step of the section
+    //                 then picks the transferee.
+    //                 For an individual login (anything that is not aga* / agr*) the personal details dialog is closed
+    //                 when shown (ents.personal.details.seconds, default 5).
+    // Parameters    : pUsername (String) - login name, e.g. "aga6060", "FARMBLUE", or {transferor.login}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login, individual pick)
+    // ***************************************************************************************************************************************************************************************
+    @When("the individual logs in as transferor {string}")
+    public void theIndividualLogsInAsTransferor(String pUsername)
+    {
+        String iRaw = pUsername == null ? "" : pUsername.trim();
+
+        if (TRANSFEROR_LOGIN_TOKEN.equalsIgnoreCase(iRaw))
+        {
+            EntsTestData.nextIndividualTransferor("individual transferor");
+        }
+
+        String iUsername = EntsTestData.resolve(iRaw);
+        log.info("[STEP] When the individual logs in as transferor: " + iUsername);
+
+        Assertions.assertFalse(iUsername == null || iUsername.isEmpty(), "No login to use in 'the individual logs in as transferor'.");
+
+        EntsSession.loginAs(iUsername, "[LOGIN]");
+
+        if (isIndividual(iUsername))
+        {
+            EntsSession.closePersonalDetailsIfShown(ConfigManager.getInt("ents.personal.details.seconds", 5));
+        }
+    }
+
+    // Agent and ETF partner logins start with "aga" / "agr"; everything else is treated as an individual
+    private static boolean isIndividual(String pUsername)
+    {
+        String iLower = pUsername.toLowerCase(Locale.ROOT);
+        return EntsTestData.isIndividualLogin(pUsername) || !(iLower.startsWith("aga") || iLower.startsWith("agr"));
+    }
+
+
+    // ===================================================================================================================================
+    //  INDIVIDUAL CREATES THE TRANSFER
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the individual creates a transfer application with the following details (DataTable)
+    // Description   : The individual is already on their own Transfers page, so this step goes straight to
+    //                 Create Transfer, searches the transferee, picks the transfer type, adds the entitlement row with
+    //                 the highest available value (lease year for a Lease), recovers from the leased-entitlements
+    //                 error like TC_01_ENTS, and types the notes. No herd search and no document upload.
+    //
+    //                 DataTable keys:
+    //                   transfereeHerd  (String) - herd number, or {transferee.herd}
+    //                   transfereeName  (String) - full name,   or {transferee.name}
+    //                   transfereeAgent (String) - OPTIONAL. Agent / ETF partner who manages the transferee: with tokens the
+    //                                              transferee is picked from that agent's pool (TC_08 / TC_10)
+    //                   transfereeType  (String) - OPTIONAL. "Individual": the transferee is another individual, picked
+    //                                              from the Individual Login query (TC_09)
+    //                   transferType    (String) - transfer type, e.g. "Gift of Entitlements"
+    //                   entitlements    (String) - amount to transfer, e.g. "0.01"
+    //                   leaseYear       (String) - OPTIONAL. "Yes" for a Lease
+    //                   notes           (String) - notes for the transfer summary
+    //
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
+    // ***************************************************************************************************************************************************************************************
+    @And("the individual creates a transfer application with the following details")
+    public void theIndividualCreatesATransferApplication(DataTable pDataTable)
+    {
+        log.info("[STEP] And the individual creates a transfer application with the following details");
+
+        Map<String, String> iRaw = pDataTable.asMap(String.class, String.class);
+
+        // Second half of the pair (the login step picked the individual transferor)
+        if (EntsTestData.tableHasToken(iRaw))
+        {
+            String iPurpose = iRaw.getOrDefault("transferType", "").trim();
+            if ("Individual".equalsIgnoreCase(iRaw.getOrDefault("transfereeType", "").trim()))
+            {
+                EntsTestData.completePairWithIndividualTransferee(iPurpose);
+            }
+            else
+            {
+                EntsTestData.completePairWithAgentTransferee(iRaw.getOrDefault("transfereeAgent", "").trim(), iPurpose);
+            }
+        }
+
+        Map<String, String> iData = EntsTestData.resolveTable(iRaw);
+
+        String  iTransfereeHerd = iData.get("transfereeHerd").trim();
+        String  iTransfereeName = iData.get("transfereeName").trim();
+        String  iTransferType   = iData.get("transferType").trim();
+        String  iEntitlements   = iData.get("entitlements").trim();
+        String  iNotes          = iData.get("notes").trim();
+        boolean iHasLeaseYear   = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
+
+        // Create Transfer Application (the individual is already on their own Transfers page)
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
+
+        // Search for the transferee; when the same herd is returned twice, select the row with no End Date.
+        // "No transferee matches were found" (02-10-2026): the transferee is managed by another agent, so its portal name
+        // cannot be read first and the DB name can differ. With runtime data the transferee is replaced (same agent pool)
+        // and searched again in the same dialog, up to ents.transferee.retries times (default 3).
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
+        boolean iRuntime = EntsTestData.tableHasToken(iRaw);
+        int     iMax     = iRuntime ? Math.max(1, ConfigManager.getInt("ents.transferee.retries", 3)) : 1;
+        for (int iTry = 1; !EntsSession.searchTransferee(iTransfereeHerd, iTransfereeName); iTry++)
+        {
+            String iReason = "Transferee Search found no match for " + iTransfereeHerd + " / '" + iTransfereeName
+                    + "' (the portal name differs from the DB name, or the herd cannot receive transfers)";
+            if (iTry >= iMax)
+            {
+                throw new IllegalStateException("[TRANSFER] " + iReason
+                        + (iRuntime ? " - tried " + iMax + " transferee(s), see ents.transferee.retries" : ""));
+            }
+            log.warning("[TRANSFER] Try " + iTry + "/" + iMax + ": " + iReason + " - picking another transferee.");
+            EntsTestData.replaceTransferee(iReason, iTransferType);
+            Map<String, String> iRetry = EntsTestData.resolveTable(iRaw);
+            iTransfereeHerd = iRetry.get("transfereeHerd").trim();
+            iTransfereeName = iRetry.get("transfereeName").trim();
+        }
+
+        // Transfer type, Next, highest entitlement row + lease year + Add + Next, leased-entitlements recovery
+        TC_01_ENTS.selectTransferType(iTransferType);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+        TC_01_ENTS.addEntitlementAndContinue(iEntitlements, iHasLeaseYear);
+        iTransferType = TC_01_ENTS.handleLeasedEntitlementsError(iTransferType, iEntitlements);
+
+        // Notes
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+
+        log.info("Individual transfer created | Type=" + iTransferType + " | Transferor login=" + EntsTestData.loggedInUser()
+                + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
+    }
+
+
+    // ===================================================================================================================================
+    //  AGENT LOGS IN AS THE TRANSFEREE
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent logs in as transferee agent {string}
+    // Description   : Logs out of the individual session and logs in as the agent. The feature file then opens
+    //                 Home -> My Clients -> Transfers itself, as in the Selenium version.
+    // Parameters    : pAgentUsername (String) - agent login, e.g. "aga6325", or {transferee.agent}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login)
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent logs in as transferee agent {string}")
+    public void theAgentLogsInAsTransfereeAgent(String pAgentUsername)
+    {
+        String iUsername = EntsTestData.resolve(pAgentUsername);
+        log.info("[STEP] When the agent logs in as transferee agent: " + iUsername);
+
+        EntsSession.logout();
+        EntsSession.loginAs(iUsername, "[LOGIN-TRANSFEREE-AGENT]");
+
+        log.info("Agent logged in as transferee: " + iUsername);
+    }
+
+
+    // ===================================================================================================================================
+    //  AGENT ACCEPTS THE TRANSFER
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent completes the same agent transferee acceptance flow (DataTable)
+    // Description   : Searches the transferee herd in the agent's Transfer Out list, opens its first not-expired row,
+    //                 then runs the acceptance screens (EntsSession.acceptWithTransferKey): ETF button or View Transfer
+    //                 Application, the captured transfer key, notes, Submit Application to DAFM, T&C, confirm.
+    //
+    //                 DataTable keys:
+    //                   transfereeHerd (String) - herd number, or {transferee.herd}
+    //                   notes          (String) - transferee notes, e.g. "Approved Test"
+    //
+    //                 Depends on the key captured by TC_01_ENTS "the transfer key should be captured".
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent completes the same agent transferee acceptance flow")
+    public void theAgentCompletesTheSameAgentTransfereeAcceptanceFlow(DataTable pDataTable)
+    {
+        log.info("[STEP] And the agent completes the same agent transferee acceptance flow");
+
+        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
+        String iNotes          = iData.get("notes").trim();
+        String iTransferKey    = TC_01_ENTS.iCapturedTransferKey;
+
+        Assertions.assertFalse(iTransferKey == null || iTransferKey.isEmpty(),
+                "Transfer key must have been captured in the Transferor flow before the agent can accept.");
+
+        EntsSession.openTransferOutHerd(iTransfereeHerd);
+        log.info("Transferee herd opened: " + iTransfereeHerd);
+
+        EntsSession.acceptWithTransferKey(iTransferKey, iNotes);
+
+        log.info("Agent transferee acceptance completed for herd: " + iTransfereeHerd
+                + " | login=" + EntsTestData.loggedInUser());
+    }
+}
