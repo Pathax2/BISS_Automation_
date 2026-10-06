@@ -1,137 +1,125 @@
+// ===================================================================================================================================
+// File          : LoginScreens.java
+// Package       : commonFunctions
+// Description   : Keycloak screens that can appear between two login steps, shared by every BISS and ENTS login
+//                 (TC_03, TC_18, TC_01_Login, EntsSession.loginAs).
+//
+//                 skipNewUserScreens - the new-user introduction screens ("Next" button, id=next, up to 7 screens).
+//                   They were handled only after the PIN screen. On 06-10-2026 they appeared straight after the password
+//                   Login click, before the OTP box, and the login failed waiting for the OTP box. Every login now calls
+//                   this right after the password Login click (and the re-logins also after the PIN Login click).
+//
+//                 No extra wait on a normal login: the method waits for the FIRST of the screens that can follow
+//                 (Next, PIN, OTP / TOTP, mobile number, Terms and Conditions, a Keycloak message such as Account
+//                 Expired) and returns at once when it is not the Next screen.
+//
+//                 Settings (application.properties):
+//                   login.screen.wait.seconds  - how long to wait for the next login screen (default 15)
+//                   login.newuser.next.max     - most Next clicks before giving up (default 10)
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 06-10-2026
+// ===================================================================================================================================
 
-    // ===================================================================================================================================
-    //  LOGIN
-    // ===================================================================================================================================
+package commonFunctions;
+
+import com.microsoft.playwright.Locator;
+import utilities.ConfigManager;
+import utilities.ObjReader;
+
+public final class LoginScreens
+{
+    // Keycloak message box (Account Expired, Invalid username or password, ...)
+    private static final String FEEDBACK_XPATH = "//*[contains(@class,'kc-feedback-text')]";
+
+    // Mobile number form shown after the PIN for some users (same XPath as TC_03 / EntsSession)
+    private static final String MOBILE_NUMBER_XPATH = "//form[@id='kc-totp-login-form']//input[@id='mobile_number']";
+
+    private LoginScreens() { }
+
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : loginAs
-    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
-    //                 Same sequence as the Selenium ENTS login steps:
-    //                   username -> Continue -> password (TD:Password) -> Login
-    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
-    //                   otherwise :  OTP 111111 -> Login
-    //                 If the username box is not on screen (for example after an earlier section left the portal open),
-    //                 the base URL is opened first.
-    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
-    //
-    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
-    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
-    //                 and then logged in again as the same expired ENTS user, which could never succeed.
-    //
-    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
-    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Function Name : skipNewUserScreens
+    // Description   : Waits for the next login screen and, while it is a new-user introduction screen, clicks Next.
+    //                 Returns as soon as a PIN, OTP / TOTP, mobile number, Terms and Conditions or Keycloak message
+    //                 screen is shown, so a login without the new-user screens loses no time.
+    //                 When none of these screens shows within login.screen.wait.seconds, it logs a warning and returns;
+    //                 the caller's next action then fails with its own message.
+    // Parameters    : pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Returns       : int - how many times Next was clicked (0 on a normal login)
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
+    // Date Created  : 06-10-2026
     // ***************************************************************************************************************************************************************************************
-    static void loginAs(String pUsername, String pLogPrefix)
+    public static int skipNewUserScreens(String pLogPrefix)
     {
-        log.info(pLogPrefix + " Logging in as: " + pUsername);
+        int    iWait     = ConfigManager.getInt("login.screen.wait.seconds", 15);
+        int    iMax      = ConfigManager.getInt("login.newuser.next.max", 10);
+        String iNext     = ObjReader.getLocator("iNextBtnNewUser");
+        String iAnyNext  = String.join(" | ",
+                iNext,
+                ObjReader.getLocator("iPinForm"),
+                ObjReader.getLocator("iOPTtxtbox"),
+                ObjReader.getLocator("iTOTPtextbox"),
+                ObjReader.getLocator("iAcceptTermsCheckbox"),
+                MOBILE_NUMBER_XPATH,
+                FEEDBACK_XPATH);
 
-        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
+        int iClicks = 0;
+        while (true)
         {
-            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
-            UiHelpers.navigateTo(Hooks.iUrl);
-        }
-
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
-
-        // -- Account Expired -------------------------------------------------------------------------------------
-        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
-        if (isVisible(iExpiredXpath, PROBE_SECONDS))
-        {
-            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
-                    + ". Use another login in the feature file or ask for the account to be renewed.");
-        }
-
-        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
-        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
-        {
-            log.info(pLogPrefix + " PIN screen detected.");
-            fillPinSlots(pLogPrefix);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
-            log.info(pLogPrefix + " PIN login submitted.");
-
-            enterMobileNumberIfAsked(pLogPrefix);
-
-            acceptTermsIfShown(pLogPrefix, 2);
-
-            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
-            for (int iNext = 1; iNext <= 7; iNext++)
+            if (!UiHelpers.isVisible(UiHelpers.byXpath(iAnyNext), iWait))
             {
-                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
-                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
+                CommonFunctions.log.warning(pLogPrefix + " No login screen (Next, PIN, OTP, Terms, message) shown within "
+                        + iWait + " s" + (iClicks == 0 ? "." : " after " + iClicks + " Next click(s)."));
+                return iClicks;
             }
 
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
-            log.info(pLogPrefix + " TOTP submitted.");
+            if (!shownNow(iNext)) break;
 
-            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
+            if (iClicks >= iMax)
+            {
+                throw new IllegalStateException(pLogPrefix + " The new-user Next screen is still shown after " + iMax
+                        + " clicks (login.newuser.next.max).");
+            }
+
+            CommonFunctions.iAction("CLICK", "XPATH", iNext, null);
+            iClicks++;
+            CommonFunctions.log.info(pLogPrefix + " New-user screen - Next clicked (" + iClicks + ")");
+            waitUntilGone(iNext);
         }
-        else
+
+        if (iClicks > 0)
         {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
-            log.info(pLogPrefix + " OTP login submitted.");
+            CommonFunctions.log.info(pLogPrefix + " New-user screens done - Next clicked " + iClicks + " time(s).");
         }
-
-        EntsTestData.setLoggedInUser(pUsername);
-        log.info(pLogPrefix + " Login complete----------------------------------------------------------: " + pUsername);
+        return iClicks;
     }
 
-    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
-    private static void fillPinSlots(String pLogPrefix)
+    // true when the first match is visible right now (no waiting)
+    private static boolean shownNow(String pXpath)
     {
-        for (int idx = 1; idx <= 7; idx++)
+        try
         {
-            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
-
-            if (!isVisible(iSlotXpath, 1))
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
-                continue;
-            }
-
-            Locator iInput = xp(iSlotXpath).first();
-            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
-            {
-                iInput.fill("");
-                iInput.pressSequentially("1");
-                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
-            }
-            else
-            {
-                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
-            }
+            return UiHelpers.byXpath(pXpath).first().isVisible();
+        }
+        catch (RuntimeException iGone)
+        {
+            return false;
         }
     }
 
-    // Mobile number form shown by Keycloak after the PIN for some users (seen for individuals, TC_03_IND 25-09-2026)
-    private static final String MOBILE_NUMBER_INPUT_XPATH = "//form[@id='kc-totp-login-form']//input[@id='mobile_number']";
-    private static final String MOBILE_VALIDATE_BTN_XPATH = "//form[@id='kc-totp-login-form']//button[@id='kc-login']";
-
-    // Enters login.test.mobile (default 1111111111) and clicks Validate when the mobile number form is shown
-    private static void enterMobileNumberIfAsked(String pLogPrefix)
+    // After a Next click the same button is on the next screen too: wait briefly for the page to change so the
+    // loop does not see the old button again. A page that keeps the button in place simply ends the wait.
+    private static void waitUntilGone(String pXpath)
     {
-        if (!isVisible(MOBILE_NUMBER_INPUT_XPATH, 2)) return;
-
-        String iMobile = ConfigManager.getOrDefault("login.test.mobile", "1111111111").trim();
-        iAction("TEXTBOX", "XPATH", MOBILE_NUMBER_INPUT_XPATH, iMobile);
-        iAction("CLICK",   "XPATH", MOBILE_VALIDATE_BTN_XPATH, null);
-        log.info(pLogPrefix + " Mobile number form shown - entered " + iMobile + " and clicked Validate.");
-    }
-
-    // Ticks and accepts Terms & Conditions when the screen is shown
-    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
-    {
-        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
+        Locator iButton = UiHelpers.byXpath(pXpath).first();
+        try
         {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
-            log.info(pLogPrefix + " Terms & Conditions accepted.");
+            UiHelpers.waitHidden(iButton, 1);
+        }
+        catch (RuntimeException iStillShown)
+        {
+            // same element kept between screens - the loop checks it again
         }
     }
+}
