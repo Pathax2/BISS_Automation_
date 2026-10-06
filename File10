@@ -1,323 +1,644 @@
 // ===================================================================================================================================
-// File          : TC_14_ENTS.java
+// File          : EntsSession.java
 // Package       : stepdefinitions.ENTS
-// Description   : ETF Authorisation steps (TC_14_ENTS - an individual adds an ETF authorisation, the ETF partner checks it).
+// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
 //
-//                 Steps in this file (3):
-//                   1. the individual adds ETF authorisation with the following details (DataTable)
-//                   2. the ETF partner searches for herd {string} and opens it
-//                   3. the ETF authorisation should be visible
+//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
+//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
+//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
+//                 themselves keep the same Gherkin text as before.
 //
-//                 Playwright edition (22-09-2026):
-//                   - Same step texts, same ObjectRepository keys, same flow.
-//                   - Step 1 checks its Object Repository keys before the first click.
-//                   - Step 2 uses EntsSession.openTransferOutHerd, which waits for the row of THAT herd and skips rows
-//                     marked expired, instead of Thread.sleep + the first View link.
-//                   - Step 3 is unchanged on purpose: the Selenium version only checks that "Create Transfer Application"
-//                     is shown on the herd page, not the authorisation row itself.
+//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
 //
-//                 Random ETF (06-10-2026):
-//                   - etfCode = {random} picks an ETF from the "Select one ETF" dropdown at random. Only ETFs that are not
-//                     already on the authorisation table and that have a partner login in ENTS_DATA are picked, so a data
-//                     refresh no longer breaks the test (SMYTH, SHEILA - [ETF00009] disappeared from the dropdown).
-//                   - The ETF code and its partner login are kept for the tokens {etf.code} and {etf.partner}; the feature
-//                     re-logs in as "{etf.partner}" instead of a fixed agr15512.
-//                   - A typed etfCode still works: "SMYTH, SHEILA - [ETF00009]" or just "ETF00009". The option is found by
-//                     the code in the brackets, so a changed name in front of the code does not matter.
-//                   - The table keys use an {ETF} placeholder (iETF00009TableRow, iETF00009DeleteBtn), filled with the
-//                     code in play. The key names are kept from Selenium.
-//                   - Change from Selenium: when a typed ETF is already on the table, the row is removed (Remove +
-//                     confirm) and added again. Selenium clicked Delete, Remove and then Edit on the removed row, which
-//                     cannot work. iETF00009EditBtn and UpdateETABtn are no longer used.
+//                 24-09-2026: selectOpenTransfereeMatch added. The Transferee Search dialog can return the same herd
+//                 twice ("2 matches found. Please select one:"); the row with no End Date is selected.
+//
+//                 30-09-2026 (TC_05_ENTS / TC_06_ENTS, individual logins):
+//                   - loginAs fills the "mobile number" form when Keycloak shows it after the PIN (same form and value
+//                     as TC_03.enterMobileNumberIfAsked: login.test.mobile, default 1111111111).
+//                   - logout skips the Exit / Logout clicks when the Exit link is not on screen (already logged out, e.g.
+//                     right after "the transfer should be submitted successfully"), instead of waiting for them to fail.
+//                   - closePersonalDetailsIfShown closes the personal details dialog an individual can get after login.
+//                   - acceptWithTransferKey holds the transferee acceptance screens (ETF button or View, key, notes,
+//                     Submit to DAFM, T&C, confirm) that TC_05, TC_07 and TC_08 all share.
+//                 02-10-2026: searchTransferee fills and runs the Transferee Search dialog and returns false on
+//                 "No transferee matches were found" (the DB name of a herd managed by another agent can differ from the
+//                 portal name). The create steps then replace the transferee and search again in the same dialog.
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright) | 06-10-2026 (random ETF, {etf.partner})
+// Date Created  : 22-09-2026 | Updated: 24-09-2026 (transferee multi-match), 30-09-2026 (individual logins), 02-10-2026 (no match)
+//                                       06-10-2026 (loginAs: new-user Next screens straight after the password Login click)
 // ===================================================================================================================================
 
 package stepdefinitions.ENTS;
 
 import com.microsoft.playwright.Locator;
+import commonFunctions.CommonFunctions;
 import commonFunctions.UiHelpers;
-import io.cucumber.datatable.DataTable;
-import io.cucumber.java.en.*;
 import stepdefinitions.Hooks;
 import utilities.ConfigManager;
 import utilities.EntsTestData;
 import utilities.ObjReader;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 import java.util.logging.Logger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static commonFunctions.CommonFunctions.iAction;
-import static stepdefinitions.ENTS.EntsSession.isVisible;
 
-public class TC_14_ENTS
+final class EntsSession
 {
-    private static final Logger log = Logger.getLogger(TC_14_ENTS.class.getName());
+    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
 
-    // ETF code inside an option or a table cell, e.g. "SMYTH, SHEILA - [ETF00009]" -> ETF00009
-    private static final Pattern ETF_CODE = Pattern.compile("\\b(ETF\\d+)\\b", Pattern.CASE_INSENSITIVE);
+    // How long an "if present" check waits before deciding the element is not there
+    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
 
-    // ETF code cells of the Entitlements Transfer Facilitator table (first column holds the code only)
-    private static final String TABLE_CODE_CELLS_XPATH = "//tr[contains(@class,'mat-mdc-row')]/td[contains(@class,'mat-column-name')]";
+    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
+    static final String TRANSFERS_TAB_XPATH =
+            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
 
-    // Options of the open "Select one ETF" panel (rendered in the CDK overlay, outside the dialog)
-    private static final String ETF_OPTIONS_XPATH = "//div[contains(@class,'cdk-overlay-pane')]//mat-option";
-
-    // How long to wait for the table, the option list and the new row (ents.etf.wait.seconds, default 15)
-    private static final int WAIT_SECONDS = ConfigManager.getInt("ents.etf.wait.seconds", 15);
+    private EntsSession() { }
 
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the individual adds ETF authorisation with the following details (DataTable)
-    // Description   : Allow Entitlement -> (typed ETF already on the table: Remove + confirm) -> Add ETF Authorisation ->
-    //                 pick the ETF -> the two limits -> confirm. The ETF and its partner login are kept for {etf.code}
-    //                 and {etf.partner}.
-    //
-    //                 DataTable keys:
-    //                   etfCode          (String) - {random}, or the ETF as shown in the dropdown, e.g.
-    //                                               "SMYTH, SHEILA - [ETF00009]", or just "ETF00009"
-    //                   txorEntsAllowed  (String) - entitlements allowed as transferor, e.g. "2"
-    //                   txeeEntsAllowed  (String) - entitlements allowed as transferee, e.g. "3"
-    //
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright) | 06-10-2026 (random ETF)
-    // ***************************************************************************************************************************************************************************************
-    @And("the individual adds ETF authorisation with the following details")
-    public void theIndividualAddsETFAuthorisation(DataTable pDataTable)
+    // ===================================================================================================================================
+    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
+    // ===================================================================================================================================
+
+    // Locator for a raw XPath
+    static Locator xp(String pXpath)
     {
-        log.info("[STEP] And the individual adds ETF authorisation with the following details");
-
-        EntsSupport.requireKeys("the individual adds ETF authorisation with the following details",
-                "iAllowEntitlementBtn", "iETF00009TableRow", "iETF00009DeleteBtn", "iRemoveETABtn",
-                "iAddETFAuthorisationBtn", "iETFAvailableDropdown", "iTxorEntsAllowedField",
-                "iTxeeEntsAllowedField", "iAddETFAuthorisationConfirmBtn");
-
-        Map<String, String> iData = pDataTable.asMap(String.class, String.class);
-
-        String  iEtfWanted = value(iData, "etfCode");
-        String  iTxor      = EntsTestData.resolve(value(iData, "txorEntsAllowed"));
-        String  iTxee      = EntsTestData.resolve(value(iData, "txeeEntsAllowed"));
-        boolean iRandom    = iEtfWanted.isEmpty() || "{random}".equalsIgnoreCase(iEtfWanted) || "random".equalsIgnoreCase(iEtfWanted);
-        String  iWantedCode = iRandom ? "" : codeOf(iEtfWanted);
-
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iAllowEntitlementBtn"), null);
-        isVisible(ObjReader.getLocator("iAddETFAuthorisationBtn"), WAIT_SECONDS);
-
-        Set<String> iOnTable = codesOnTable();
-        log.info("[ETF-AUTH] ETFs already authorised: " + (iOnTable.isEmpty() ? "none" : iOnTable));
-
-        if (!iWantedCode.isEmpty() && iOnTable.contains(iWantedCode))
-        {
-            removeExistingRow(iWantedCode);
-        }
-
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iAddETFAuthorisationBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iETFAvailableDropdown"), null);
-
-        if (!isVisible(ETF_OPTIONS_XPATH, WAIT_SECONDS))
-        {
-            throw new IllegalStateException("[ETF-AUTH] The \"Select one ETF\" list did not open within " + WAIT_SECONDS + " s.");
-        }
-
-        List<Locator> iOptions = UiHelpers.findAll(UiHelpers.byXpath(ETF_OPTIONS_XPATH));
-        List<String>  iTexts   = new ArrayList<>();
-        for (Locator iOption : iOptions) iTexts.add(iOption.innerText().trim());
-        log.info("[ETF-AUTH] " + iTexts.size() + " ETF(s) in the dropdown.");
-
-        int iIndex = iRandom ? pickRandomOption(iTexts, iOnTable) : findOption(iTexts, iEtfWanted, iWantedCode);
-
-        String iOptionText = iTexts.get(iIndex);
-        String iCode       = codeOf(iOptionText);
-        String iPartner    = iCode.isEmpty() ? "" : EntsTestData.etfLogins().getOrDefault(iCode, "");
-
-        iOptions.get(iIndex).click();
-        EntsTestData.setEtf(iCode, iPartner);
-        log.info("[ETF-AUTH] Selected " + (iRandom ? "random " : "") + "ETF: " + iOptionText
-                + (iPartner.isEmpty() ? "" : " | partner login " + iPartner));
-
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTxorEntsAllowedField"), iTxor);
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTxeeEntsAllowedField"), iTxee);
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAddETFAuthorisationConfirmBtn"), null);
-
-        if (!iCode.isEmpty() && isVisible(etfXpath("iETF00009TableRow", iCode), WAIT_SECONDS))
-        {
-            log.info("[ETF-AUTH] ETF authorisation added: " + iCode + " | txor=" + iTxor + " txee=" + iTxee);
-        }
-        else
-        {
-            log.warning("[ETF-AUTH] " + (iCode.isEmpty() ? iOptionText : iCode) + " was submitted but its row is not on the "
-                    + "table after " + WAIT_SECONDS + " s - see the screenshot.");
-        }
+        return UiHelpers.byXpath(pXpath);
     }
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the ETF partner searches for herd {string} and opens it
-    // Description   : Searches the herd in the ETF partner's list and opens its first not-expired row.
-    // Parameters    : pHerd (String) - herd number, e.g. "Y104069X" (a runtime token also works)
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
-    // ***************************************************************************************************************************************************************************************
-    @And("the ETF partner searches for herd {string} and opens it")
-    public void theETFPartnerSearchesForHerdAndOpensIt(String pHerd)
+    // True when the first match becomes visible within pSeconds - never throws
+    static boolean isVisible(String pXpath, int pSeconds)
     {
-        String iHerd = EntsTestData.resolve(pHerd);
-        log.info("[STEP] And the ETF partner searches for herd " + iHerd + " and opens it");
-
-        EntsSession.openTransferOutHerd(iHerd);
+        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
     }
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the ETF authorisation should be visible
-    // Description   : Same check as Selenium: the herd page shows "Create Transfer Application" for the ETF partner.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
-    // ***************************************************************************************************************************************************************************************
-    @Then("the ETF authorisation should be visible")
-    public void theETFAuthorisationShouldBeVisible()
+    // Immediate count, no waiting - same as findElements(...).size()
+    static int countOf(String pXpath)
     {
-        log.info("[STEP] Then the ETF authorisation should be visible");
-        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
+        return xp(pXpath).count();
+    }
+
+    // Replacement for Thread.sleep
+    static void pause(long pMilliseconds)
+    {
+        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
     }
 
 
     // ===================================================================================================================================
-    //  HELPERS
+    //  LOGIN
     // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : pickRandomOption
-    // Description   : Index of a random dropdown option whose ETF is not on the table yet, has a partner login in ENTS_DATA
-    //                 and whose login has not been seen expired in this run. Fails with the counts when none is left.
-    // Parameters    : pTexts (List<String>) - option texts | pOnTable (Set<String>) - ETF codes already authorised
-    // Returns       : int - option index
+    // Function Name : loginAs
+    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
+    //                 Same sequence as the Selenium ENTS login steps:
+    //                   username -> Continue -> password (TD:Password) -> Login
+    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
+    //                   otherwise :  OTP 111111 -> Login
+    //                 If the username box is not on screen (for example after an earlier section left the portal open),
+    //                 the base URL is opened first.
+    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
+    //
+    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
+    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
+    //                 and then logged in again as the same expired ENTS user, which could never succeed.
+    //
+    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
+    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 06-10-2026
+    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
     // ***************************************************************************************************************************************************************************************
-    private static int pickRandomOption(List<String> pTexts, Set<String> pOnTable)
+    static void loginAs(String pUsername, String pLogPrefix)
     {
-        Map<String, String> iLogins     = EntsTestData.etfLogins();
-        List<Integer>       iCandidates = new ArrayList<>();
-        int iNoCode = 0, iAuthorised = 0, iNoLogin = 0, iExpired = 0;
+        log.info(pLogPrefix + " Logging in as: " + pUsername);
 
-        for (int i = 0; i < pTexts.size(); i++)
+        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
         {
-            String iCode = codeOf(pTexts.get(i));
-            if (iCode.isEmpty())                  { iNoCode++;     continue; }
-            if (pOnTable.contains(iCode))         { iAuthorised++; continue; }
-            String iLogin = iLogins.get(iCode);
-            if (iLogin == null || iLogin.isEmpty()) { iNoLogin++;  continue; }
-            if (Hooks.EXPIRED_AGENTS.contains(iLogin)) { iExpired++; continue; }
-            iCandidates.add(i);
+            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
+            UiHelpers.navigateTo(Hooks.iUrl);
         }
 
-        log.info("[ETF-AUTH] Random pick from " + iCandidates.size() + " ETF(s) | skipped: " + iAuthorised + " already authorised, "
-                + iNoLogin + " without a partner login, " + iExpired + " with an expired login, " + iNoCode + " without an ETF code");
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
 
-        if (iCandidates.isEmpty())
+        // New-user Next screens can show straight after the password (seen 06-10-2026), not only after the PIN
+        commonFunctions.LoginScreens.skipNewUserScreens(pLogPrefix);
+
+        // -- Account Expired -------------------------------------------------------------------------------------
+        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
+        if (isVisible(iExpiredXpath, PROBE_SECONDS))
         {
-            throw new IllegalStateException("[ETF-AUTH] No ETF in the dropdown can be used: " + pTexts.size() + " option(s), "
-                    + iAuthorised + " already authorised, " + iNoLogin + " without a partner login in ENTS_DATA, " + iExpired
-                    + " with an expired login. Remove an authorisation from the table or type an etfCode in the feature file.");
+            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
+                    + ". Use another login in the feature file or ask for the account to be renewed.");
         }
 
-        Collections.shuffle(iCandidates);
-        return iCandidates.get(0);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : findOption
-    // Description   : Index of the option for a typed etfCode: by the ETF code when one is given, otherwise by the full text
-    //                 (case and outer spaces ignored). Fails with the first options when it is not in the dropdown.
-    // Parameters    : pTexts (List<String>) - option texts | pWanted (String) - etfCode cell | pCode (String) - its ETF code
-    // Returns       : int - option index
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 06-10-2026
-    // ***************************************************************************************************************************************************************************************
-    private static int findOption(List<String> pTexts, String pWanted, String pCode)
-    {
-        for (int i = 0; i < pTexts.size(); i++)
+        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
+        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
         {
-            boolean iMatch = pCode.isEmpty()
-                    ? pTexts.get(i).equalsIgnoreCase(pWanted.trim())
-                    : pCode.equals(codeOf(pTexts.get(i)));
-            if (iMatch) return i;
-        }
-        throw new IllegalStateException("[ETF-AUTH] " + pWanted + " is not in the \"Select one ETF\" dropdown (likely gone after a "
-                + "data refresh). Use {random} in the feature file. First options: "
-                + pTexts.subList(0, Math.min(10, pTexts.size())));
-    }
+            log.info(pLogPrefix + " PIN screen detected.");
+            fillPinSlots(pLogPrefix);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+            log.info(pLogPrefix + " PIN login submitted.");
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : removeExistingRow
-    // Description   : Removes a typed ETF that is already authorised, so it can be added again: Remove in its row, the
-    //                 confirmation button when a confirmation dialog opens, then waits for the row to go.
-    // Parameters    : pCode (String) - ETF code, e.g. "ETF00009"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 06-10-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void removeExistingRow(String pCode)
-    {
-        log.info("[ETF-AUTH] " + pCode + " is already authorised - removing it before adding it again.");
-        iAction("CLICK", "XPATH", etfXpath("iETF00009DeleteBtn", pCode), null);
+            enterMobileNumberIfAsked(pLogPrefix);
 
-        if (isVisible(ObjReader.getLocator("iRemoveETABtn"), EntsSession.PROBE_SECONDS))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iRemoveETABtn"), null);
+            acceptTermsIfShown(pLogPrefix, 2);
+
+            // New-user introduction screens - click Next while it is there (Selenium clicked 7 times blindly)
+            for (int iNext = 1; iNext <= 7; iNext++)
+            {
+                if (!isVisible(ObjReader.getLocator("iNextBtnNewUser"), iNext == 1 ? PROBE_SECONDS : 1)) break;
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iNextBtnNewUser"), null);
+                log.info(pLogPrefix + " New-user Next clicked (" + iNext + ")");
+            }
+
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
+            log.info(pLogPrefix + " TOTP submitted.");
+
+            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
         }
         else
         {
-            log.info("[ETF-AUTH] No Remove confirmation shown - the row is removed directly.");
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+            log.info(pLogPrefix + " OTP login submitted.");
         }
 
-        UiHelpers.waitHidden(UiHelpers.byXpath(etfXpath("iETF00009TableRow", pCode)), WAIT_SECONDS);
-        log.info("[ETF-AUTH] " + pCode + " removed from the table.");
+        EntsTestData.setLoggedInUser(pUsername);
+        log.info(pLogPrefix + " Login complete----------------------------------------------------------: " + pUsername);
     }
 
-    // ETF codes in the first column of the authorisation table (empty when there is no row)
-    private static Set<String> codesOnTable()
+    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
+    private static void fillPinSlots(String pLogPrefix)
     {
-        Set<String> iCodes = new LinkedHashSet<>();
-        for (Locator iCell : UiHelpers.findAll(UiHelpers.byXpath(TABLE_CODE_CELLS_XPATH)))
+        for (int idx = 1; idx <= 7; idx++)
         {
-            String iCode = codeOf(iCell.innerText());
-            if (!iCode.isEmpty()) iCodes.add(iCode);
+            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+            if (!isVisible(iSlotXpath, 1))
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
+                continue;
+            }
+
+            Locator iInput = xp(iSlotXpath).first();
+            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+            {
+                iInput.fill("");
+                iInput.pressSequentially("1");
+                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
+            }
+            else
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
+            }
         }
-        return iCodes;
     }
 
-    // Object Repository XPath with the {ETF} placeholder filled in
-    private static String etfXpath(String pKey, String pCode)
+    // Mobile number form shown by Keycloak after the PIN for some users (seen for individuals, TC_03_IND 25-09-2026)
+    private static final String MOBILE_NUMBER_INPUT_XPATH = "//form[@id='kc-totp-login-form']//input[@id='mobile_number']";
+    private static final String MOBILE_VALIDATE_BTN_XPATH = "//form[@id='kc-totp-login-form']//button[@id='kc-login']";
+
+    // Enters login.test.mobile (default 1111111111) and clicks Validate when the mobile number form is shown
+    private static void enterMobileNumberIfAsked(String pLogPrefix)
     {
-        String iXpath = ObjReader.getLocator(pKey);
-        if (!iXpath.contains("{ETF}"))
+        if (!isVisible(MOBILE_NUMBER_INPUT_XPATH, 2)) return;
+
+        String iMobile = ConfigManager.getOrDefault("login.test.mobile", "1111111111").trim();
+        iAction("TEXTBOX", "XPATH", MOBILE_NUMBER_INPUT_XPATH, iMobile);
+        iAction("CLICK",   "XPATH", MOBILE_VALIDATE_BTN_XPATH, null);
+        log.info(pLogPrefix + " Mobile number form shown - entered " + iMobile + " and clicked Validate.");
+    }
+
+    // Ticks and accepts Terms & Conditions when the screen is shown
+    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
+    {
+        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
         {
-            log.warning("[ETF-AUTH] " + pKey + " has no {ETF} placeholder, so it only finds the ETF written in it.");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
+            log.info(pLogPrefix + " Terms & Conditions accepted.");
         }
-        return iXpath.replace("{ETF}", pCode);
     }
 
-    // "SMYTH, SHEILA - [ETF00009]" or "ETF00009" -> "ETF00009"; "" when the text holds no ETF code
-    private static String codeOf(String pText)
+
+    // ===================================================================================================================================
+    //  LOGOUT
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : logout
+    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
+    //                 base URL so the next login starts on a clean Keycloak page.
+    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
+    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // ***************************************************************************************************************************************************************************************
+    static void logout()
     {
-        Matcher iM = ETF_CODE.matcher(pText == null ? "" : pText);
-        return iM.find() ? iM.group(1).toUpperCase(Locale.ROOT) : "";
+        log.info("[RELOGIN] Logging out current session...");
+        try
+        {
+            if (!isVisible(ObjReader.getLocator("iExitLink"), PROBE_SECONDS))
+            {
+                // Already logged out (e.g. the submit step logged out) - nothing to click
+                log.info("[RELOGIN] Exit link not on screen - already logged out, skipping the Exit / Logout clicks.");
+                UiHelpers.clearCookies();
+                UiHelpers.navigateTo(Hooks.iUrl);
+                EntsTestData.setLoggedInUser("");
+                return;
+            }
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            }
+            log.info("[RELOGIN] Logout complete.");
+        }
+        catch (Exception e)
+        {
+            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
+        }
+
+        UiHelpers.clearCookies();
+        UiHelpers.navigateTo(Hooks.iUrl);
+        EntsTestData.setLoggedInUser("");
     }
 
-    // DataTable cell, trimmed; "" when the key is missing
-    private static String value(Map<String, String> pData, String pKey)
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : closePersonalDetailsIfShown
+    // Description   : Closes the personal details dialog an individual can get after login (the Selenium TC_05_ENTS notes
+    //                 mention a "Close personal details" dialog). Waits up to pSeconds; does nothing when it is not shown.
+    //                 The XPath is taken from the Selenium notes, not from the DOM - send the DOM if it does not match.
+    // Parameters    : pSeconds (int) - how long to wait for the dialog
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static final String PERSONAL_DETAILS_CLOSE_XPATH =
+            "//button[contains(@aria-label,'Close personal details')] | "
+                    + "//mat-dialog-container//button[contains(normalize-space(),'Close personal details')] | "
+                    + "//mat-dialog-container[.//*[contains(normalize-space(),'ersonal details')]]//button[normalize-space()='Close']";
+
+    static void closePersonalDetailsIfShown(int pSeconds)
     {
-        String iValue = pData.get(pKey);
-        return iValue == null ? "" : iValue.trim();
+        if (!isVisible(PERSONAL_DETAILS_CLOSE_XPATH, pSeconds))
+        {
+            log.info("[LOGIN-INDIVIDUAL] No personal details dialog shown.");
+            return;
+        }
+        iAction("CLICK", "XPATH", "(" + PERSONAL_DETAILS_CLOSE_XPATH + ")[1]", null);
+        log.info("[LOGIN-INDIVIDUAL] Personal details dialog closed.");
+    }
+
+
+    // ===================================================================================================================================
+    //  TRANSFEREE ACCEPTANCE SCREENS
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : acceptWithTransferKey
+    // Description   : The transferee's acceptance screens, once the transferee herd (or the individual's own Transfers
+    //                 page) is open:
+    //                   ETF button shown : ETF -> transfer key -> View Transfer Application
+    //                   otherwise        : View Transfer Application (2) -> transfer key -> View Transfer Application
+    //                 then notes, Submit Application to DAFM, T&C, confirm. Same order as every Selenium acceptance step.
+    // Parameters    : pTransferKey (String) - key captured by "the transfer key should be captured"
+    //                 pNotes       (String) - transferee notes, e.g. "Approved Test"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026 (one copy for TC_05, TC_07 and TC_08)
+    // ***************************************************************************************************************************************************************************************
+    static void acceptWithTransferKey(String pTransferKey, String pNotes)
+    {
+        if (pTransferKey == null || pTransferKey.isBlank())
+        {
+            throw new IllegalStateException("[TRANSFER] No transfer key captured - the transferor flow must run first.");
+        }
+
+        if (isVisible(ObjReader.getLocator("iETFBtn"), PROBE_SECONDS))
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
+            log.info("[TRANSFER] ETF button clicked.");
+        }
+        else
+        {
+            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
+            iAction("CLICK",       "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
+        }
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), pTransferKey);
+        log.info("[TRANSFER] Transfer key entered: " + pTransferKey);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"),      pNotes);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"),   null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        log.info("[TRANSFER] Submitted to DAFM with notes: " + pNotes);
+    }
+
+
+    // ===================================================================================================================================
+    //  TRANSFER OUT LIST - search one herd and open it
+    // ===================================================================================================================================
+
+    // Cells of a Transfer Out row (Angular mat-table column classes, checked against the DOM on 22-09-2026)
+    static final String VIEW_LINK_XPATH    = "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']";
+    static final String NAME_CELL_XPATH    = "//td[contains(@class,'mat-column-name')]";
+    static final String EXPIRED_CELL_XPATH = "//td[contains(@class,'mat-column-expired')]";
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transferOutAllRowsXpath
+    // Description   : XPath of EVERY Transfer Out row of one herd, expired or not: rows whose Herd No. cell is exactly
+    //                 the herd and that have a View link.
+    //                 One herd can have several rows, one per holder. Seen 22-09-2026 for D3990193: "Thomas Morris"
+    //                 (Expired icon shown) and "Jean Doolaghty" (not expired). Both rows hold the same herd number.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String transferOutAllRowsXpath(String pHerd)
+    {
+        return "//tr[." + VIEW_LINK_XPATH + "]"
+                + "[.//td[contains(@class,'mat-column-herdNo')][normalize-space()='" + pHerd + "']]";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transferOutRowXpath
+    // Description   : XPath of the NOT-EXPIRED Transfer Out row(s) of one herd. The row to open, name to read and View
+    //                 link to click always come from here.
+    //                 A row is expired when its Expired cell holds the red icon
+    //                   <mat-icon aria-label="red check mark for expired"> do_not_disturb_on </mat-icon>
+    //                 and not expired when that cell is empty.
+    //                 Clicking "the first View link" is not safe either: until the search result arrives the list still
+    //                 shows unfiltered rows, including TRN rows (seen 22-09-2026: a click opened TRN 26D0957T).
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
+    // ***************************************************************************************************************************************************************************************
+    static String transferOutRowXpath(String pHerd)
+    {
+        return transferOutAllRowsXpath(pHerd) + "[not(." + EXPIRED_CELL_XPATH + "//mat-icon)]";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : searchTransferOut
+    // Description   : Types the herd in the Transfer Out search box, clicks Search and waits until a row for THAT herd
+    //                 is shown (up to ents.search.seconds). Returns false when it never appears.
+    //                 Then goes through every row of the herd and logs Name + Expired for each, so the log shows which
+    //                 row will be used. Expired rows are not rejected here - see activeTransferOutRows.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (logs every row)
+    // ***************************************************************************************************************************************************************************************
+    static boolean searchTransferOut(String pHerd)
+    {
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        if (!isVisible(transferOutAllRowsXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 8)))
+        {
+            return false;
+        }
+
+        List<Locator> iRows = xp(transferOutAllRowsXpath(pHerd)).all();
+        for (int i = 0; i < iRows.size(); i++)
+        {
+            Locator iRow     = iRows.get(i);
+            boolean iExpired = iRow.locator("xpath=." + EXPIRED_CELL_XPATH + "//mat-icon").count() > 0;
+            String  iName    = "";
+            try
+            {
+                iName = iRow.locator("xpath=." + NAME_CELL_XPATH).first().innerText().trim().replaceAll("\\s+", " ");
+            }
+            catch (Exception iEx)
+            {
+                iName = "?";
+            }
+            log.info("[TRANSFER] " + pHerd + " row " + (i + 1) + "/" + iRows.size() + ": Name='" + iName + "' | "
+                    + (iExpired ? "EXPIRED - skipped" : "not expired"));
+        }
+        return true;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : activeTransferOutRows
+    // Description   : Number of NOT-expired rows of the herd currently on screen (call after searchTransferOut).
+    //                 0 means every row of the herd is expired.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static int activeTransferOutRows(String pHerd)
+    {
+        return countOf(transferOutRowXpath(pHerd));
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transferOutName
+    // Description   : Name cell of the first NOT-expired row of the herd, or "" when there is none
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String transferOutName(String pHerd)
+    {
+        String iCell = transferOutRowXpath(pHerd) + NAME_CELL_XPATH;
+        try
+        {
+            if (countOf(iCell) > 0) return xp(iCell).first().innerText().trim().replaceAll("\\s+", " ");
+        }
+        catch (Exception iEx)
+        {
+            log.warning("[TRANSFER] Could not read the portal name of " + pHerd + ": " + iEx.getMessage());
+        }
+        return "";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : clickTransferOutView
+    // Description   : Clicks View in the first NOT-expired row of the herd (the list must already show it)
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void clickTransferOutView(String pHerd)
+    {
+        if (activeTransferOutRows(pHerd) == 0)
+        {
+            throw new IllegalStateException("[TRANSFER] Every Transfer Out row of herd " + pHerd + " is marked expired - nothing to open.");
+        }
+        iAction("CLICK", "XPATH", "(" + transferOutRowXpath(pHerd) + VIEW_LINK_XPATH + ")[1]", null);
+        log.info("[TRANSFER] Opened herd " + pHerd + " ('" + transferOutName(pHerd) + "' row) from Transfer Out.");
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openTransferOutHerd
+    // Description   : searchTransferOut + clicks View in the first NOT-expired row of that herd. Fails with the herd
+    //                 number and agent in the message when the herd is not in the list or every row is expired.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
+    // ***************************************************************************************************************************************************************************************
+    static void openTransferOutHerd(String pHerd)
+    {
+        if (!searchTransferOut(pHerd))
+        {
+            throw new IllegalStateException("[TRANSFER] Herd " + pHerd + " is not in the Transfer Out list of " + EntsTestData.loggedInUser() + " (waited " + ConfigManager.getInt("ents.search.seconds", 8) + " s).");
+        }
+        clickTransferOutView(pHerd);
+    }
+
+
+    // ===================================================================================================================================
+    //  NAVIGATION
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openBissMyClientsTransfers
+    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
+    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void openBissMyClientsTransfers()
+    {
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
+    }
+
+    // ===================================================================================================================================
+    //  TRANSFEREE SEARCH DIALOG
+    // ===================================================================================================================================
+
+    // Heading shown when the transferee search returns more than one row, e.g. "2 matches found. Please select one:"
+    static final String TRANSFEREE_MATCHES_HEADING_XPATH = "//h3[contains(normalize-space(),'matches found')]";
+
+    // Result rows of the "matches found" table (first table after the heading)
+    static final String TRANSFEREE_MATCH_ROWS_XPATH = TRANSFEREE_MATCHES_HEADING_XPATH + "/following::table[1]//tbody/tr";
+
+    // Date cell of a row = the td holding a date. Its text is "14/09/2015 - " when open, "13/03/2015 - 13/09/2015" when ended.
+    // normalize-space(substring-after(.,'-')) is empty only when nothing follows the dash, i.e. there is no End Date.
+    static final String OPEN_ROW_FILTER  = "[td[contains(.,'/')][normalize-space(substring-after(.,'-'))='']]";
+    static final String ENDED_ROW_FILTER = "[td[contains(.,'/')][normalize-space(substring-after(.,'-'))!='']]";
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transfereeOpenMatchSelectXpath
+    // Description   : XPath of the Select button on the transferee row of pHerd that has no End Date.
+    //                 Example for D2681103:
+    //                 //h3[contains(normalize-space(),'matches found')]/following::table[1]//tbody/tr
+    //                   [.//span[normalize-space()='D2681103']][td[contains(.,'/')][normalize-space(substring-after(.,'-'))='']]
+    //                   //button[normalize-space()='Select']
+    // Parameters    : pHerd (String) - transferee herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 24-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String transfereeOpenMatchSelectXpath(String pHerd)
+    {
+        return TRANSFEREE_MATCH_ROWS_XPATH
+                + "[.//span[normalize-space()='" + pHerd + "']]"
+                + OPEN_ROW_FILTER
+                + "//button[normalize-space()='Select']";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : selectOpenTransfereeMatch
+    // Description   : Call right after the transferee dialog Search button (iTransferDialogSearchBtn).
+    //                   - No "matches found" heading (single match): does nothing, the flow goes on as before.
+    //                   - "N matches found. Please select one:": clicks Select on the row of pHerd with NO End Date.
+    //                   - Every row of pHerd has an End Date: fails the step with the row count, because selecting an
+    //                     ended holder would create the transfer against the wrong customer.
+    //                   - More than one open row: selects the first one and logs a warning.
+    // Parameters    : pHerd (String) - transferee herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 24-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void selectOpenTransfereeMatch(String pHerd)
+    {
+        if (!isVisible(TRANSFEREE_MATCHES_HEADING_XPATH, PROBE_SECONDS))
+        {
+            log.info("[TRANSFER] Transferee search: single match for " + pHerd + " - nothing to select.");
+            return;
+        }
+
+        String iHeading = xp(TRANSFEREE_MATCHES_HEADING_XPATH).first().innerText().trim();
+        String iHerdRows = TRANSFEREE_MATCH_ROWS_XPATH + "[.//span[normalize-space()='" + pHerd + "']]";
+        int iAllRows    = countOf(iHerdRows);
+        int iEndedRows  = countOf(iHerdRows + ENDED_ROW_FILTER);
+        String iSelectXpath = transfereeOpenMatchSelectXpath(pHerd);
+        int iOpenRows   = countOf(iSelectXpath);
+
+        log.info("[TRANSFER] Transferee search: '" + iHeading + "' | herd " + pHerd + " rows=" + iAllRows
+                + " open=" + iOpenRows + " ended=" + iEndedRows);
+
+        if (iOpenRows == 0)
+        {
+            throw new RuntimeException("[TRANSFER] Transferee " + pHerd + ": '" + iHeading + "' but no row without an End Date ("
+                    + iAllRows + " row(s) for this herd, " + iEndedRows + " ended). XPath: " + iSelectXpath);
+        }
+        if (iOpenRows > 1)
+        {
+            log.warning("[TRANSFER] Transferee " + pHerd + " has " + iOpenRows + " rows without an End Date - selecting the first.");
+        }
+
+        iAction("CLICK", "XPATH", "(" + iSelectXpath + ")[1]", null);
+        log.info("[TRANSFER] Transferee " + pHerd + ": Select clicked on the row without an End Date.");
+    }
+
+    // Red message in the Transferee Search dialog when herd + name match nobody (the name must match the portal exactly)
+    static final String TRANSFEREE_NO_MATCH_XPATH = "//*[contains(normalize-space(text()),'No transferee matches were found')]";
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : searchTransferee
+    // Description   : Fills the open Transferee Search dialog (herd + name), clicks its Search button and reads the result:
+    //                   - "No transferee matches were found": returns false and leaves the dialog open, so the caller can
+    //                     type another herd and search again in the same dialog
+    //                   - "N matches found. Please select one:": selects the row without an End Date
+    //                     (selectOpenTransfereeMatch) and returns true
+    //                   - neither within PROBE_SECONDS: a single match was taken by the dialog, returns true
+    //                 One probe covers both messages, so the single-match case waits no longer than before.
+    //                 The dialog itself must already be open (iTransferTypeSearchBtn clicked by the caller).
+    // Parameters    : pHerd (String) - transferee herd | pName (String) - transferee name as typed in the dialog
+    // Returns       : boolean - true = a transferee was selected, false = no match
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 02-10-2026
+    // ***************************************************************************************************************************************************************************************
+    static boolean searchTransferee(String pHerd, String pName)
+    {
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), pHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), pName);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
+        log.info("Transferee searched: " + pName + " (" + pHerd + ")");
+
+        boolean iAnyMessage = isVisible(TRANSFEREE_NO_MATCH_XPATH + " | " + TRANSFEREE_MATCHES_HEADING_XPATH, PROBE_SECONDS);
+
+        if (iAnyMessage && countOf(TRANSFEREE_NO_MATCH_XPATH) > 0)
+        {
+            log.warning("[TRANSFER] Transferee search: 'No transferee matches were found' for " + pHerd + " / '" + pName + "'.");
+            return false;
+        }
+
+        if (iAnyMessage && countOf(TRANSFEREE_MATCHES_HEADING_XPATH) > 0)
+        {
+            selectOpenTransfereeMatch(pHerd);
+        }
+        else
+        {
+            log.info("[TRANSFER] Transferee search: single match for " + pHerd + " - nothing to select.");
+        }
+        return true;
     }
 }
