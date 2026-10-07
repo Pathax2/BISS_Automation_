@@ -1,838 +1,1549 @@
-// ===================================================================================================================================
-// File          : TC_01_ENTS.java
-// Package       : stepdefinitions.ENTS
-// Description   : Step definitions for TC_01_ENTS — Transfer Application E2E Regression Pack (Same Agent).
+package utilities;
+
+import commonFunctions.CommonFunctions;
+import database.DBRouter;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Random;
+import java.util.Set;
+
+// =====================================================================================================================================
+// File          : EntsTestData.java
+// Package       : utilities
+// Description   : Runtime test data for the ENTS (Transfer of Entitlements) test cases.
 //
-//                 Covers the full Transferor → Transferee cycle for all 7 transfer types:
-//                   206 (Change of Legal Entity), 201 (Change of Registration / Inheritance),
-//                   202 (Gift), 211 (Lease), 204 (Division), 212 (Sale)
+//                 Replaces the herd numbers and names that were typed into the ENTS feature files. The feature file now
+//                 carries a token such as {transferor.herd}; the step that creates the transfer asks this class for a
+//                 fresh pair of herds, and every later step in the same section reads the same pair.
 //
-//                 Reused steps (defined elsewhere, bound automatically by Cucumber):
-//                   "the agent user is on the login page"                            → TC_03.java
-//                   "the individual logs in as transferor {string}"                  → TC_08_ENTS.java
-//                   "the agent opens the {string} application"                       → TC_03.java
-//                   "the agent should land on the BISS Home page"                    → TC_03.java
-//                   "the agent navigates to the {string} and {string} Left Menu Link"→ TC_03.java
-//                   "the agent switches to the {string} tab on the My Client(s) page"→ TC_06.java
-//                   "the ETF partner completes the transferee acceptance flow"       → TC_07_ENTS.java
+//                 How a pair is picked (same-agent transfers):
+//                   1. The Agent Login query runs ONCE per agent per run on the ENTS_DATA connection (DBRouter "ENTS").
+//                      Up to ents.pool.size rows come back in random order and are kept in memory for the whole run.
+//                   2. The rows are shuffled again, and every herd already listed in the used-herds file is skipped.
+//                   3. The first unused herd becomes the transferor, the next unused herd becomes the transferee.
+//                   4. Both herds are written to the used-herds file straight away, so a failed run does not hand the
+//                      same (possibly half-transferred) herds to the next run.
 //
-//                 Playwright edition (22-09-2026):
-//                   - Same step texts, same ObjectRepository keys, same flow.
-//                   - Runtime test data: a DataTable value written as a token, e.g. {transferor.herd}, is replaced by
-//                     a random unused herd from the ENTS Agent Login query (utilities.EntsTestData). Plain values
-//                     still work, so a herd can be pinned for debugging.
-//                   - findElements / JavascriptExecutor / WebDriverWait replaced by Playwright locators (EntsSession).
-//                   - Logout uses the shared EntsSession.logout().
-//                   - 24-09-2026: transferee search selects the row with no End Date when the dialog shows
-//                     "N matches found" (EntsSession.selectOpenTransfereeMatch).
-//                   - 29-09-2026: cross-agent sections (TC_04_ENTS) - a transfereeAgent row takes the transferee herd
-//                     from that agent's pool (EntsTestData.nextCrossAgentPair); {transferee.agent} names that agent.
-//                   - 30-09-2026: agent-to-individual sections (TC_05_ENTS / TC_06_ENTS) - a "transfereeType | Individual"
-//                     row takes the transferee herd from the Individual Login query (EntsTestData.nextAgentToIndividualPair);
-//                     {transferee.login} names the individual's own login.
-//                   - 30-09-2026: "Leased entitlements can only be transferred by ..." after Next on the entitlements page
-//                     - the step clicks Back, selects ents.leased.fallback.type (an allowed type) and adds the
-//                     entitlement again (handleLeasedEntitlementsError).
-//                   - 22-09-2026 (TC_18 to TC_24 drop): "Validate if Appeal can be made sucessfully" checks its Object
-//                     Repository keys first and always logs out (see the step comment).
+//                 Tokens understood by resolve():
+//                   {transferor.herd}  {transferor.name}  {transferor.address}
+//                   {transferee.herd}  {transferee.name}  {transferee.address}
+//                   {agent}              - the transferor agent (the logged-in agent)
+//                   {transferee.agent}   - the transferee's agent; the same as {agent} for a same-agent transfer
+//                   {transferor.agent}   - same as {agent}
+//                   {transferee.login}   - the user who logs in to accept: the transferee agent, or the individual's own
+//                                          login for an agent-to-individual transfer (TC_05_ENTS / TC_06_ENTS)
+//                   {transferor.login}   - the user who creates the transfer: the agent, or the individual's own login
+//                                          when the transferor is an individual (TC_08 / TC_09 / TC_10_ENTS)
+//                   {auto.agent}         - the agent with the MOST usable herds, other than the logged-in agent
+//                                          (01-10-2026). Use it in the transfereeAgent row and in the re-login step
+//                                          instead of hard-coding an agent with few herds (aga6325 has 5). Picked once
+//                                          per scenario, so every step of the scenario gets the same agent. Ranking:
+//                                          vault stock (ENTS_AGENT pools), else the ranking TC_00_DATA stored, else
+//                                          the live query "ENTS Top agents". Expired logins are skipped.
+//                   {auto.agent.2}       - the second best agent, {auto.agent.3} the third, and so on
+//                 Any other value is returned unchanged, so a feature file can still pin a herd for debugging.
 //
-//                 02-10-2026: the create step uses EntsSession.searchTransferee. On "No transferee matches were found"
-//                 a runtime transferee is replaced (EntsTestData.replaceTransferee) and searched again in the same
-//                 dialog, up to ents.transferee.retries (default 3).
+//                 Negative case (TC_02_ENTS Section 2): nextNoEntitlementPair picks the transferor from the agent's herds
+//                 that hold NO entitlements (query "ENTS Agent herds without entitlements") and the transferee from the
+//                 usual Agent Login pool. The same tokens are used.
 //
-//                 07-10-2026: a pair picked EARLIER in the scenario (TC_17_ENTS "the agent picks a same-agent transfer pair
-//                 for {string}", which needs the transferor before the transfer to capture its OwnerID) is pinned in
-//                 EntsTestData. The create step then uses that pair instead of picking a new one. When a check fails it
-//                 replaces only the transferee; a rejected transferor fails the step, because its OwnerID is already
-//                 captured. herdProblem is package-private so the pick step uses the same checks.
+//                 Cross-agent transfers (TC_04_ENTS): nextCrossAgentPair picks the transferor from the logged-in agent's
+//                 Agent Login pool and the transferee from the OTHER agent's pool (one query per agent, cached for the
+//                 run). {transferee.agent} then returns the other agent, for the login-swap step.
+//
+//                 Agent-to-individual transfers (TC_05_ENTS / TC_06_ENTS): nextAgentToIndividualPair picks the transferor
+//                 from the logged-in agent's Agent Login pool and the transferee from the Individual Login query (herds
+//                 whose holder has their own online login). {transferee.login} returns that individual's login.
+//
+//                 Individual as transferor (TC_08_ENTS / TC_09_ENTS / TC_10_ENTS): the login step runs BEFORE the create
+//                 step, so the pair is built in two halves. nextIndividualTransferor picks the individual (herd + login)
+//                 and makes it the current pair with NO transferee yet; {transferor.login} logs that individual in. The
+//                 create step then completes the pair with completePairWithAgentTransferee (a client herd of the named
+//                 agent, TC_08 / TC_10) or completePairWithIndividualTransferee (another individual, TC_09).
+//
+//                 Pinned transferor (TC_11_ENTS): nextTransfereeForFixedTransferor keeps a transferor herd typed in the
+//                 feature file and picks only the transferee from the named agent's pool.
+//
+//                 Settings (application.properties):
+//                   ents.pool.size          - rows fetched per query (default 200)
+//                   ents.skip.used.herds    - true = never reuse a herd listed in the used-herds file (default true)
+//                   ents.used.herds.file    - the used-herds file (default runtime-data/ents_used_herds.csv)
+//                   ents.scheme.year        - only herds with entitlements in this year (blank = all years)
+//                   ents.cust.type          - only herds of this customer type, e.g. Individual (blank = all types)
+//                   ents.name.two.words     - true = only herds whose DB name is exactly two words (default true)
+//                   ents.individual.pool.size - rows fetched by the Individual Login query (default ents.pool.size)
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data), 02-10-2026 (transferee no match),
-//                                       07-10-2026 (pinned pair, TC_17_ENTS)
-// ===================================================================================================================================
+// Date Created  : 22-09-2026 | Updated: 23-09-2026 (nextNoEntitlementPair for TC_02_ENTS)
+//                                       29-09-2026 (nextCrossAgentPair and {transferee.agent} for TC_04_ENTS)
+//                                       30-09-2026 (nextAgentToIndividualPair and {transferee.login} for TC_05/06_ENTS)
+//                                       30-09-2026 (individual transferor, two-half pairs, pinned transferor: TC_07 to TC_11_ENTS)
+//                                       01-10-2026 (Test Data Vault: pools come from utilities.TestDataVault when TC_00_DATA
+//                                                   filled it; the live query stays as the fallback and refills the vault)
+//                                       07-10-2026 (Individual Login query: herds with more than ents.individual.min.ents
+//                                                   entitlements in ents.scheme.year only, like the Agent Login query)
+//                                       07-10-2026 (pinPair / isPairPinned / unpinPair: a pair picked before the create
+//                                                   step, TC_17_ENTS, is kept by the create step)
+//                                       06-10-2026 (ETF authorisation, TC_14_ENTS: etfLogins / setEtf and the tokens
+//                                                   {etf.code} and {etf.partner} - the ETF picked at random from the
+//                                                   dropdown and the login of that ETF's partner)
+//
+//                 Test Data Vault (01-10-2026): agentPool / noEntitlementPool / individualPool first look in the vault
+//                 (pools ENTS_AGENT / ENTS_NO_ENTS / ENTS_INDIVIDUAL). When the vault has AVAILABLE rows for the pool they
+//                 are used and the query is NOT run; when it has none, the query runs exactly as before and its rows are
+//                 also stored in the vault for the next run. Every herd handed out is marked RESERVED in the vault,
+//                 markNotFound marks it BAD with the reason, and markCurrentPairUsed (called by the submit step) marks
+//                 both herds USED. Three BAD herds in a row from one pool make the pool refetch itself (live query).
+// =====================================================================================================================================
 
-package stepdefinitions.ENTS;
-
-import com.microsoft.playwright.Locator;
-import commonFunctions.UiHelpers;
-import io.cucumber.datatable.DataTable;
-import io.cucumber.java.en.*;
-import org.junit.jupiter.api.Assertions;
-import stepdefinitions.Hooks;
-import utilities.ConfigManager;
-import utilities.EntsTestData;
-import utilities.ObjReader;
-
-import java.util.List;
-import java.util.Map;
-import java.util.logging.Logger;
-
-import static commonFunctions.CommonFunctions.iAction;
-import static stepdefinitions.ENTS.EntsSession.PROBE_SECONDS;
-import static stepdefinitions.ENTS.EntsSession.TRANSFERS_TAB_XPATH;
-import static stepdefinitions.ENTS.EntsSession.countOf;
-import static stepdefinitions.ENTS.EntsSession.isVisible;
-import static stepdefinitions.ENTS.EntsSession.pause;
-import static stepdefinitions.ENTS.EntsSession.xp;
-
-public class TC_01_ENTS
+public final class EntsTestData
 {
-    private static final Logger log = Logger.getLogger(TC_01_ENTS.class.getName());
+    private EntsTestData() { }
 
-    // XPath of the success message checked after "Submit Application to DAFM" (unchanged from Selenium)
-    private static final String SUBMITTED_MESSAGE_XPATH =
-            "//div[contains(@class,'success') or contains(@class,'confirmation')] | "
-                    + "//*[contains(text(),'submitted') or contains(text(),'Submitted') or contains(text(),'accepted')]";
+    // =================================================================================================
+    // DATA HOLDERS
+    // =================================================================================================
 
-    // -------------------------------------------------------------------------------------------------------------------------------
-    // Transfer key captured during the Transferor flow and consumed by the Transferee flow.
-    // Static so TC_03_ENTS / TC_07_ENTS / TC_08_ENTS can read it. Also published as the system property
-    // "lastCapturedTransferKey", which the Selenium TC_08_ENTS read but nothing ever set.
-    // -------------------------------------------------------------------------------------------------------------------------------
-    public static String iCapturedTransferKey = "";
-
-    // Error on the entitlements page when the transferor's entitlements are leased and the selected type does not allow
-    // it: "Leased entitlements can only be transferred by Change of Registration, Change of Legal Entity, Merger or
-    // Division of Entitlements (Scission)" (30-09-2026)
-    private static final String LEASED_ENTS_ERROR_XPATH =
-            "//mat-error[contains(normalize-space(),'Leased entitlements can only be transferred by')]";
-
-    // Back button in the bottom navigation of the transfer wizard (next to All Transfer Applications / Save and Exit / Next)
-    private static final String TRANSFER_BACK_BTN_XPATH =
-            "(//section[contains(@class,'bottom-section')]//button[contains(normalize-space(),'Back')])[1]";
-
-    // Transfer type used instead when the error above is shown. Must be one of the types the error lists.
-    private static final String LEASED_FALLBACK_TYPE =
-            ConfigManager.getOrDefault("ents.leased.fallback.type", "Change of Registration").trim();
-
-
-    // ===================================================================================================================================
-    //  TRANSFEROR FLOW — Create Transfer Application
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent creates a transfer application with the following details (DataTable)
-    // Description   : Executes the entire Transferor flow in one step:
-    //                 0. When the table uses tokens, picks a fresh transferor + transferee pair of the logged-in agent
-    //                 1. Search for transferor herd and click View
-    //                 2. Click "Create Transfer Application"
-    //                 3. Search for transferee by herd + name
-    //                 4. Select the transfer type
-    //                 5. Add entitlement amount on the row with the most available entitlements
-    //                 6. Select lease year if applicable (Lease only)
-    //                 6a. If the portal says the entitlements are leased and the type is not allowed, go Back, select
-    //                     ents.leased.fallback.type and add the entitlement again (30-09-2026)
-    //                 7. Enter transfer notes
-    //
-    //                 DataTable keys:
-    //                   transferorHerd (String) - herd number, or {transferor.herd}
-    //                   transfereeHerd (String) - herd number, or {transferee.herd}
-    //                   transfereeName (String) - full name,   or {transferee.name}
-    //                   transfereeAgent(String) - OPTIONAL. Login of the transferee's agent for a cross-agent transfer
-    //                                             (TC_03_ENTS / TC_04_ENTS). Left out = same-agent transfer.
-    //                   transfereeType (String) - OPTIONAL. "Individual" = the transferee is an individual with their own
-    //                                             login (TC_05_ENTS / TC_06_ENTS). Left out = a client of an agent.
-    //                   transferType   (String) - transfer type text, e.g. "Gift of Entitlements"
-    //                   entitlements   (String) - number of entitlements to transfer e.g. "0.01"
-    //                   leaseYear      (String) - "Yes" if lease year selection is needed (optional key)
-    //                   notes          (String) - notes to enter on the transfer summary
-    //
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent creates a transfer application with the following details")
-    public void theAgentCreatesATransferApplicationWithTheFollowingDetails(DataTable pDataTable)
+    // One herd returned by an ENTS query
+    public static final class Herd
     {
-        log.info("[STEP] When the agent creates a transfer application with the following details");
+        public final String herdNumber;
+        public final String name;
+        public final String address;
 
-        Map<String, String> iRaw      = pDataTable.asMap(String.class, String.class);
-        boolean             iRuntime  = EntsTestData.tableHasToken(iRaw);
-        int                 iMaxTries = iRuntime ? Math.max(1, ConfigManager.getInt("ents.pair.retries", 5)) : 1;
-        Map<String, String> iData     = null;
-
-        // ── Steps 0-1 : pick a pair and validate both herds on screen (same checks as TC_03) ──
-        // Each herd is searched in the agent's Transfer Out list and rejected when it is
-        //   - blacklisted (Hooks.BLACKLISTED_HERDS)
-        //   - not in the list (0 rows)
-        //   - marked as expired in the Expired column
-        // A rejected herd is recorded in the used-herds file and a new pair is picked (up to ents.pair.retries).
-        // The transferee is checked first, so the last search on screen is the transferor, ready to open.
-        // Cross-agent (TC_03_ENTS / TC_04_ENTS): the DataTable carries a transfereeAgent row. The transferee herd then
-        // comes from THAT agent's pool and is not in the logged-in agent's Transfer Out list, so only the transferor is
-        // checked here; the transferee is checked after the login swap by the acceptance step.
-        // Agent to individual (TC_05_ENTS / TC_06_ENTS): a "transfereeType | Individual" row. The transferee herd comes
-        // from the Individual Login query; it is not in the agent's Transfer Out list either, so only the transferor
-        // is checked here.
-        String  iTransfereeAgent = iRaw.getOrDefault("transfereeAgent", "").trim();
-        boolean iToIndividual    = "Individual".equalsIgnoreCase(iRaw.getOrDefault("transfereeType", "").trim());
-        boolean iCrossAgent      = !iToIndividual && !iTransfereeAgent.isEmpty()
-                && !iTransfereeAgent.equalsIgnoreCase(EntsTestData.loggedInUser());
-        boolean iSkipTransferee  = iCrossAgent || iToIndividual;
-
-        for (int iTry = 1; iTry <= iMaxTries; iTry++)
+        Herd(String pHerdNumber, String pName, String pAddress)
         {
-            if (iRuntime && EntsTestData.isPairPinned())
-            {
-                // TC_17_ENTS: the pair was picked earlier in the scenario - keep it (its transferor's OwnerID is captured)
-                log.info("[TRANSFER] Using the pair picked earlier in the scenario: " + EntsTestData.currentPair().transferor
-                        + " -> " + EntsTestData.currentPair().transferee);
-            }
-            else if (iRuntime)
-            {
-                String iPurpose = iRaw.getOrDefault("transferType", "").trim();
-                if (iToIndividual)
-                {
-                    EntsTestData.nextAgentToIndividualPair(EntsTestData.loggedInUser(), iPurpose);
-                }
-                else if (iCrossAgent)
-                {
-                    EntsTestData.nextCrossAgentPair(EntsTestData.loggedInUser(), iTransfereeAgent, iPurpose);
-                }
-                else
-                {
-                    EntsTestData.nextSameAgentPair(EntsTestData.loggedInUser(), iPurpose);
-                }
-            }
-            iData = EntsTestData.resolveTable(iRaw);
-
-            String iRejectedHerd = null;
-            String iReason       = iSkipTransferee ? null : herdProblem(iData.get("transfereeHerd").trim(), "transferee");
-            if (iReason != null)
-            {
-                iRejectedHerd = iData.get("transfereeHerd").trim();
-            }
-            else
-            {
-                iReason = herdProblem(iData.get("transferorHerd").trim(), "transferor");
-                if (iReason != null) iRejectedHerd = iData.get("transferorHerd").trim();
-            }
-
-            if (iReason == null)
-            {
-                // herdProblem may have swapped a DB name for the portal name - resolve the tokens again
-                if (iRuntime) iData = EntsTestData.resolveTable(iRaw);
-                break;
-            }
-
-            if (!iRuntime || iTry == iMaxTries)
-            {
-                EntsTestData.unpinPair();
-                throw new RuntimeException("[TRANSFER] Herd " + iRejectedHerd + " is " + iReason
-                        + (iRuntime ? " (tried " + iMaxTries + " pairs - check the Agent Login query / ents.scheme.year)" : ""));
-            }
-            if (EntsTestData.isPairPinned())
-            {
-                if (iRejectedHerd.equals(iData.get("transferorHerd").trim()))
-                {
-                    EntsTestData.unpinPair();
-                    throw new RuntimeException("[TRANSFER] Transferor " + iRejectedHerd + " picked earlier in the scenario is "
-                            + iReason + ". Its OwnerID is already captured, so it cannot be swapped here - run the scenario again.");
-                }
-                EntsTestData.replaceTransferee(iReason, iRaw.getOrDefault("transferType", "").trim());
-                log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": transferee " + iRejectedHerd + " " + iReason
-                        + " - transferee replaced, transferor kept.");
-                continue;
-            }
-            EntsTestData.markNotFound(iRejectedHerd, iReason);
-            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": " + iRejectedHerd + " " + iReason + " - picking another pair.");
+            herdNumber = pHerdNumber;
+            name       = pName;
+            address    = pAddress;
         }
 
-        // The pinned pair is used up - a later create step in the same scenario picks a new pair as usual
-        EntsTestData.unpinPair();
-
-        String iTransferorHerd = iData.get("transferorHerd").trim();
-        String iTransfereeHerd = iData.get("transfereeHerd").trim();
-        String iTransfereeName = iData.get("transfereeName").trim();
-        String iTransferType   = iData.get("transferType").trim();
-        String iEntitlements   = iData.get("entitlements").trim();
-        String iNotes          = iData.get("notes").trim();
-        boolean iHasLeaseYear  = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
-
-        // The last search on screen is the transferor (checked above) - click View in ITS row
-        // (first NOT-expired row of that herd - expired rows are skipped)
-        EntsSession.clickTransferOutView(iTransferorHerd);
-        log.info("Transferor herd opened: " + iTransferorHerd);
-
-        // ── Step 2 : Click "Create Transfer Application" ─────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
-
-        // ── Step 3 : Search for the transferee ───────────────────────────────────────────
-        // Same herd returned twice ("2 matches found. Please select one:") - select the row with no End Date (24-09-2026).
-        // "No transferee matches were found" (02-10-2026): mostly a cross-agent or individual transferee, whose portal
-        // name cannot be checked first. With runtime data the transferee is replaced (same pool) and searched again in
-        // the same dialog, up to ents.transferee.retries times (default 3).
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
-        int iMaxTransferees = iRuntime ? Math.max(1, ConfigManager.getInt("ents.transferee.retries", 3)) : 1;
-        for (int iTry = 1; !EntsSession.searchTransferee(iTransfereeHerd, iTransfereeName); iTry++)
-        {
-            String iReason = "Transferee Search found no match for " + iTransfereeHerd + " / '" + iTransfereeName
-                    + "' (the portal name differs from the DB name, or the herd cannot receive transfers)";
-            if (iTry >= iMaxTransferees)
-            {
-                throw new IllegalStateException("[TRANSFER] " + iReason
-                        + (iRuntime ? " - tried " + iMaxTransferees + " transferee(s), see ents.transferee.retries" : ""));
-            }
-            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTransferees + ": " + iReason + " - picking another transferee.");
-            EntsTestData.replaceTransferee(iReason, iTransferType);
-            Map<String, String> iRetry = EntsTestData.resolveTable(iRaw);
-            iTransfereeHerd = iRetry.get("transfereeHerd").trim();
-            iTransfereeName = iRetry.get("transfereeName").trim();
-        }
-
-        // ── Step 4 : Select the transfer type ────────────────────────────────────────────
-        selectTransferType(iTransferType);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
-
-        // ── Step 5 : Add the entitlement (row with the most available) + lease year, then Next ───
-        addEntitlementAndContinue(iEntitlements, iHasLeaseYear);
-
-        // ── Step 5b : Leased entitlements error - Back, allowed type, add again (30-09-2026) ───
-        iTransferType = handleLeasedEntitlementsError(iTransferType, iEntitlements);
-
-        // ── Step 6 : Enter transfer notes ────────────────────────────────────────────────
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
-
-        log.info("Transfer application created | Type=" + iTransferType + " | Transferor=" + iTransferorHerd
-                + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
+        @Override
+        public String toString() { return herdNumber + " (" + name + ")"; }
     }
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : selectTransferType
-    // Description   : Clicks the transfer type radio button whose label contains pTransferType (same XPath as Selenium).
-    // Parameters    : pTransferType (String) - e.g. "Gift of Entitlements", "Change of Registration"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 30-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static void selectTransferType(String pTransferType)
+    // The herds used by one transfer section
+    public static final class TransferPair
     {
-        pause(1000);
-        iAction("CLICK", "XPATH",
-                "//mat-radio-button[contains(.,'" + pTransferType + "')] | "
-                        + "//tr[contains(.,'" + pTransferType + "')]//input | "
-                        + "//*[@value='" + pTransferType + "']",
-                null);
-        pause(1000);
-        log.info("Transfer type selected: " + pTransferType);
+        public final String agent;            // login that creates the transfer: the agent, or the individual's own login
+        public final Herd   transferor;
+        public final Herd   transferee;       // null until the create step completes a two-half pair (individual transferor)
+        public final String transfereeAgent;  // who accepts: agent of the transferee herd (same as agent unless
+        // cross-agent), or the individual's own login (agent-to-individual)
+
+        TransferPair(String pAgent, Herd pTransferor, Herd pTransferee)
+        {
+            this(pAgent, pTransferor, pTransferee, pAgent);
+        }
+
+        TransferPair(String pAgent, Herd pTransferor, Herd pTransferee, String pTransfereeAgent)
+        {
+            agent           = pAgent;
+            transferor      = pTransferor;
+            transferee      = pTransferee;
+            transfereeAgent = (pTransfereeAgent == null || pTransfereeAgent.isBlank()) ? pAgent : pTransfereeAgent.trim();
+        }
+
+        public boolean isCrossAgent()
+        {
+            return !agent.equalsIgnoreCase(transfereeAgent);
+        }
     }
 
+    // =================================================================================================
+    // STATE
+    // =================================================================================================
+
+    private static final String LOG_PREFIX = "[ENTS-DATA] ";
+    private static final String CSV_HEADER = "timestamp,testcase,role,herd,login,purpose";
+
+    // Agent login -> rows of the Agent Login query (fetched once per run, the query takes several seconds)
+    private static final Map<String, List<Herd>> AGENT_POOLS = new HashMap<>();
+
+    // {auto.agent}: picked once per scenario (index -> login), ranking cached for the run
+    private static final Map<Integer, String> AUTO_AGENTS   = new HashMap<>();
+    private static       List<String>         RANKED_AGENTS = null;
+
+    // Agent login -> herds of that agent with NO entitlements in the scheme year (TC_02_ENTS negative case)
+    private static final Map<String, List<Herd>> NO_ENTS_POOLS = new HashMap<>();
+
+    // Rows of the Individual Login query (fetched once per run) and the login of each of those herds
+    private static List<Herd>                    INDIVIDUAL_POOL   = null;
+    private static final Map<String, String>     INDIVIDUAL_LOGINS = new HashMap<>();
+
+    // Herds handed out in this run (covers ents.skip.used.herds=false, where the file is not consulted)
+    private static final Set<String> USED_THIS_RUN = new HashSet<>();
+    // Reuse mode: herds whose transfer was confirmed in this run - free to be picked again (data.reuse.herds=true)
+    private static final Set<String> COMPLETED_THIS_RUN = new HashSet<>();
+    // Transfer type of the last herd handed out - markCurrentPairUsed needs it to spot a lease
+    private static       String      iLastPurpose = "";
+
+    private static TransferPair iCurrentPair   = null;
+    private static String       iLoggedInUser  = "";
+    // True when the current pair was picked before the create step and must be kept by it (TC_17_ENTS)
+    private static boolean      iPairPinned    = false;
+
+    // ETF authorisation (TC_14_ENTS): ETF code -> partner login, fetched once per run; the ETF picked in this scenario
+    private static Map<String, String> ETF_LOGINS   = null;
+    private static String              iEtfCode     = "";
+    private static String              iEtfPartner  = "";
+
+    // =================================================================================================
+    // SCENARIO LIFECYCLE
+    // =================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : addEntitlementAndContinue
-    // Description   : On the entitlements page: clicks Add on the row with the highest Available Entitlements value,
-    //                 enters the amount, selects the lease year when asked, confirms with Add and clicks Next.
-    // Parameters    : pEntitlements (String) - amount e.g. "0.01" | pHasLeaseYear (boolean) - true for Lease
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (moved out of the create step so it can be repeated; also
-    //                 used by TC_08_ENTS "the individual creates a transfer application")
-    // ***************************************************************************************************************************************************************************************
-    static void addEntitlementAndContinue(String pEntitlements, boolean pHasLeaseYear)
-    {
-        // The value cells and the Add buttons are parallel lists - index N in one is index N in the other.
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferEntitlementValues"), null);
-        List<Locator> iEntitlementCells = xp(ObjReader.getLocator("iTransferEntitlementValues")).all();
-        List<Locator> iAddButtons       = xp(ObjReader.getLocator("iTransferAddEntitlementBtns")).all();
-
-        if (iEntitlementCells.isEmpty())
-        {
-            throw new RuntimeException("[TRANSFER] No entitlement rows found in 'Entitlements available to transfer' table.");
-        }
-
-        int    iMaxIndex = 0;
-        double iMaxValue = -1.0;
-
-        for (int i = 0; i < iEntitlementCells.size(); i++)
-        {
-            String iRawValue = iEntitlementCells.get(i).innerText().trim();
-            try
-            {
-                double iVal = Double.parseDouble(iRawValue);
-                log.info("[TRANSFER] Row " + (i + 1) + " entitlements: " + iVal);
-                if (iVal > iMaxValue)
-                {
-                    iMaxValue = iVal;
-                    iMaxIndex = i;
-                }
-            }
-            catch (NumberFormatException e)
-            {
-                log.warning("[TRANSFER] Could not parse entitlement value at row " + (i + 1) + ": '" + iRawValue + "' - skipping.");
-            }
-        }
-
-        if (iMaxIndex >= iAddButtons.size())
-        {
-            throw new RuntimeException("[TRANSFER] " + iEntitlementCells.size() + " entitlement row(s) but only "
-                    + iAddButtons.size() + " Add button(s) - check iTransferAddEntitlementBtns.");
-        }
-
-        log.info("[TRANSFER] Highest entitlement: " + iMaxValue + " at row " + (iMaxIndex + 1) + " - clicking Add.");
-
-        // Selenium: scrollIntoView + JavaScript click
-        Locator iTargetAddBtn = iAddButtons.get(iMaxIndex);
-        iTargetAddBtn.scrollIntoViewIfNeeded();
-        UiHelpers.jsClick(iTargetAddBtn);
-        log.info("[TRANSFER] Add clicked for entitlement value: " + iMaxValue);
-
-        // Enter the entitlement amount
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), pEntitlements);
-
-        // Lease year selection (Lease only)
-        if (pHasLeaseYear)
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearDropdown"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearFirstOption"), null);
-            log.info("Lease year selected.");
-        }
-
-        // Confirm the entitlement, then go to the summary / notes page
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogAddBtn"), null);
-        pause(1500);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : handleLeasedEntitlementsError
-    // Description   : After Next on the entitlements page the portal either opens the summary / notes page or shows
-    //                 "Leased entitlements can only be transferred by Change of Registration, Change of Legal Entity,
-    //                 Merger or Division of Entitlements (Scission)" when the transferor's entitlements are leased.
-    //                 Waits for one of the two. On the error: clicks Back, selects ents.leased.fallback.type (default
-    //                 "Change of Registration"), clicks Next and adds the entitlement again (no lease year).
-    //                 Fails when the error is still shown after the retry.
-    // Parameters    : pTransferType (String) - the type selected so far | pEntitlements (String) - amount
-    // Returns       : the transfer type in use after this call (the fallback type when the error was handled)
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 30-09-2026
-    // ***************************************************************************************************************************************************************************************
-    static String handleLeasedEntitlementsError(String pTransferType, String pEntitlements)
-    {
-        if (!leasedEntitlementsErrorShown())
-        {
-            return pTransferType;
-        }
-
-        log.warning("[TRANSFER] '" + pTransferType + "' is not allowed - the transferor's entitlements are leased. "
-                + "Going Back and using '" + LEASED_FALLBACK_TYPE + "' (ents.leased.fallback.type).");
-
-        iAction("WAITCLICKABLE", "XPATH", TRANSFER_BACK_BTN_XPATH, null);
-        iAction("CLICK",         "XPATH", TRANSFER_BACK_BTN_XPATH, null);
-
-        selectTransferType(LEASED_FALLBACK_TYPE);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
-        addEntitlementAndContinue(pEntitlements, false);
-
-        if (leasedEntitlementsErrorShown())
-        {
-            throw new RuntimeException("[TRANSFER] Leased entitlements error still shown after switching from '"
-                    + pTransferType + "' to '" + LEASED_FALLBACK_TYPE + "'. Set ents.leased.fallback.type to another "
-                    + "type listed in the error (Change of Registration, Change of Legal Entity, Merger or Division).");
-        }
-
-        log.info("[TRANSFER] Transfer type changed from '" + pTransferType + "' to '" + LEASED_FALLBACK_TYPE
-                + "' because the transferor's entitlements are leased.");
-        return LEASED_FALLBACK_TYPE;
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : leasedEntitlementsErrorShown
-    // Description   : Waits until the notes field (next page) or the leased entitlements error is visible, then says
-    //                 whether it is the error. The wait ends as soon as either appears, so a normal run is not slowed.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 30-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static boolean leasedEntitlementsErrorShown()
-    {
-        String iEither = ObjReader.getLocator("iTransferNotesField") + " | " + LEASED_ENTS_ERROR_XPATH;
-        isVisible(iEither, ConfigManager.getInt("ents.next.page.seconds", 15));
-        return xp(LEASED_ENTS_ERROR_XPATH).first().isVisible();
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : herdProblem
-    // Description   : Searches a herd in the agent's Transfer Out list and applies the TC_03 herd checks.
-    //                 Uses EntsSession.searchTransferOut, which waits for the row of THIS herd (not the first row).
-    //                 Returns null when the herd is usable, otherwise the reason it is not:
-    //                   - "blacklisted"                              herd is in Hooks.BLACKLISTED_HERDS
-    //                   - "not in the Transfer Out list of <agent>"  the search returns no row for this herd
-    //                   - "expired (...)"                            every row of the herd has the Expired icon
-    //                 One herd can have several rows (one per holder); only the NOT-expired row is used, for the name
-    //                 and for the View link (EntsSession.transferOutRowXpath). The name of that row replaces the DB name
-    //                 (ents.name.from.portal).
-    // Parameters    : pHerd (String) - herd number | pRole (String) - "transferor" or "transferee" (for the log)
+    // Function Name : resetScenario
+    // Description   : Clears the pair of the previous scenario. Called from Hooks before every scenario.
+    //                 The query results stay cached for the whole run.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    static String herdProblem(String pHerd, String pRole)
+    public static synchronized void resetScenario()
     {
-        if (Hooks.BLACKLISTED_HERDS.contains(pHerd))
+        iCurrentPair  = null;
+        iLoggedInUser = "";
+        iPairPinned   = false;
+        iEtfCode      = "";
+        iEtfPartner   = "";
+        AUTO_AGENTS.clear();
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setLoggedInUser / loggedInUser
+    // Description   : The ENTS login steps record who is logged in, so a same-agent transfer knows which agent's herds
+    //                 to use without repeating the login in the feature file.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void setLoggedInUser(String pUsername)
+    {
+        iLoggedInUser = pUsername == null ? "" : pUsername.trim();
+    }
+
+    public static synchronized String loggedInUser()
+    {
+        return iLoggedInUser;
+    }
+
+    public static synchronized TransferPair currentPair()
+    {
+        return iCurrentPair;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : pinPair / isPairPinned / unpinPair
+    // Description   : A pair picked before the create step (TC_17_ENTS captures the transferor's OwnerID first) is pinned,
+    //                 so the create step keeps it instead of picking a new one. The create step unpins it once used.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 07-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void pinPair()
+    {
+        if (iCurrentPair == null || iCurrentPair.transferee == null)
         {
-            return "blacklisted";
+            throw new IllegalStateException(LOG_PREFIX + "pinPair needs a current pair with a transferor and a transferee.");
+        }
+        iPairPinned = true;
+    }
+
+    public static synchronized boolean isPairPinned()
+    {
+        return iPairPinned && iCurrentPair != null;
+    }
+
+    public static synchronized void unpinPair()
+    {
+        iPairPinned = false;
+    }
+
+    // =================================================================================================
+    // TOKENS
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : hasToken / tableHasToken
+    // Description   : True when a value (or any value of a DataTable map) is a runtime token such as {transferor.herd}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean hasToken(String pValue)
+    {
+        if (pValue == null) return false;
+        String iValue = pValue.trim();
+        return iValue.startsWith("{") && iValue.endsWith("}");
+    }
+
+    public static boolean tableHasToken(Map<String, String> pTable)
+    {
+        if (pTable == null) return false;
+        for (String iValue : pTable.values())
+        {
+            if (hasToken(iValue)) return true;
+        }
+        return false;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolve
+    // Description   : Replaces a runtime token with the value of the current pair. Plain values come back unchanged.
+    //                 Throws with a clear message when a token is used before any pair was picked, or is misspelt.
+    // Parameters    : pValue (String) - DataTable cell, e.g. "{transferee.herd}" or "C1010148"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized String resolve(String pValue)
+    {
+        if (pValue == null) return null;
+        if (!hasToken(pValue)) return pValue.trim();
+        if (isAutoAgentToken(pValue)) return resolveAgent(pValue);
+
+        String iToken = pValue.trim().toLowerCase(Locale.ROOT);
+
+        // ETF tokens do not need a transfer pair - they are set by the ETF authorisation step (TC_14_ENTS)
+        if ("{etf.code}".equals(iToken) || "{etf.partner}".equals(iToken))
+        {
+            String iEtfValue = "{etf.code}".equals(iToken) ? iEtfCode : iEtfPartner;
+            if (iEtfValue.isEmpty())
+            {
+                throw new IllegalStateException(LOG_PREFIX + "Token " + pValue.trim() + " used before an ETF was picked. "
+                        + "The step \"the individual adds ETF authorisation with the following details\" must run first.");
+            }
+            return iEtfValue;
         }
 
-        if (!EntsSession.searchTransferOut(pHerd))
+        if (iCurrentPair == null)
         {
-            return "not in the Transfer Out list of " + EntsTestData.loggedInUser();
+            throw new IllegalStateException(LOG_PREFIX + "Token " + pValue.trim() + " used before a transfer pair was picked. "
+                    + "The step that creates the transfer must run first in this section.");
         }
 
-        // A herd can have several rows (one per holder), some expired. searchTransferOut logged each of them;
-        // the herd is usable when at least one row is not expired, and that row is the one used from here on.
-        if (EntsSession.activeTransferOutRows(pHerd) == 0)
+        if (iCurrentPair.transferee == null && iToken.startsWith("{transferee."))
         {
-            return "expired (every Transfer Out row of this herd has the Expired icon)";
+            throw new IllegalStateException(LOG_PREFIX + "Token " + pValue.trim() + " used before the transferee was picked. "
+                    + "The transferor is an individual; the step that creates the transfer must run first in this section.");
         }
 
-        // Name check (22-09-2026): the transferee search needs the exact portal name, which can differ from the DB
-        // name (D3930387: DB "Martin Starr", portal "Martin Starr Jnr"). The name of the NOT-expired row replaces
-        // the DB name, so {transferee.name} is what the dialog expects. Only runtime herds are changed.
-        if (ConfigManager.getBool("ents.name.from.portal", true))
+        switch (iToken)
         {
-            String iPortalName = EntsSession.transferOutName(pHerd);
-            log.info("[TRANSFER] " + pRole + " " + pHerd + " portal name (not-expired row)='" + iPortalName + "'");
-            EntsTestData.usePortalName(pHerd, iPortalName);
+            case "{transferor.login}":   return iCurrentPair.agent;
+            case "{transferor.herd}":    return iCurrentPair.transferor.herdNumber;
+            case "{transferor.name}":    return iCurrentPair.transferor.name;
+            case "{transferor.address}": return iCurrentPair.transferor.address;
+            case "{transferee.herd}":    return iCurrentPair.transferee.herdNumber;
+            case "{transferee.name}":    return iCurrentPair.transferee.name;
+            case "{transferee.address}": return iCurrentPair.transferee.address;
+            case "{agent}":              return iCurrentPair.agent;
+            case "{transferor.agent}":   return iCurrentPair.agent;
+            case "{transferee.agent}":   return iCurrentPair.transfereeAgent;
+            case "{transferee.login}":   return iCurrentPair.transfereeAgent;
+            default:
+                throw new IllegalArgumentException(LOG_PREFIX + "Unknown token " + pValue.trim()
+                        + ". Use {transferor.herd}, {transferor.name}, {transferee.herd}, {transferee.name}, "
+                        + "{transferor.address}, {transferee.address}, {agent}, {transferor.agent}, {transferor.login}, "
+                        + "{transferee.agent}, {transferee.login}, {auto.agent}, {etf.code} or {etf.partner}.");
         }
-        return null;
     }
 
 
-    // ===================================================================================================================================
-    //  TRANSFEROR — DOCUMENT UPLOAD
-    // ===================================================================================================================================
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent uploads the transferor signature document
-    // Description   : Opens the upload dialog, selects "Transferor Signature Confirmation" as the document type
-    //                 (falls back to "Companies Registrations Office (Company Printout)" when that option is not
-    //                 offered), attaches the sample PDF and confirms the upload.
-    //                 Change from Selenium: the option list is given PROBE_SECONDS to render before the fallback
-    //                 is chosen (Selenium checked immediately after opening the dropdown).
+    // Function Name : etfLogins
+    // Description   : Every ETF code with the login of its partner (ENTS query "ENTS ETF logins"), fetched once per run.
+    //                 One code can have more than one login; the first in alphabetical order is kept.
+    // Returns       : Map<String, String> - read-only, ETF code (upper case, e.g. ETF00009) -> login (e.g. agr15512)
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
+    // Date Created  : 06-10-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent uploads the transferor signature document")
-    public void theAgentUploadsTheTransferorSignatureDocument()
+    public static synchronized Map<String, String> etfLogins()
     {
-        log.info("[STEP] And the agent uploads the transferor signature document");
-
-        String iFilePath = System.getProperty("transfer.upload.path",
-                System.getProperty("user.dir")
-                        + java.io.File.separator + "src"
-                        + java.io.File.separator + "test"
-                        + java.io.File.separator + "resources"
-                        + java.io.File.separator + "Test_Data"
-                        + java.io.File.separator + "Cover_Letter.pdf");
-
-        // ── Click "Upload Document" on the summary card ───────────────────────────────
-        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
-        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
-
-        // ── Wait for dialog to open ───────────────────────────────────────────────────
-        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
-
-        // ── Select document type ──────────────────────────────────────────────────────
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
-
-        String iPreferredOption = "//mat-option//span[normalize-space()='Transferor Signature Confirmation']";
-        String iSelectedType;
-
-        if (isVisible(iPreferredOption, PROBE_SECONDS))
+        if (ETF_LOGINS == null)
         {
-            xp(iPreferredOption).first().click();
-            iSelectedType = "Transferor Signature Confirmation";
+            Map<String, String> iLogins = new LinkedHashMap<>();
+            for (Map<String, Object> iRow : DBRouter.query("ENTS", "ENTS ETF logins"))
+            {
+                String iCode  = Objects.toString(iRow.get("ETF_CODE"), "").trim().toUpperCase(Locale.ROOT);
+                String iLogin = Objects.toString(iRow.get("LOGIN"), "").trim();
+                if (!iCode.isEmpty() && !iLogin.isEmpty()) iLogins.putIfAbsent(iCode, iLogin);
+            }
+            ETF_LOGINS = Collections.unmodifiableMap(iLogins);
+            CommonFunctions.log.info(LOG_PREFIX + "ETF logins loaded: " + ETF_LOGINS.size() + " ETF code(s) with a login.");
+        }
+        return ETF_LOGINS;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : setEtf
+    // Description   : Records the ETF picked by the ETF authorisation step, for the tokens {etf.code} and {etf.partner}.
+    // Parameters    : pEtfCode (String) - e.g. "ETF00009" | pPartnerLogin (String) - e.g. "agr15512" ("" when unknown)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 06-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void setEtf(String pEtfCode, String pPartnerLogin)
+    {
+        iEtfCode    = pEtfCode == null ? "" : pEtfCode.trim().toUpperCase(Locale.ROOT);
+        iEtfPartner = pPartnerLogin == null ? "" : pPartnerLogin.trim();
+        CommonFunctions.log.info(LOG_PREFIX + "ETF for this scenario: " + iEtfCode
+                + (iEtfPartner.isEmpty() ? " (no partner login found)" : " | partner login " + iEtfPartner));
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isAutoAgentToken / resolveAgent / rankedAgents
+    // Description   : {auto.agent} = the agent with the most usable herds, other than the logged-in agent and the
+    //                 current transferor agent; {auto.agent.N} = the N-th best. The pick is made once per scenario and
+    //                 kept, so the transfereeAgent row, the re-login step and the acceptance steps all get the same
+    //                 agent. Plain logins are returned unchanged, so every pair method can call resolveAgent safely.
+    //
+    //                 Ranking, first that answers:
+    //                   1. Test Data Vault - ENTS_AGENT pools by AVAILABLE rows (what can actually be used today)
+    //                   2. vault.meta top.agents - stored by TC_00_DATA from the "ENTS Top agents" query
+    //                   3. live query "ENTS Top agents" (cached for the run)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean isAutoAgentToken(String pValue)
+    {
+        return pValue != null && pValue.trim().toLowerCase(Locale.ROOT).startsWith("{auto.agent");
+    }
+
+    public static synchronized String resolveAgent(String pValue)
+    {
+        if (!isAutoAgentToken(pValue)) return pValue == null ? "" : pValue.trim();
+
+        String iToken = pValue.trim().toLowerCase(Locale.ROOT);
+        int    iIndex = 1;
+        if (iToken.startsWith("{auto.agent.") && iToken.endsWith("}"))
+        {
+            try { iIndex = Math.max(1, Integer.parseInt(iToken.substring("{auto.agent.".length(), iToken.length() - 1).trim())); }
+            catch (NumberFormatException e)
+            {
+                throw new IllegalArgumentException(LOG_PREFIX + "Unknown token " + pValue.trim() + ". Use {auto.agent} or {auto.agent.2}, {auto.agent.3}, ...");
+            }
+        }
+        if (AUTO_AGENTS.containsKey(iIndex)) return AUTO_AGENTS.get(iIndex);
+
+        // Never the agent who is logged in or who owns the transferor herd - a transfer needs two different agents
+        Set<String> iExclude = new HashSet<>();
+        if (!iLoggedInUser.isEmpty()) iExclude.add(iLoggedInUser.toLowerCase(Locale.ROOT));
+        if (iCurrentPair != null && iCurrentPair.agent != null) iExclude.add(iCurrentPair.agent.toLowerCase(Locale.ROOT));
+
+        int iRank = 0;
+        for (String iAgent : rankedAgents())
+        {
+            if (iExclude.contains(iAgent.toLowerCase(Locale.ROOT)) || TestDataVault.isLoginExpired(iAgent)) continue;
+            iRank++;
+            if (iRank == iIndex)
+            {
+                AUTO_AGENTS.put(iIndex, iAgent);
+                CommonFunctions.log.info(LOG_PREFIX + pValue.trim() + " -> " + iAgent
+                        + (iExclude.isEmpty() ? "" : " (skipped " + iExclude + ")") + " - kept for the rest of the scenario.");
+                return iAgent;
+            }
+        }
+        throw new IllegalStateException(LOG_PREFIX + "No agent with usable herds found for " + pValue.trim()
+                + " (excluded " + iExclude + "). Run TC_00_DATA, or check the \"ENTS Top agents\" query.");
+    }
+
+    public static synchronized List<String> rankedAgents()
+    {
+        // 1. the vault: what is really available right now
+        if (TestDataVault.isEnabled())
+        {
+            List<Map.Entry<String, Integer>> iPools = new ArrayList<>();
+            for (Map.Entry<String, Integer> iEntry : TestDataVault.availableCounts().entrySet())
+            {
+                if (iEntry.getKey().startsWith(TestDataVault.POOL_ENTS_AGENT + "/") && iEntry.getValue() > 0) iPools.add(iEntry);
+            }
+            if (!iPools.isEmpty())
+            {
+                iPools.sort((a, b) -> b.getValue() - a.getValue() != 0 ? b.getValue() - a.getValue() : a.getKey().compareTo(b.getKey()));
+                List<String> iRanked = new ArrayList<>();
+                for (Map.Entry<String, Integer> iEntry : iPools) iRanked.add(iEntry.getKey().substring(TestDataVault.POOL_ENTS_AGENT.length() + 1));
+                CommonFunctions.log.info(LOG_PREFIX + "Agent ranking from the vault: " + iPools);
+                return iRanked;
+            }
+            // 2. the ranking TC_00_DATA stored
+            List<String> iStored = TestDataVault.topAgents();
+            if (!iStored.isEmpty())
+            {
+                CommonFunctions.log.info(LOG_PREFIX + "Agent ranking from vault.meta: " + iStored);
+                return iStored;
+            }
+        }
+        // 3. live
+        if (RANKED_AGENTS == null)
+        {
+            RANKED_AGENTS = topAgentsLive(ConfigManager.getInt("data.auto.agents.rank", 10));
+            CommonFunctions.log.info(LOG_PREFIX + "Agent ranking from the Top agents query: " + RANKED_AGENTS);
+        }
+        return RANKED_AGENTS;
+    }
+
+    // Runs "ENTS Top agents" and returns the logins, most herds first (shared with DataHarvester)
+    public static List<String> topAgentsLive(int pHowMany)
+    {
+        String iYear = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
+        String iType = ConfigManager.getOrDefault("ents.cust.type", "").trim();
+        String iTwo  = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
+        String iLike = ConfigManager.getOrDefault("data.auto.agents.like", "ag%").trim();
+        List<String> iRanked = new ArrayList<>();
+        for (Map<String, Object> iRow : DBRouter.query("ENTS", "ENTS Top agents", String.valueOf(pHowMany), iYear, iType, iTwo, iLike))
+        {
+            String iLogin = text(iRow, "AGENT_LOGIN");
+            if (!iLogin.isEmpty()) iRanked.add(iLogin);
+        }
+        return iRanked;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolveTable
+    // Description   : Returns a copy of a DataTable map with every token replaced (keys and order kept)
+    // Parameters    : pTable (Map) - the DataTable as a key/value map
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static Map<String, String> resolveTable(Map<String, String> pTable)
+    {
+        Map<String, String> iResolved = new LinkedHashMap<>();
+        for (Map.Entry<String, String> iEntry : pTable.entrySet())
+        {
+            iResolved.put(iEntry.getKey(), resolve(iEntry.getValue()));
+        }
+        return iResolved;
+    }
+
+    // =================================================================================================
+    // PAIR SELECTION
+    // =================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextSameAgentPair
+    // Description   : Picks two different, unused herds of the same agent (transferor + transferee), records them in
+    //                 the used-herds file, logs them and makes them the current pair.
+    // Parameters    : pAgent   (String) - agent login, e.g. "aga6077"
+    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextSameAgentPair(String pAgent, String pPurpose)
+    {
+        if (pAgent == null || pAgent.isBlank())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take herds from. "
+                    + "The ENTS login step must run before the transfer is created.");
+        }
+
+        String     iAgent     = pAgent.trim();
+        List<Herd> iPool      = agentPool(iAgent);
+        Set<String> iUsed     = usedHerds();
+        List<Herd> iAvailable = new ArrayList<>();
+
+        for (Herd iHerd : iPool)
+        {
+            if (!iUsed.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
+        }
+
+        if (iAvailable.size() < 2)
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query for " + iAgent + " has " + iAvailable.size()
+                    + " unused herd(s) left out of " + iPool.size() + ", and a transfer needs 2. "
+                    + "Clear or trim " + usedFile() + ", raise ents.pool.size, or use another agent.");
+        }
+
+        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
+        Herd iTransferor = iAvailable.get(0);
+        Herd iTransferee = iAvailable.get(1);
+
+        markUsed("transferor", iTransferor.herdNumber, iAgent, pPurpose);
+        markUsed("transferee", iTransferee.herdNumber, iAgent, pPurpose);
+
+        iCurrentPair = new TransferPair(iAgent, iTransferor, iTransferee);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] | Agent=" + iAgent
+                + " | Transferor=" + iTransferor + " | Transferee=" + iTransferee
+                + " | " + (iAvailable.size() - 2) + " unused herd(s) left in the pool");
+
+        return iCurrentPair;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextNoEntitlementPair
+    // Description   : Negative-case version of nextSameAgentPair (TC_02_ENTS Section 2). Both herds belong to the same
+    //                 agent and are picked at random:
+    //                   transferor - an unused herd of the agent with NO entitlements in the scheme year
+    //                                (query "ENTS Agent herds without entitlements")
+    //                   transferee - an unused herd from the agent's usual Agent Login pool
+    //                 Both are recorded in the used-herds file and become the current pair, so {transferor.herd},
+    //                 {transferee.herd} and {transferee.name} work as usual.
+    // Parameters    : pAgent   (String) - agent login, e.g. "aga6077"
+    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 23-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextNoEntitlementPair(String pAgent, String pPurpose)
+    {
+        if (pAgent == null || pAgent.isBlank())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take herds from. "
+                    + "The ENTS login step must run before the transfer search.");
+        }
+
+        String      iAgent = pAgent.trim();
+        Set<String> iUsed  = usedHerds();
+
+        List<Herd> iNoEnts    = noEntitlementPool(iAgent);
+        List<Herd> iAvailable = new ArrayList<>();
+        for (Herd iHerd : iNoEnts)
+        {
+            if (!iUsed.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
+        }
+
+        if (iAvailable.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "\"ENTS Agent herds without entitlements\" for " + iAgent
+                    + " has no unused herd left out of " + iNoEnts.size() + ". "
+                    + "Clear or trim " + usedFile() + ", raise ents.pool.size, or use another agent.");
+        }
+
+        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
+        Herd iTransferor = iAvailable.get(0);
+
+        Set<String> iUsedPlus = new HashSet<>(iUsed);
+        iUsedPlus.add(iTransferor.herdNumber);
+        Herd iTransferee = pickUnused(iAgent, iUsedPlus, "transferee");
+
+        markUsed("transferor-no-ents", iTransferor.herdNumber, iAgent, pPurpose);
+        markUsed("transferee",         iTransferee.herdNumber, iAgent, pPurpose);
+
+        iCurrentPair = new TransferPair(iAgent, iTransferor, iTransferee);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] (no entitlements) | Agent=" + iAgent
+                + " | Transferor=" + iTransferor + " | Transferee=" + iTransferee
+                + " | " + (iAvailable.size() - 1) + " unused no-entitlement herd(s) left");
+
+        return iCurrentPair;
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextCrossAgentPair
+    // Description   : Cross-agent version of nextSameAgentPair (TC_04_ENTS). The two herds come from two agents:
+    //                   transferor - an unused herd from the Agent Login pool of pTransferorAgent (the logged-in agent)
+    //                   transferee - an unused herd from the Agent Login pool of pTransfereeAgent
+    //                 Both pools are fetched once per run and cached. Both herds are recorded in the used-herds file
+    //                 (each with its own agent) and become the current pair. {transferee.agent} returns pTransfereeAgent,
+    //                 so the login-swap step always logs in as the agent the transferee herd was taken from.
+    //                 When both logins are the same, this is a same-agent pick (nextSameAgentPair).
+    // Parameters    : pTransferorAgent (String) - logged-in agent, e.g. "aga6060"
+    //                 pTransfereeAgent (String) - agent of the transferee, e.g. "aga6325"
+    //                 pPurpose         (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 29-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextCrossAgentPair(String pTransferorAgent, String pTransfereeAgent, String pPurpose)
+    {
+        if (pTransferorAgent == null || pTransferorAgent.isBlank())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take the transferor herd from. "
+                    + "The ENTS login step must run before the transfer is created.");
+        }
+        if (pTransfereeAgent == null || pTransfereeAgent.isBlank())
+        {
+            throw new IllegalArgumentException(LOG_PREFIX + "The transfereeAgent row is empty - give the transferee agent login.");
+        }
+
+        String iOrAgent = pTransferorAgent.trim();
+        String iEeAgent = resolveAgent(pTransfereeAgent);   // {auto.agent} -> the agent with the most herds
+        if (iOrAgent.equalsIgnoreCase(iEeAgent))
+        {
+            return nextSameAgentPair(iOrAgent, pPurpose);
+        }
+
+        Set<String> iUsed       = usedHerds();
+        Herd        iTransferor = pickUnused(iOrAgent, iUsed, "transferor");
+
+        Set<String> iUsedPlus = new HashSet<>(iUsed);
+        iUsedPlus.add(iTransferor.herdNumber);
+        Herd iTransferee = pickUnused(iEeAgent, iUsedPlus, "transferee");
+
+        markUsed("transferor", iTransferor.herdNumber, iOrAgent, pPurpose);
+        markUsed("transferee", iTransferee.herdNumber, iEeAgent, pPurpose);
+
+        iCurrentPair = new TransferPair(iOrAgent, iTransferor, iTransferee, iEeAgent);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] (cross-agent) | Transferor agent=" + iOrAgent
+                + " | Transferor=" + iTransferor + " | Transferee agent=" + iEeAgent + " | Transferee=" + iTransferee);
+
+        return iCurrentPair;
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextAgentToIndividualPair
+    // Description   : Agent-to-individual version of nextSameAgentPair (TC_05_ENTS / TC_06_ENTS):
+    //                   transferor - an unused herd from the Agent Login pool of pAgent (the logged-in agent)
+    //                   transferee - an unused herd from the Individual Login query, i.e. a herd whose holder logs in
+    //                                with their own online login (no agent needed to accept)
+    //                 Both are recorded in the used-herds file (the transferee with the individual's login) and become
+    //                 the current pair. {transferee.login} returns the individual's login for the login-swap step.
+    // Parameters    : pAgent   (String) - logged-in agent, e.g. "agr9197"
+    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextAgentToIndividualPair(String pAgent, String pPurpose)
+    {
+        if (pAgent == null || pAgent.isBlank())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No agent is logged in, so there is no agent to take the transferor herd from. "
+                    + "The ENTS login step must run before the transfer is created.");
+        }
+
+        String      iAgent      = pAgent.trim();
+        Set<String> iUsed       = usedHerds();
+        Herd        iTransferor = pickUnused(iAgent, iUsed, "transferor");
+
+        Set<String> iUsedPlus = new HashSet<>(iUsed);
+        iUsedPlus.add(iTransferor.herdNumber);
+
+        Herd   iTransferee = pickUnusedIndividual(iUsedPlus, "transferee");
+        String iLogin      = INDIVIDUAL_LOGINS.get(iTransferee.herdNumber);
+
+        markUsed("transferor",            iTransferor.herdNumber, iAgent, pPurpose);
+        markUsed("transferee-individual", iTransferee.herdNumber, iLogin, pPurpose);
+
+        iCurrentPair = new TransferPair(iAgent, iTransferor, iTransferee, iLogin);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] (agent to individual) | Agent=" + iAgent
+                + " | Transferor=" + iTransferor + " | Transferee=" + iTransferee + " | Individual login=" + iLogin);
+
+        return iCurrentPair;
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextIndividualTransfereeForFixedTransferor
+    // Description   : Keeps a transferor herd typed in the feature file (TC_12_ENTS: the ETF partner's own herd C2057024)
+    //                 and picks only the transferee: an unused herd from the Individual Login query, whose own login
+    //                 then accepts ({transferee.login}). The transferor is NOT written to the used-herds file, because
+    //                 it is meant to be reused. Same idea as nextTransfereeForFixedTransferor, with an individual
+    //                 transferee instead of an agent's client herd.
+    // Parameters    : pTransferorHerd (String) - pinned transferor herd | pPurpose (String) - e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 02-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextIndividualTransfereeForFixedTransferor(String pTransferorHerd, String pPurpose)
+    {
+        if (pTransferorHerd == null || pTransferorHerd.isBlank())
+        {
+            throw new IllegalArgumentException(LOG_PREFIX + "The transferorHerd cell is empty - give a herd number or {transferor.herd}.");
+        }
+
+        Set<String> iUsedPlus = new HashSet<>(usedHerds());
+        iUsedPlus.add(pTransferorHerd.trim());
+
+        Herd   iTransferor = new Herd(pTransferorHerd.trim(), "", "");
+        Herd   iTransferee = pickUnusedIndividual(iUsedPlus, "transferee");
+        String iLogin      = INDIVIDUAL_LOGINS.get(iTransferee.herdNumber);
+        markUsed("transferee-individual", iTransferee.herdNumber, iLogin, pPurpose);
+
+        iCurrentPair = new TransferPair(iLoggedInUser, iTransferor, iTransferee, iLogin);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] (pinned transferor, individual transferee) | Transferor="
+                + pTransferorHerd.trim() + " (" + iLoggedInUser + ") | Transferee=" + iTransferee + " | Individual login=" + iLogin);
+        return iCurrentPair;
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : nextIndividualTransferor
+    // Description   : First half of an individual-as-transferor pair (TC_08 / TC_09 / TC_10_ENTS). Picks an unused herd
+    //                 from the Individual Login query and makes it the current pair WITHOUT a transferee:
+    //                   agent = the individual's own login (so {transferor.login} and {agent} return it)
+    //                   transferor = that herd, transferee = null
+    //                 The create step completes the pair with completePairWithAgentTransferee or
+    //                 completePairWithIndividualTransferee. Recorded in the used-herds file straight away.
+    // Parameters    : pPurpose (String) - written to the used-herds file, e.g. "individual transferor"
+    // Returns       : TransferPair (transferee null)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair nextIndividualTransferor(String pPurpose)
+    {
+        Herd   iTransferor = pickUnusedIndividual(usedHerds(), "transferor");
+        String iLogin      = INDIVIDUAL_LOGINS.get(iTransferor.herdNumber);
+
+        markUsed("transferor-individual", iTransferor.herdNumber, iLogin, pPurpose);
+
+        iCurrentPair = new TransferPair(iLogin, iTransferor, null, iLogin);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked individual transferor for [" + pPurpose + "] | Herd=" + iTransferor
+                + " | Login=" + iLogin + " (transferee picked by the create step)");
+        return iCurrentPair;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : completePairWithAgentTransferee
+    // Description   : Second half of an individual-as-transferor pair (TC_08_ENTS / TC_10_ENTS): the transferee is an
+    //                 unused herd from the Agent Login pool of pAgent, and {transferee.agent} / {transferee.login}
+    //                 return pAgent for the login-swap step.
+    // Parameters    : pAgent (String) - agent (or ETF partner) login that manages the transferee, e.g. "aga6325"
+    //                 pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair completePairWithAgentTransferee(String pAgent, String pPurpose)
+    {
+        requireHalfPair("completePairWithAgentTransferee");
+        if (pAgent == null || pAgent.isBlank())
+        {
+            throw new IllegalArgumentException(LOG_PREFIX + "The transfereeAgent row is empty - give the login of the agent who manages the transferee.");
+        }
+
+        String      iAgent    = resolveAgent(pAgent);   // {auto.agent} -> the agent with the most herds
+        Set<String> iUsedPlus = new HashSet<>(usedHerds());
+        iUsedPlus.add(iCurrentPair.transferor.herdNumber);
+
+        Herd iTransferee = pickUnused(iAgent, iUsedPlus, "transferee");
+        markUsed("transferee", iTransferee.herdNumber, iAgent, pPurpose);
+
+        iCurrentPair = new TransferPair(iCurrentPair.agent, iCurrentPair.transferor, iTransferee, iAgent);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Pair completed for [" + pPurpose + "] (individual to agent) | Transferor="
+                + iCurrentPair.transferor + " (" + iCurrentPair.agent + ") | Transferee agent=" + iAgent + " | Transferee=" + iTransferee);
+        return iCurrentPair;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : completePairWithIndividualTransferee
+    // Description   : Second half of an individual-as-transferor pair (TC_09_ENTS): the transferee is another unused herd
+    //                 from the Individual Login query, and {transferee.login} returns that individual's login.
+    // Parameters    : pPurpose (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair completePairWithIndividualTransferee(String pPurpose)
+    {
+        requireHalfPair("completePairWithIndividualTransferee");
+
+        Set<String> iUsedPlus = new HashSet<>(usedHerds());
+        iUsedPlus.add(iCurrentPair.transferor.herdNumber);
+
+        Herd   iTransferee = pickUnusedIndividual(iUsedPlus, "transferee");
+        String iLogin      = INDIVIDUAL_LOGINS.get(iTransferee.herdNumber);
+        markUsed("transferee-individual", iTransferee.herdNumber, iLogin, pPurpose);
+
+        iCurrentPair = new TransferPair(iCurrentPair.agent, iCurrentPair.transferor, iTransferee, iLogin);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Pair completed for [" + pPurpose + "] (individual to individual) | Transferor="
+                + iCurrentPair.transferor + " (" + iCurrentPair.agent + ") | Transferee=" + iTransferee + " (" + iLogin + ")");
+        return iCurrentPair;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : replaceTransferee
+    // Description   : The Transferee Search dialog said "No transferee matches were found" for the current transferee
+    //                 (02-10-2026, TC_08_ENTS: C1400337 "Joanna Phelan" in aga6077's pool). The dialog needs the exact
+    //                 portal name, and when the transferee is managed by ANOTHER agent (or is an individual) the portal
+    //                 name cannot be read first, so the DB name is typed and can differ.
+    //                 This keeps the transferor and replaces only the transferee:
+    //                   1. the old transferee is marked BAD in the vault with pReason (never handed out again)
+    //                   2. a new unused transferee is picked from the SAME source - the Individual Login pool when the
+    //                      transferee accepts with their own login, otherwise the Agent Login pool of the same agent
+    //                   3. the pair keeps its transferor and its accepting agent
+    //                 The "bad herds in a row" refill is NOT triggered: a name mismatch says nothing about a stale pool.
+    // Parameters    : pReason  (String) - why the old transferee is dropped, written to the vault and the used-herds file
+    //                 pPurpose (String) - transfer type, written for the new transferee
+    // Returns       : TransferPair - the pair with the new transferee
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 02-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized TransferPair replaceTransferee(String pReason, String pPurpose)
+    {
+        if (iCurrentPair == null || iCurrentPair.transferee == null)
+        {
+            throw new IllegalStateException(LOG_PREFIX + "replaceTransferee needs a current pair with a transferee.");
+        }
+
+        String  iOldHerd    = iCurrentPair.transferee.herdNumber;
+        String  iEeAgent    = iCurrentPair.transfereeAgent;
+        boolean iIndividual = INDIVIDUAL_LOGINS.containsKey(iOldHerd) && isIndividualLogin(iEeAgent);
+
+        // 1. Drop the old transferee (iLastPurpose is kept: a lease must still be recognised as a lease)
+        String iKeepPurpose = iLastPurpose;
+        markUsed("not-found", iOldHerd, iEeAgent, pReason);
+        iLastPurpose = iKeepPurpose;
+        if (TestDataVault.isEnabled())
+        {
+            try { TestDataVault.markBad(iOldHerd, pReason); }
+            catch (Exception e) { CommonFunctions.log.warning(LOG_PREFIX + "Vault update failed for " + iOldHerd + ": " + e.getMessage()); }
+        }
+        CommonFunctions.log.warning(LOG_PREFIX + "Transferee " + iOldHerd + " dropped: " + pReason);
+
+        // 2. Pick a new one from the same source
+        Set<String> iUsedPlus = new HashSet<>(usedHerds());
+        iUsedPlus.add(iCurrentPair.transferor.herdNumber);
+        iUsedPlus.add(iOldHerd);
+
+        Herd   iNewTransferee;
+        String iAccepter;
+        if (iIndividual)
+        {
+            iNewTransferee = pickUnusedIndividual(iUsedPlus, "transferee");
+            iAccepter      = INDIVIDUAL_LOGINS.get(iNewTransferee.herdNumber);
+            markUsed("transferee-individual", iNewTransferee.herdNumber, iAccepter, pPurpose);
         }
         else
         {
-            iSelectedType = "Companies Registrations Office (Company Printout)";
-            iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), iSelectedType);
+            iNewTransferee = pickUnused(iEeAgent, iUsedPlus, "transferee");
+            iAccepter      = iEeAgent;
+            markUsed("transferee", iNewTransferee.herdNumber, iAccepter, pPurpose);
         }
-        log.info("[TRANSFER] Document type selected: " + iSelectedType);
 
-        // ── Attach PDF ────────────────────────────────────────────────────────────────
-        iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iTransferFileUploadInput"), iFilePath);
+        // 3. Same transferor, same creating login, new transferee
+        iCurrentPair = new TransferPair(iCurrentPair.agent, iCurrentPair.transferor, iNewTransferee, iAccepter);
 
-        // ── Confirm upload ────────────────────────────────────────────────────────────
-        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
-        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
-
-        // ── Wait for dialog to close ──────────────────────────────────────────────────
-        iAction("WAITINVISIBLE", "XPATH", "//app-supporting-doc-upload-transfer-application-popup", null);
+        CommonFunctions.log.info(LOG_PREFIX + "Transferee replaced for [" + pPurpose + "] | Transferor=" + iCurrentPair.transferor
+                + " | old transferee=" + iOldHerd + " | new transferee=" + iNewTransferee + " | accepted by " + iAccepter);
+        return iCurrentPair;
     }
 
-
-    // ===================================================================================================================================
-    //  TRANSFEROR — SEND FOR ACCEPTANCE
-    // ===================================================================================================================================
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent sends the transfer for acceptance
-    // Description   : Clicks "Send to Transferee for Acceptance", accepts T&C, and confirms.
+    // Function Name : nextTransfereeForFixedTransferor
+    // Description   : Keeps a transferor herd typed in the feature file (TC_11_ENTS: the ETF partner's own herd) and picks
+    //                 only the transferee, an unused herd from the Agent Login pool of pTransfereeAgent. The transferor
+    //                 is NOT written to the used-herds file, because it is meant to be reused.
+    // Parameters    : pTransferorHerd  (String) - pinned transferor herd, e.g. "C2057024"
+    //                 pTransfereeAgent (String) - agent who manages the transferee, e.g. "aga6581"
+    //                 pPurpose         (String) - written to the used-herds file, e.g. the transfer type
+    // Returns       : TransferPair
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 30-09-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent sends the transfer for acceptance")
-    public void theAgentSendsTheTransferForAcceptance()
+    public static synchronized TransferPair nextTransfereeForFixedTransferor(String pTransferorHerd, String pTransfereeAgent, String pPurpose)
     {
-        log.info("[STEP] And the agent sends the transfer for acceptance");
+        if (pTransfereeAgent == null || pTransfereeAgent.isBlank())
+        {
+            throw new IllegalArgumentException(LOG_PREFIX + "The transfereeAgent row is empty - give the login of the agent who manages the transferee.");
+        }
 
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSendForAcceptanceBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSendForAcceptanceBtn"), null);
+        String      iAgent    = resolveAgent(pTransfereeAgent);   // {auto.agent} -> the agent with the most herds
+        Set<String> iUsedPlus = new HashSet<>(usedHerds());
+        iUsedPlus.add(pTransferorHerd.trim());
 
-        log.info("Transfer sent for acceptance.");
+        Herd iTransferor = new Herd(pTransferorHerd.trim(), "", "");
+        Herd iTransferee = pickUnused(iAgent, iUsedPlus, "transferee");
+        markUsed("transferee", iTransferee.herdNumber, iAgent, pPurpose);
+
+        iCurrentPair = new TransferPair(iLoggedInUser, iTransferor, iTransferee, iAgent);
+
+        CommonFunctions.log.info(LOG_PREFIX + "Picked for [" + pPurpose + "] (pinned transferor) | Transferor=" + pTransferorHerd.trim()
+                + " (" + iLoggedInUser + ") | Transferee agent=" + iAgent + " | Transferee=" + iTransferee);
+        return iCurrentPair;
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : the transfer key should be captured
-    // Description   : Reads the transfer key from the summary screen and keeps it for the Transferee flow.
+    // Function Name : isIndividualLogin
+    // Description   : True when the login was handed out by the Individual Login query in this run
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (also published as lastCapturedTransferKey)
+    // Date Created  : 30-09-2026
     // ***************************************************************************************************************************************************************************************
-    @Then("the transfer key should be captured")
-    public void theTransferKeyShouldBeCaptured()
+    public static synchronized boolean isIndividualLogin(String pLogin)
     {
-        log.info("[STEP] Then the transfer key should be captured");
-
-        String iKey = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iTransferKeySummaryField"), null);
-        iCapturedTransferKey = iKey == null ? "" : iKey.trim();
-
-        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key should be visible on the summary screen.");
-
-        System.setProperty("lastCapturedTransferKey", iCapturedTransferKey);
-        log.info("Transfer key captured: " + iCapturedTransferKey);
+        return pLogin != null && INDIVIDUAL_LOGINS.containsValue(pLogin.trim());
     }
 
-
-    // ===================================================================================================================================
-    //  TRANSFEREE FLOW — Accept and Submit
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent navigates to the transferee acceptance flow (DataTable)
-    // Description   : My Clients → Transfers tab, searches for the transferee herd, clicks View, then clicks View on the
-    //                 transferee dashboard row for that herd.
-    //                 DataTable keys: transfereeHerd (String) - herd number, or {transferee.herd}
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent navigates to the transferee acceptance flow")
-    public void theAgentNavigatesToTheTransfereeAcceptanceFlow(DataTable pDataTable)
+    // The current pair must be a first half (individual transferor, no transferee yet)
+    private static void requireHalfPair(String pCaller)
     {
-        log.info("[STEP] When the agent navigates to the transferee acceptance flow");
+        if (iCurrentPair == null || iCurrentPair.transferee != null)
+        {
+            throw new IllegalStateException(LOG_PREFIX + pCaller + " needs an individual transferor picked first. "
+                    + "The login step must use {transferor.login} so nextIndividualTransferor runs before the transfer is created.");
+        }
+    }
 
-        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
-        String iTransfereeHerd = iData.get("transfereeHerd").trim();
-
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-        iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
-
-        EntsSession.openTransferOutHerd(iTransfereeHerd);
-
-        iAction("CLICK", "XPATH", "//tr[contains(.,'" + iTransfereeHerd + "')]//button[contains(text(),'View')] | "
-                + "//button[contains(text(),'View')]", null);
-
-        log.info("Navigated to transferee acceptance flow for herd: " + iTransfereeHerd);
+    // One random herd of the Individual Login pool that is not in pExclude
+    private static Herd pickUnusedIndividual(Set<String> pExclude, String pRole)
+    {
+        List<Herd> iPool      = individualPool();
+        List<Herd> iAvailable = new ArrayList<>();
+        for (Herd iHerd : iPool)
+        {
+            if (!pExclude.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
+        }
+        if (iAvailable.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Individual Login query has no unused herd left out of " + iPool.size()
+                    + ", and one is needed as the " + pRole + ". Clear or trim " + usedFile()
+                    + ", or raise ents.individual.pool.size.");
+        }
+        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
+        return iAvailable.get(0);
     }
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent enters the transfer key and views the application
-    // Description   : Enters the captured transfer key and clicks "View Transfer Application".
+    // Function Name : pickUnused
+    // Description   : One random herd of an agent that is not in pExclude. Throws with a clear message when the pool
+    //                 has no unused herd left.
+    // Parameters    : pAgent (String) - agent login | pExclude (Set) - herds already used | pRole (String) - for the message
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent enters the transfer key and views the application")
-    public void theAgentEntersTheTransferKeyAndViewsTheApplication()
+    private static Herd pickUnused(String pAgent, Set<String> pExclude, String pRole)
     {
-        log.info("[STEP] And the agent enters the transfer key and views the application");
+        List<Herd> iPool      = agentPool(pAgent);
+        List<Herd> iAvailable = new ArrayList<>();
+        for (Herd iHerd : iPool)
+        {
+            if (!pExclude.contains(iHerd.herdNumber)) iAvailable.add(iHerd);
+        }
 
-        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key must have been captured before entering it on the transferee side.");
+        if (iAvailable.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Agent Login query for " + pAgent + " has no unused herd left out of "
+                    + iPool.size() + ", and one is needed as the " + pRole + ". "
+                    + "Clear or trim " + usedFile() + ", raise ents.pool.size, or use another agent.");
+        }
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey.trim());
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
-
-        log.info("Transfer key entered and application loaded: " + iCapturedTransferKey);
+        Collections.shuffle(iAvailable, new Random(System.nanoTime()));
+        return iAvailable.get(0);
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : the agent submits the transfer to DAFM with notes {string}
-    // Description   : Enters the transferee notes, clicks "Submit Application to DAFM", accepts T&C, confirms, and
-    //                 checks that a success message is shown.
-    // Parameters    : pNotes (String) - notes to enter e.g. "Approved Test"
+    // Function Name : usePortalName
+    // Description   : Replaces the name of a herd of the current pair with the name shown in the portal.
+    //                 The transferee search only matches the exact portal name, and the DB name can differ from it
+    //                 (e.g. "Martin Starr" in the DB, "Martin Starr Jnr" in the portal). After this call,
+    //                 {transferor.name} / {transferee.name} return the portal name.
+    // Parameters    : pHerd (String) - herd number of the current pair | pPortalName (String) - name from the Name column
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
+    // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the agent submits the transfer to DAFM with notes {string}")
-    public void theAgentSubmitsTheTransferToDAFMWithNotes(String pNotes)
+    public static synchronized void usePortalName(String pHerd, String pPortalName)
     {
-        log.info("[STEP] And the agent submits the transfer to DAFM with notes: " + pNotes);
+        if (iCurrentPair == null || pHerd == null || pPortalName == null || pPortalName.isBlank()) return;
 
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), pNotes);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        String iName = pPortalName.trim().replaceAll("\\s+", " ");
+        Herd   iOr   = iCurrentPair.transferor;
+        Herd   iEe   = iCurrentPair.transferee;
 
-        log.info("Transfer submitted to DAFM.");
-
-        String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
-        Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
-        log.info("Transfer submitted successfully: " + iConfirmation);
+        if (iOr.herdNumber.equalsIgnoreCase(pHerd.trim()) && !iName.equals(iOr.name))
+        {
+            CommonFunctions.log.info(LOG_PREFIX + "Transferor " + iOr.herdNumber + " name: DB='" + iOr.name + "' portal='" + iName + "' - using the portal name");
+            iOr = new Herd(iOr.herdNumber, iName, iOr.address);
+        }
+        else if (iEe != null && iEe.herdNumber.equalsIgnoreCase(pHerd.trim()) && !iName.equals(iEe.name))
+        {
+            CommonFunctions.log.info(LOG_PREFIX + "Transferee " + iEe.herdNumber + " name: DB='" + iEe.name + "' portal='" + iName + "' - using the portal name");
+            iEe = new Herd(iEe.herdNumber, iName, iEe.address);
+        }
+        else
+        {
+            return;
+        }
+        iCurrentPair = new TransferPair(iCurrentPair.agent, iOr, iEe, iCurrentPair.transfereeAgent);
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Step          : the transfer should be submitted successfully
-    // Description   : Looks for the success message after submission, then logs out so the next section starts with
-    //                 a fresh login.
-    //
-    //                 Kept from Selenium ON PURPOSE (one-to-one): when no success message is found the step still
-    //                 PASSES - it only writes a warning. Tell us if it should fail instead.
-    //                 Change from Selenium: the logout now always runs (finally). Selenium skipped the logout when the
-    //                 message was missing, so the next section's login found no username box and failed.
+    // Function Name : agentPool
+    // Description   : Rows of the Agent Login query for one agent, fetched once per run and cached
+    // Parameters    : pAgent (String) - agent login
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright, logout in finally)
+    // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    @Then("the transfer should be submitted successfully")
-    public void theTransferShouldBeSubmittedSuccessfully()
+    private static List<Herd> agentPool(String pAgent)
     {
-        log.info("[STEP] Then the transfer should be submitted successfully");
+        String     iKey    = pAgent.toLowerCase(Locale.ROOT);
+        List<Herd> iCached = AGENT_POOLS.get(iKey);
+        if (iCached != null) return iCached;
 
-        boolean iConfirmed = false;
+        List<Herd> iFromVault = vaultPool(TestDataVault.POOL_ENTS_AGENT, pAgent, "Agent Login");
+        if (iFromVault == null) iFromVault = vaultPool(TestDataVault.POOL_ENTS_ETF, pAgent, "ETF partner");
+        if (iFromVault != null)
+        {
+            AGENT_POOLS.put(iKey, iFromVault);
+            return iFromVault;
+        }
+
+        int    iLimit = ConfigManager.getInt("ents.pool.size", 200);
+        String iYear  = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
+        String iType  = ConfigManager.getOrDefault("ents.cust.type", "").trim();
+        String iTwo   = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
+        long   iStart = System.currentTimeMillis();
+
+        CommonFunctions.log.info(LOG_PREFIX + "Running Agent Login query for " + pAgent + " (up to " + iLimit + " rows"
+                + (iYear.isEmpty() ? ", all scheme years" : ", scheme year " + iYear)
+                + (iType.isEmpty() ? ", all customer types" : ", cust_type " + iType)
+                + (iTwo.isEmpty() ? "" : ", two-word names only") + ")...");
+        DBRouter.runDB("ENTS", "ENTS Agent Login herds", pAgent, String.valueOf(iLimit), iYear, iType, iTwo);
+
+        List<Herd> iPool = new ArrayList<>();
+        for (Map<String, Object> iRow : DBRouter.getRows())
+        {
+            String iHerd = text(iRow, "HERD_NUMBER");
+            if (!iHerd.isEmpty())
+            {
+                iPool.add(new Herd(iHerd, text(iRow, "HERD_NAME"), text(iRow, "ADDRESSLINE1")));
+            }
+        }
+
+        CommonFunctions.log.info(LOG_PREFIX + "Agent Login query for " + pAgent + " returned " + iPool.size()
+                + " herd(s) in " + (System.currentTimeMillis() - iStart) / 1000 + " s");
+
+        String iVaultPool = TestDataVault.POOL_ENTS_AGENT;
+        if (iPool.isEmpty())
+        {
+            // ETF partners (agr15512, agr15678) are not in herd_agt - their herds come via tden_herd_etf_link
+            CommonFunctions.log.info(LOG_PREFIX + pAgent + " is not in herd_agt - running the ETF partner query...");
+            DBRouter.runDB("ENTS", "ENTS ETF partner herds", pAgent, String.valueOf(iLimit), iYear, iTwo);
+            for (Map<String, Object> iRow : DBRouter.getRows())
+            {
+                String iHerd = text(iRow, "HERD_NUMBER");
+                if (!iHerd.isEmpty()) iPool.add(new Herd(iHerd, text(iRow, "HERD_NAME"), text(iRow, "ADDRESSLINE1")));
+            }
+            iVaultPool = TestDataVault.POOL_ENTS_ETF;
+            CommonFunctions.log.info(LOG_PREFIX + "ETF partner query for " + pAgent + " returned " + iPool.size() + " herd(s)");
+        }
+
+        if (iPool.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Neither the Agent Login query nor the ETF partner query returned herds for "
+                    + pAgent + ". Check the login, or run the queries in SQL Developer on CENTEST_ENTS_DATA.");
+        }
+
+        AGENT_POOLS.put(iKey, iPool);
+        storeInVault(iVaultPool, pAgent, iPool, pAgent);
+        return iPool;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : noEntitlementPool
+    // Description   : Herds of one agent with NO entitlements in the scheme year, fetched once per run and cached.
+    //                 Scheme year = ents.scheme.year, or the current year when that is blank (the query needs a year).
+    //                 No two-word name filter: the transferor name is never typed.
+    // Parameters    : pAgent (String) - agent login
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 23-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static List<Herd> noEntitlementPool(String pAgent)
+    {
+        String     iKey    = pAgent.toLowerCase(Locale.ROOT);
+        List<Herd> iCached = NO_ENTS_POOLS.get(iKey);
+        if (iCached != null) return iCached;
+
+        List<Herd> iFromVault = vaultPool(TestDataVault.POOL_ENTS_NO_ENTS, pAgent, "Agent herds without entitlements");
+        if (iFromVault != null)
+        {
+            NO_ENTS_POOLS.put(iKey, iFromVault);
+            return iFromVault;
+        }
+
+        int    iLimit = ConfigManager.getInt("ents.pool.size", 200);
+        String iYear  = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
+        if (iYear.isEmpty()) iYear = String.valueOf(LocalDate.now().getYear());
+        String iType  = ConfigManager.getOrDefault("ents.cust.type", "").trim();
+        long   iStart = System.currentTimeMillis();
+
+        CommonFunctions.log.info(LOG_PREFIX + "Running \"ENTS Agent herds without entitlements\" for " + pAgent
+                + " (up to " + iLimit + " rows, scheme year " + iYear
+                + (iType.isEmpty() ? ", all customer types" : ", cust_type " + iType) + ")...");
+        DBRouter.runDB("ENTS", "ENTS Agent herds without entitlements", pAgent, String.valueOf(iLimit), iYear, iType);
+
+        List<Herd> iPool = new ArrayList<>();
+        for (Map<String, Object> iRow : DBRouter.getRows())
+        {
+            String iHerd = text(iRow, "HERD_NUMBER");
+            if (!iHerd.isEmpty())
+            {
+                iPool.add(new Herd(iHerd, text(iRow, "HERD_NAME"), text(iRow, "ADDRESSLINE1")));
+            }
+        }
+
+        CommonFunctions.log.info(LOG_PREFIX + "\"ENTS Agent herds without entitlements\" for " + pAgent + " returned "
+                + iPool.size() + " herd(s) in " + (System.currentTimeMillis() - iStart) / 1000 + " s");
+
+        if (iPool.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "No herd without entitlements found for " + pAgent
+                    + " in scheme year " + iYear + ". Check ents.scheme.year, or run the query in SQL Developer on CENTEST_ENTS_DATA.");
+        }
+
+        NO_ENTS_POOLS.put(iKey, iPool);
+        storeInVault(TestDataVault.POOL_ENTS_NO_ENTS, pAgent, iPool, pAgent);
+        return iPool;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : individualPool
+    // Description   : Rows of the Individual Login query, fetched once per run and cached. Same two-word name and
+    //                 customer type settings as the Agent Login query (ents.name.two.words, ents.cust.type), because
+    //                 the individual is typed into the same transferee search. Rows without a login are dropped.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026
+    // ***************************************************************************************************************************************************************************************
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : individualEntitlementFilter
+    // Description   : Scheme year and minimum entitlements for the Individual Login query (07-10-2026): the herd must hold
+    //                 MORE than ents.individual.min.ents (default 10, the Agent Login rule) entitlements in ents.scheme.year.
+    //                 ents.individual.min.ents below 0, or a blank ents.scheme.year, switches the filter off (old behaviour).
+    //                 Also used by DataHarvester, so the Test Data Vault pool follows the same rule.
+    // Returns       : String[] {year, minimum} - {"", ""} when the filter is off
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 07-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static String[] individualEntitlementFilter()
+    {
+        String iYear = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
+        int    iMin  = ConfigManager.getInt("ents.individual.min.ents", 10);
+        if (iYear.isEmpty() || iMin < 0) return new String[]{ "", "" };
+        return new String[]{ iYear, String.valueOf(iMin) };
+    }
+
+    private static List<Herd> individualPool()
+    {
+        if (INDIVIDUAL_POOL != null) return INDIVIDUAL_POOL;
+
+        List<Herd> iFromVault = vaultPool(TestDataVault.POOL_ENTS_INDIVIDUAL, "", "Individual Login");
+        if (iFromVault != null)
+        {
+            for (TestDataVault.Row iRow : TestDataVault.available(TestDataVault.POOL_ENTS_INDIVIDUAL, ""))
+            {
+                INDIVIDUAL_LOGINS.putIfAbsent(iRow.herd, iRow.login);
+            }
+            INDIVIDUAL_POOL = iFromVault;
+            return iFromVault;
+        }
+
+        int    iLimit = ConfigManager.getInt("ents.individual.pool.size", ConfigManager.getInt("ents.pool.size", 200));
+        String iType  = ConfigManager.getOrDefault("ents.cust.type", "").trim();
+        String iTwo   = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
+        long   iStart = System.currentTimeMillis();
+
+        CommonFunctions.log.info(LOG_PREFIX + "Running Individual Login query (up to " + iLimit + " rows"
+                + (iType.isEmpty() ? ", all customer types" : ", cust_type " + iType)
+                + (iTwo.isEmpty() ? "" : ", two-word names only") + ")...");
+        String[] iEnts = individualEntitlementFilter();
+        CommonFunctions.log.info(LOG_PREFIX + (iEnts[0].isEmpty() ? "Individual Login query: no entitlement filter."
+                : "Individual Login query: only herds with more than " + iEnts[1] + " entitlements in " + iEnts[0] + "."));
+        DBRouter.runDB("ENTS", "ENTS Individual Login herds", String.valueOf(iLimit), iTwo, iType, iEnts[0], iEnts[1]);
+
+        List<Herd> iPool = new ArrayList<>();
+        for (Map<String, Object> iRow : DBRouter.getRows())
+        {
+            String iHerd  = text(iRow, "HERD_NUMBER");
+            String iLogin = text(iRow, "LOGIN_ID");
+            if (!iHerd.isEmpty() && !iLogin.isEmpty() && !INDIVIDUAL_LOGINS.containsKey(iHerd))
+            {
+                iPool.add(new Herd(iHerd, text(iRow, "NAME"), text(iRow, "ADDRESS")));
+                INDIVIDUAL_LOGINS.put(iHerd, iLogin);
+            }
+        }
+
+        CommonFunctions.log.info(LOG_PREFIX + "Individual Login query returned " + iPool.size() + " herd(s) in "
+                + (System.currentTimeMillis() - iStart) / 1000 + " s");
+
+        if (iPool.isEmpty())
+        {
+            throw new IllegalStateException(LOG_PREFIX + "Individual Login query returned no herds. "
+                    + "Run it in SQL Developer on CENTEST_ENTS_DATA, or check ents.cust.type / ents.name.two.words.");
+        }
+
+        INDIVIDUAL_POOL = iPool;
+        storeInVault(TestDataVault.POOL_ENTS_INDIVIDUAL, "", iPool, null);
+        return iPool;
+    }
+
+    private static String text(Map<String, Object> pRow, String pColumn)
+    {
+        return Objects.toString(pRow.get(pColumn), "").trim();
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : markNotFound
+    // Description   : Records that a picked herd could not be found on screen (for example not in the agent's
+    //                 Transfer Out list). The herd is already in the used-herds file, so it is never picked again;
+    //                 this extra line only explains why, for whoever reads the file.
+    // Parameters    : pHerd   (String) - herd number
+    //                 pReason (String) - short reason, e.g. "not in Transfer Out list"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void markNotFound(String pHerd, String pReason)
+    {
+        String iAgent = iCurrentPair == null ? iLoggedInUser : iCurrentPair.agent;
+        markUsed("not-found", pHerd, iAgent, pReason);
+        CommonFunctions.log.warning(LOG_PREFIX + "Herd " + pHerd + " skipped: " + pReason);
+
+        if (TestDataVault.isEnabled())
+        {
+            TestDataVault.markBad(pHerd, pReason);
+            countBadAndRefill(iAgent);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : markCurrentPairUsed
+    // Description   : The transfer of the current pair went through: both herds become USED in the vault. Called by
+    //                 TC_01_ENTS "the transfer should be submitted successfully". Nothing happens without a pair.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void markCurrentPairUsed()
+    {
+        markCurrentPairUsed(true);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : markCurrentPairUsed(boolean)
+    // Description   : The section is finished. pConfirmed = the portal showed the submitted message.
+    //                 Reuse mode (data.reuse.herds=true, 01-10-2026): a confirmed transfer only moved 0.01 entitlements,
+    //                 so both herds go back to AVAILABLE in the vault and can be picked again, even later in this run.
+    //                 Two exceptions stay USED until the next weekly refill, because reusing them would break a test:
+    //                   - the transferee of a Lease: it now holds leased entitlements, and as a transferor it would hit
+    //                     "Leased entitlements can only be transferred by Change of Registration ..."
+    //                   - both herds of an unconfirmed transfer: it may still be pending, and a second transfer on the
+    //                     same herd could be blocked or accept the wrong transfer
+    // Parameters    : pConfirmed (boolean)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void markCurrentPairUsed(boolean pConfirmed)
+    {
+        if (iCurrentPair == null) return;
+        boolean iReuse = TestDataVault.isReuseOn();
+        boolean iLease = iLastPurpose.toLowerCase(Locale.ROOT).contains("lease");
+        String  iOr    = iCurrentPair.transferor.herdNumber;
+        String  iEe    = iCurrentPair.transferee == null ? null : iCurrentPair.transferee.herdNumber;
+
+        if (TestDataVault.isEnabled())
+        {
+            if (!pConfirmed && iReuse)
+            {
+                TestDataVault.markUsedFinal(iOr, "transfer not confirmed - may still be pending");
+                if (iEe != null) TestDataVault.markUsedFinal(iEe, "transfer not confirmed - may still be pending");
+            }
+            else
+            {
+                TestDataVault.markUsed(iOr);
+                if (iEe != null)
+                {
+                    if (iReuse && iLease) TestDataVault.markUsedFinal(iEe, "lease transferee - holds leased entitlements now");
+                    else                  TestDataVault.markUsed(iEe);
+                }
+            }
+        }
+
+        if (iReuse && pConfirmed)
+        {
+            COMPLETED_THIS_RUN.add(iOr);
+            if (iEe != null && !iLease) COMPLETED_THIS_RUN.add(iEe);
+            CommonFunctions.log.info(LOG_PREFIX + "Reuse mode: " + iOr + (iEe != null && !iLease ? " and " + iEe : "")
+                    + " can be picked again" + (iLease && iEe != null ? " (" + iEe + " kept out: lease transferee)" : "") + ".");
+        }
+        BAD_IN_A_ROW.clear();
+    }
+
+    // =================================================================================================
+    // TEST DATA VAULT BRIDGE
+    // =================================================================================================
+
+    // Herds marked BAD in a row per agent (reset by a success). Three in a row = the vault pool is stale -> refetch.
+    private static final Map<String, Integer> BAD_IN_A_ROW = new HashMap<>();
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : vaultPool
+    // Description   : The AVAILABLE rows of a vault pool as Herd objects, or null when the vault is off or has nothing
+    //                 for this pool (the caller then runs the live query).
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 01-10-2026
+    // ***************************************************************************************************************************************************************************************
+    private static List<Herd> vaultPool(String pPool, String pKey, String pLabel)
+    {
+        if (!TestDataVault.isEnabled() || !TestDataVault.hasPool(pPool, pKey)) return null;
+
+        List<TestDataVault.Row> iRows = TestDataVault.available(pPool, pKey);
+        if (iRows.isEmpty())
+        {
+            CommonFunctions.log.warning(LOG_PREFIX + "Vault pool " + pPool + "/" + pKey + " has no available row left - running the "
+                    + pLabel + " query instead (run TC_00_DATA to refill the vault).");
+            return null;
+        }
+
+        List<Herd> iPool = new ArrayList<>();
+        for (TestDataVault.Row iRow : iRows) iPool.add(new Herd(iRow.herd, iRow.name, iRow.address));
+        CommonFunctions.log.info(LOG_PREFIX + pLabel + " pool" + (pKey.isEmpty() ? "" : " for " + pKey) + " taken from the vault: "
+                + iPool.size() + " available herd(s), no query run.");
+        return iPool;
+    }
+
+    // Rows of a live query are stored in the vault too, so the next run finds them there
+    private static void storeInVault(String pPool, String pKey, List<Herd> pHerds, String pLogin)
+    {
+        if (!TestDataVault.isEnabled()) return;
         try
         {
-            String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
-            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
-            log.info("Transfer submitted successfully: " + iConfirmation);
-            iConfirmed = true;
+            List<TestDataVault.Row> iRows = new ArrayList<>();
+            for (Herd iHerd : pHerds)
+            {
+                String iLogin = pLogin != null ? pLogin : INDIVIDUAL_LOGINS.getOrDefault(iHerd.herdNumber, "");
+                iRows.add(new TestDataVault.Row(pPool, pKey, iHerd.herdNumber, iHerd.name, iHerd.address, iLogin));
+            }
+            TestDataVault.putPool(pPool, pKey, iRows);
         }
         catch (Exception e)
         {
-            log.warning("[TRANSFER] No success message found after submission (" + e.getMessage()
-                    + ") - step passes as in the Selenium version. Check the screenshot of this section.");
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not store the " + pPool + " rows in the vault: " + e.getMessage());
         }
-        finally
+    }
+
+    // Three BAD herds in a row for one agent: drop the cached pool so the next pick runs the live query and refills the vault
+    private static void countBadAndRefill(String pAgent)
+    {
+        String iKey   = pAgent == null ? "" : pAgent.toLowerCase(Locale.ROOT);
+        int    iCount = BAD_IN_A_ROW.merge(iKey, 1, Integer::sum);
+        int    iLimit = ConfigManager.getInt("data.bad.in.a.row", 3);
+        if (iCount >= iLimit)
         {
-            // Test Data Vault (01-10-2026): both herds of this section are finished with. In reuse mode
-            // (data.reuse.herds=true) a confirmed transfer frees both herds again; an unconfirmed one keeps them out.
-            EntsTestData.markCurrentPairUsed(iConfirmed);
-            EntsSession.logout();
+            CommonFunctions.log.warning(LOG_PREFIX + iCount + " bad herd(s) in a row for " + pAgent
+                    + " - the vault pool looks stale, the next pick runs the live query and refills it.");
+            AGENT_POOLS.remove(iKey);
+            NO_ENTS_POOLS.remove(iKey);
+            INDIVIDUAL_POOL = null;
+            for (String iPoolName : new String[]{ TestDataVault.POOL_ENTS_AGENT, TestDataVault.POOL_ENTS_ETF })
+            {
+                for (TestDataVault.Row iRow : TestDataVault.available(iPoolName, pAgent))
+                {
+                    TestDataVault.markBad(iRow.herd, "pool refetched after " + iCount + " bad herds in a row");
+                }
+            }
+            BAD_IN_A_ROW.put(iKey, 0);
         }
     }
 
+    // =================================================================================================
+    // USED-HERDS FILE
+    // =================================================================================================
 
-    // ===================================================================================================================================
-    //  NAVIGATION — Reset between sections
-    // ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent navigates back to the Transfers client list
-    // Description   : Clears the captured key and goes back to My Clients → Transfers tab for the next section.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent navigates back to the Transfers client list")
-    public void theAgentNavigatesBackToTheTransfersClientList()
+    private static Path usedFile()
     {
-        log.info("[STEP] When the agent navigates back to the Transfers client list");
-
-        iCapturedTransferKey = "";
-
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-        iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
-
-        log.info("Navigated back to Transfers client list.");
+        return Paths.get(ConfigManager.getOrDefault("ents.used.herds.file", "runtime-data/ents_used_herds.csv"));
     }
 
-
     // ***************************************************************************************************************************************************************************************
-    // Method        : performLogout
-    // Description   : Kept for callers of the Selenium name - delegates to the shared EntsSession.logout()
+    // Function Name : usedHerds
+    // Description   : Herds that must not be picked: those handed out in this run, plus (when ents.skip.used.herds=true)
+    //                 every herd listed in the used-herds file from earlier runs.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-05-2026 | Updated: 22-09-2026
+    // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    public void performLogout()
+    private static Set<String> usedHerds()
     {
-        EntsSession.logout();
-    }
+        Set<String> iUsed = new HashSet<>(USED_THIS_RUN);
 
+        // Reuse mode: only herds still in flight are skipped (handed out, transfer not confirmed yet). The used-herds
+        // file is still written as a log, but not read.
+        if (TestDataVault.isReuseOn())
+        {
+            iUsed.removeAll(COMPLETED_THIS_RUN);
+            return iUsed;
+        }
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Validate if Appeal can be made sucessfully
-    // Description   : Submits an appeal from whichever appeal button is shown (transfer or NR/CISYF), checks the
-    //                 confirmation, then logs out. Same as Selenium: a failure on screen is logged and the step passes.
-    //
-    //                 Change 22-09-2026 (TC_18 to TC_24):
-    //                   - The logout always runs (finally). Selenium logged out only after a confirmed appeal; when the
-    //                     appeal failed, the next section of TC_18 / TC_19 / TC_20 found no login page and failed there.
-    //                 Note: a missing appeal key in the ObjectRepository is caught by the try block below, so the step
-    //                 then passes with an "Appeal not confirmed" warning - check the log for that line.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, logout in finally; EntsSupport key check removed)
-    // ***************************************************************************************************************************************************************************************
-    @Then("Validate if Appeal can be made sucessfully")
-    public void theAppealShouldBeSubmittedSuccessfully()
-    {
-        log.info("[STEP] Then the Appeal should be submitted successfully");
+        if (!ConfigManager.getBool("ents.skip.used.herds", true)) return iUsed;
+
+        Path iFile = usedFile();
+        if (!Files.exists(iFile)) return iUsed;
 
         try
         {
-            boolean iTransferAppeal = isVisible(ObjReader.getLocator("iAppealApplicationBtn"), 3);
-
-            iAction("CLICK", "XPATH", ObjReader.getLocator(iTransferAppeal ? "iAppealApplicationBtn" : "iAppealNRCISYFApplicationBtn"), null);
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppealNotesField"), "Test Automation");
-            iAction("CLICK", "XPATH", ObjReader.getLocator(iTransferAppeal ? "iAppealChkBoxAccept" : "iAppealNRCISYFChkBoxAccept"), null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iSubmitAppealBtn"), null);
-
-            String iConfirmation = iAction("GETTEXT", "XPATH", "//*[contains(text(),'Appeal has been submitted')]", null);
-            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Appeal submission success indicator should be visible.");
-            log.info("Appeal submitted successfully (" + (iTransferAppeal ? "transfer" : "NR/CISYF") + "): " + iConfirmation);
+            for (String iLine : Files.readAllLines(iFile, StandardCharsets.UTF_8))
+            {
+                String[] iCells = iLine.split(",", -1);
+                if (iCells.length >= 4 && !iCells[3].isBlank() && !"herd".equalsIgnoreCase(iCells[3].trim()))
+                {
+                    iUsed.add(iCells[3].trim());
+                }
+            }
         }
-        catch (Exception e)
+        catch (IOException e)
         {
-            log.warning("[APPEAL] Appeal not confirmed (" + e.getMessage() + ") - step passes as in the Selenium version.");
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not read " + iFile + " (" + e.getMessage()
+                    + ") - only herds used in this run are skipped.");
         }
-        finally
+        return iUsed;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : markUsed
+    // Description   : Adds one line to the used-herds file. A write failure is logged, never fatal.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void markUsed(String pRole, String pHerd, String pLogin, String pPurpose)
+    {
+        USED_THIS_RUN.add(pHerd);
+        COMPLETED_THIS_RUN.remove(pHerd);   // handed out again - in flight until its transfer is confirmed
+        if (pPurpose != null) iLastPurpose = pPurpose;
+
+        // Vault: a herd handed out is RESERVED until markCurrentPairUsed (USED) or markNotFound (BAD)
+        if (TestDataVault.isEnabled() && !"not-found".equals(pRole))
         {
-            EntsSession.logout();
+            try { TestDataVault.reserveHerd(pHerd, System.getProperty("testcase", ""), pRole + " " + (pPurpose == null ? "" : pPurpose)); }
+            catch (Exception e) { CommonFunctions.log.warning(LOG_PREFIX + "Vault reserve failed for " + pHerd + ": " + e.getMessage()); }
+        }
+
+        Path iFile = usedFile();
+        try
+        {
+            if (iFile.getParent() != null) Files.createDirectories(iFile.getParent());
+            if (!Files.exists(iFile))
+            {
+                Files.write(iFile, (CSV_HEADER + System.lineSeparator()).getBytes(StandardCharsets.UTF_8));
+            }
+
+            String iLine = String.join(",",
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                    csv(System.getProperty("testcase", "")),
+                    csv(pRole),
+                    csv(pHerd),
+                    csv(pLogin),
+                    csv(pPurpose)) + System.lineSeparator();
+
+            Files.write(iFile, iLine.getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+        }
+        catch (IOException e)
+        {
+            CommonFunctions.log.warning(LOG_PREFIX + "Could not record " + pHerd + " in " + iFile + " (" + e.getMessage() + ")");
         }
     }
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the transfers should be submitted successfully
-    // Description   : Same check as "the transfer should be submitted successfully" but without the logout (the
-    //                 appeal step that follows in TC_18 to TC_24 logs out).
-    //                 02-10-2026: tells the Test Data Vault the section is finished, like the singular step. Before
-    //                 this, the herds of TC_18 / TC_19 / TC_20 sections stayed RESERVED and were never reused.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 02-10-2026 (vault)
-    // ***************************************************************************************************************************************************************************************
-    @Then("the transfers should be submitted successfully")
-    public void theTransfersShouldBeSubmittedSuccessfully()
+    // Commas would break the simple CSV format - replace them
+    private static String csv(String pValue)
     {
-        log.info("[STEP] Then the transfers should be submitted successfully");
-
-        boolean iConfirmed = false;
-        try
-        {
-            String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
-            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
-            log.info("Transfer submitted successfully: " + iConfirmation);
-            iConfirmed = true;
-        }
-        catch (Exception e)
-        {
-            log.warning("[TRANSFER] No success message found after submission (" + e.getMessage()
-                    + ") - step passes as in the Selenium version.");
-        }
-        finally
-        {
-            EntsTestData.markCurrentPairUsed(iConfirmed);
-        }
+        return pValue == null ? "" : pValue.replace(',', ' ').replace('\n', ' ').replace('\r', ' ').trim();
     }
 }
