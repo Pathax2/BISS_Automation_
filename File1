@@ -1,125 +1,50 @@
-// ===================================================================================================================================
-// File          : LoginScreens.java
-// Package       : commonFunctions
-// Description   : Keycloak screens that can appear between two login steps, shared by every BISS and ENTS login
-//                 (TC_03, TC_18, TC_01_Login, EntsSession.loginAs).
-//
-//                 skipNewUserScreens - the new-user introduction screens ("Next" button, id=next, up to 7 screens).
-//                   They were handled only after the PIN screen. On 06-10-2026 they appeared straight after the password
-//                   Login click, before the OTP box, and the login failed waiting for the OTP box. Every login now calls
-//                   this right after the password Login click (and the re-logins also after the PIN Login click).
-//
-//                 No extra wait on a normal login: the method waits for the FIRST of the screens that can follow
-//                 (Next, PIN, OTP / TOTP, mobile number, Terms and Conditions, a Keycloak message such as Account
-//                 Expired) and returns at once when it is not the Next screen.
-//
-//                 Settings (application.properties):
-//                   login.screen.wait.seconds  - how long to wait for the next login screen (default 15)
-//                   login.newuser.next.max     - most Next clicks before giving up (default 10)
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 06-10-2026
-// ===================================================================================================================================
+Feature: TC_17_ENTS - Transfer End-to-End with Staff ENTSCore Verification
 
-package commonFunctions;
+  # Migrated from: TC_17_ENTS.feature (1 scenario)
+  # Same-agent transfer (206) then staff verifies in ENTSCore
+  # Reused: TC_01_ENTS (transfer steps), TC_15_ENTS (staff verification)
+  # Author: Aniket Pathare | Created: 31-03-2026
 
-import com.microsoft.playwright.Locator;
-import utilities.ConfigManager;
-import utilities.ObjReader;
+  Background:
+    Given the agent user is on the login page
+    When the individual logs in as transferor "aga6352"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
 
-public final class LoginScreens
-{
-    // Keycloak message box (Account Expired, Invalid username or password, ...)
-    private static final String FEEDBACK_XPATH = "//*[contains(@class,'kc-feedback-text')]";
+  @sanity @transfers @staff-verification
+  Scenario: AT-ENTS-TRANSFER-STAFF - Complete transfer and verify in ENTSCore
 
-    // Mobile number form shown after the PIN for some users (same XPath as TC_03 / EntsSession)
-    private static final String MOBILE_NUMBER_XPATH = "//form[@id='kc-totp-login-form']//input[@id='mobile_number']";
+    # --- Capture OwnerID first ---
+    When the agent searches for herd "A1020300" and opens it
+    And the agent navigates to the "Entitlements / Usage" side nav tab
+    And the agent captures the OwnerID of the herd
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
 
-    private LoginScreens() { }
+    # --- Same-agent transfer (206) ---
+    When the agent creates a transfer application with the following details
+      | transferorHerd | A1020300      |
+      | transfereeHerd | A1010126      |
+      | transfereeName | Maureen Wynne |
+      | transferType   | Change of Legal Entity|
+      | entitlements   | 0.01          |
+      | notes          | Test Notes    |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
+    # --- Transferee (same agent) ---
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | A1010126  |
+      | notes          | Approved Test |
+    Then the transfer should be submitted successfully
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : skipNewUserScreens
-    // Description   : Waits for the next login screen and, while it is a new-user introduction screen, clicks Next.
-    //                 Returns as soon as a PIN, OTP / TOTP, mobile number, Terms and Conditions or Keycloak message
-    //                 screen is shown, so a login without the new-user screens loses no time.
-    //                 When none of these screens shows within login.screen.wait.seconds, it logs a warning and returns;
-    //                 the caller's next action then fails with its own message.
-    // Parameters    : pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
-    // Returns       : int - how many times Next was clicked (0 on a normal login)
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 06-10-2026
-    // ***************************************************************************************************************************************************************************************
-    public static int skipNewUserScreens(String pLogPrefix)
-    {
-        int    iWait     = ConfigManager.getInt("login.screen.wait.seconds", 15);
-        int    iMax      = ConfigManager.getInt("login.newuser.next.max", 10);
-        String iNext     = ObjReader.getLocator("iNextBtnNewUser");
-        String iAnyNext  = String.join(" | ",
-                iNext,
-                ObjReader.getLocator("iPinForm"),
-                ObjReader.getLocator("iOPTtxtbox"),
-                ObjReader.getLocator("iTOTPtextbox"),
-                ObjReader.getLocator("iAcceptTermsCheckbox"),
-                MOBILE_NUMBER_XPATH,
-                FEEDBACK_XPATH);
-
-        int iClicks = 0;
-        while (true)
-        {
-            if (!UiHelpers.isVisible(UiHelpers.byXpath(iAnyNext), iWait))
-            {
-                CommonFunctions.log.warning(pLogPrefix + " No login screen (Next, PIN, OTP, Terms, message) shown within "
-                        + iWait + " s" + (iClicks == 0 ? "." : " after " + iClicks + " Next click(s)."));
-                return iClicks;
-            }
-
-            if (!shownNow(iNext)) break;
-
-            if (iClicks >= iMax)
-            {
-                throw new IllegalStateException(pLogPrefix + " The new-user Next screen is still shown after " + iMax
-                        + " clicks (login.newuser.next.max).");
-            }
-
-            CommonFunctions.iAction("CLICK", "XPATH", iNext, null);
-            iClicks++;
-            CommonFunctions.log.info(pLogPrefix + " New-user screen - Next clicked (" + iClicks + ")");
-            waitUntilGone(iNext);
-        }
-
-        if (iClicks > 0)
-        {
-            CommonFunctions.log.info(pLogPrefix + " New-user screens done - Next clicked " + iClicks + " time(s).");
-        }
-        return iClicks;
-    }
-
-    // true when the first match is visible right now (no waiting)
-    private static boolean shownNow(String pXpath)
-    {
-        try
-        {
-            return UiHelpers.byXpath(pXpath).first().isVisible();
-        }
-        catch (RuntimeException iGone)
-        {
-            return false;
-        }
-    }
-
-    // After a Next click the same button is on the next screen too: wait briefly for the page to change so the
-    // loop does not see the old button again. A page that keeps the button in place simply ends the wait.
-    private static void waitUntilGone(String pXpath)
-    {
-        Locator iButton = UiHelpers.byXpath(pXpath).first();
-        try
-        {
-            UiHelpers.waitHidden(iButton, 1);
-        }
-        catch (RuntimeException iStillShown)
-        {
-            // same element kept between screens - the loop checks it again
-        }
-    }
-}
+    # --- Staff ENTSCore verification ---
+    When the staff user logs into ENTSCore as "AGR2214"
+    And the staff searches for the herd by OwnerID
+    And the staff navigates to year "2026" and "Transfers" tab
+    Then the transfer submission should be visible in ENTSCore
