@@ -1,50 +1,93 @@
-Feature: TC_17_ENTS - Transfer End-to-End with Staff ENTSCore Verification
+// ===================================================================================================================================
+// File          : TC_17_ENTS.java
+// Package       : stepdefinitions.ENTS
+// Description   : Step definitions for TC_17_ENTS - Transfer End-to-End with Staff ENTSCore Verification.
+//
+//                 Steps in this file (1):
+//                   1. the agent picks a same-agent transfer pair for {string}
+//
+//                 Every other TC_17_ENTS step is reused (bound automatically by Cucumber):
+//                   login, BISS Home, My Clients               -> TC_03.java, TC_08_ENTS.java
+//                   switch to the Transfers tab                -> TC_06.java
+//                   search herd, side nav tab, OwnerID, staff  -> TC_15_ENTS.java
+//                   create, upload, send, key, submitted       -> TC_01_ENTS.java
+//                   transferee acceptance flow                 -> TC_07_ENTS.java
+//
+//                 Why this step (07-10-2026): TC_17 captures the OwnerID of the TRANSFEROR before the transfer is created,
+//                 so the staff can search it in ENTSCore. With database herds the pair is normally picked inside the create
+//                 step, which is too late for the OwnerID step. This step picks the pair first and pins it; the create
+//                 step (TC_01_ENTS) then keeps it and only replaces the transferee if a check fails there.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 07-10-2026
+// ===================================================================================================================================
 
-  # Migrated from: TC_17_ENTS.feature (1 scenario)
-  # Same-agent transfer (206) then staff verifies in ENTSCore
-  # Reused: TC_01_ENTS (transfer steps), TC_15_ENTS (staff verification)
-  # Author: Aniket Pathare | Created: 31-03-2026
+package stepdefinitions.ENTS;
 
-  Background:
-    Given the agent user is on the login page
-    When the individual logs in as transferor "aga6352"
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
+import io.cucumber.java.en.When;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
 
-  @sanity @transfers @staff-verification
-  Scenario: AT-ENTS-TRANSFER-STAFF - Complete transfer and verify in ENTSCore
+import java.util.logging.Logger;
 
-    # --- Capture OwnerID first ---
-    When the agent searches for herd "A1020300" and opens it
-    And the agent navigates to the "Entitlements / Usage" side nav tab
-    And the agent captures the OwnerID of the herd
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
+public class TC_17_ENTS
+{
+    private static final Logger log = Logger.getLogger(TC_17_ENTS.class.getName());
 
-    # --- Same-agent transfer (206) ---
-    When the agent creates a transfer application with the following details
-      | transferorHerd | A1020300      |
-      | transfereeHerd | A1010126      |
-      | transfereeName | Maureen Wynne |
-      | transferType   | Change of Legal Entity|
-      | entitlements   | 0.01          |
-      | notes          | Test Notes    |
-    And the agent uploads the transferor signature document
-    And the agent sends the transfer for acceptance
-    Then the transfer key should be captured
 
-    # --- Transferee (same agent) ---
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
-    And the agent switches to the "Transfers" tab on the My Client page
-    And the ETF partner completes the transferee acceptance flow
-      | transfereeHerd | A1010126  |
-      | notes          | Approved Test |
-    Then the transfer should be submitted successfully
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent picks a same-agent transfer pair for {string}
+    // Description   : Picks a transferor and a transferee herd of the logged-in agent from the ENTS Agent Login query (Test
+    //                 Data Vault first), checks both in the agent's Transfer Out list with the same checks as the create
+    //                 step (not blacklisted, in the list, not expired; the portal name replaces the DB name), and pins the
+    //                 pair so {transferor.herd}, {transferee.herd} and {transferee.name} can be used from here on.
+    //                 A herd that fails a check is recorded as not found and another pair is picked, up to
+    //                 ents.pair.retries (default 5).
+    //                 Must run on the Transfers tab of My Clients, after the agent's login.
+    // Parameters    : pTransferType (String) - transfer type of the section, e.g. "Change of Legal Entity"
+    //                                          (written to the used-herds file and the vault, as in the create step)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 07-10-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent picks a same-agent transfer pair for {string}")
+    public void theAgentPicksASameAgentTransferPair(String pTransferType)
+    {
+        String iPurpose  = pTransferType == null ? "" : pTransferType.trim();
+        String iAgent    = EntsTestData.loggedInUser();
+        int    iMaxTries = Math.max(1, ConfigManager.getInt("ents.pair.retries", 5));
 
-    # --- Staff ENTSCore verification ---
-    When the staff user logs into ENTSCore as "AGR2214"
-    And the staff searches for the herd by OwnerID
-    And the staff navigates to year "2026" and "Transfers" tab
-    Then the transfer submission should be visible in ENTSCore
+        log.info("[STEP] When the agent picks a same-agent transfer pair for " + iPurpose + " (agent " + iAgent + ")");
+
+        for (int iTry = 1; iTry <= iMaxTries; iTry++)
+        {
+            EntsTestData.TransferPair iPair = EntsTestData.nextSameAgentPair(iAgent, iPurpose);
+
+            String iTransferee = iPair.transferee.herdNumber;
+            String iTransferor = iPair.transferor.herdNumber;
+
+            String iRejected = iTransferee;
+            String iReason   = TC_01_ENTS.herdProblem(iTransferee, "transferee");
+            if (iReason == null)
+            {
+                iRejected = iTransferor;
+                iReason   = TC_01_ENTS.herdProblem(iTransferor, "transferor");
+            }
+
+            if (iReason == null)
+            {
+                EntsTestData.pinPair();
+                log.info("[TC17] Pair picked and pinned: transferor " + EntsTestData.currentPair().transferor
+                        + " -> transferee " + EntsTestData.currentPair().transferee + " (agent " + iAgent + ")");
+                return;
+            }
+
+            if (iTry == iMaxTries)
+            {
+                throw new RuntimeException("[TC17] Herd " + iRejected + " is " + iReason + " (tried " + iMaxTries
+                        + " pairs of " + iAgent + " - check the Agent Login query / ents.scheme.year)");
+            }
+            EntsTestData.markNotFound(iRejected, iReason);
+            log.warning("[TC17] Try " + iTry + "/" + iMaxTries + ": " + iRejected + " " + iReason + " - picking another pair.");
+        }
+    }
+}
