@@ -1,61 +1,46 @@
-            // ----------------------------------------------------------------
-            case "ENTS INDIVIDUAL LOGIN HERDS":
-            {
-                requireParamCountBetween(key, params, 0, 3);
-                int     maxRows = (params.length >= 1 && !isBlank(params[0])) ? parseInt(params[0], "limit") : 200;
-                boolean twoWord = params.length >= 2 && params[1] != null
-                        && ("Y".equalsIgnoreCase(params[1].trim()) || "true".equalsIgnoreCase(params[1].trim()));
-                boolean hasType = params.length >= 3 && !isBlank(params[2]);
-                String  custTyp = hasType ? params[2].trim() : null;
-                sql =
-                        "WITH herd_numbers AS ( " +
-                                "    SELECT vr.herd_ols_login login_id, " +
-                                "           vr.herd_id        app_from_herd " +
-                                "    FROM vwco_ents_herd_abls_rpt vr " +
-                                "    WHERE vr.herd_ols_login IS NOT NULL " +
-                                "    AND   vr.start_date > DATE '2022-12-31' " +
-                                "    AND   REGEXP_LIKE(vr.herd_id, '^[A-Z]') " +
-                                (hasType ? "    AND   vr.cust_type = ? " : "") +
-                                "), " +
-                                "herd_number_status AS ( " +
-                                "    SELECT t.herd_number, " +
-                                "           MAX(CASE WHEN t.death_indicator = 'N' THEN 1 ELSE 0 END) has_n " +
-                                "    FROM vwco_ems_client_details t " +
-                                "    JOIN herd_numbers i ON i.app_from_herd = t.herd_number " +
-                                "    GROUP BY t.herd_number " +
-                                "), " +
-                                "picked AS ( " +
-                                "    SELECT login_id, " +
-                                "           initcap(TRIM(payee_name)) name, " +
-                                "           herd_number, " +
-                                "           initcap(addr1)      address " +
-                                "    FROM ( " +
-                                "        SELECT t.*, " +
-                                "               i.login_id, " +
-                                "               ROW_NUMBER() OVER ( " +
-                                "                   PARTITION BY t.herd_number " +
-                                "                   ORDER BY CASE " +
-                                "                                WHEN s.has_n = 1 AND t.death_indicator = 'N' THEN 1 " +
-                                "                                ELSE 2 " +
-                                "                            END, " +
-                                "                            t.start_date DESC " +
-                                "               ) rn " +
-                                "        FROM vwco_ems_client_details t " +
-                                "        JOIN herd_numbers i       ON i.app_from_herd = t.herd_number " +
-                                "        JOIN herd_number_status s ON s.herd_number   = t.herd_number " +
-                                "        WHERE s.has_n = 1 " +
-                                "    ) " +
-                                "    WHERE rn = 1 " +
-                                "    AND   death_indicator = 'N' " +
-                                (twoWord ? "    AND   REGEXP_LIKE(TRIM(payee_name), '^[[:alpha:]-]+ [[:alpha:]-]+$') " : "") +
-                                "    ORDER BY DBMS_RANDOM.VALUE " +
-                                ") " +
-                                "SELECT login_id, name, herd_number, address " +
-                                "FROM picked " +
-                                "WHERE ROWNUM <= ?";
-                List<Object> binds = new ArrayList<>();
-                if (hasType) binds.add(custTyp);
-                binds.add(maxRows);
-                jdbcParams = binds.toArray();
-                break;
-            }
+-- 1. ENTS Individual Login herds - current version
+WITH herd_numbers AS (
+    SELECT vr.herd_ols_login login_id,
+           vr.herd_id        app_from_herd
+    FROM vwco_ents_herd_abls_rpt vr
+    WHERE vr.herd_ols_login IS NOT NULL
+    AND   vr.start_date > DATE '2022-12-31'
+    AND   REGEXP_LIKE(vr.herd_id, '^[A-Z]')
+    AND   vr.cust_type = 'Individual'
+),
+herd_number_status AS (
+    SELECT t.herd_number,
+           MAX(CASE WHEN t.death_indicator = 'N' THEN 1 ELSE 0 END) has_n
+    FROM vwco_ems_client_details t
+    JOIN herd_numbers i ON i.app_from_herd = t.herd_number
+    GROUP BY t.herd_number
+),
+picked AS (
+    SELECT login_id,
+           initcap(TRIM(payee_name)) name,
+           herd_number,
+           initcap(addr1)            address
+    FROM (
+        SELECT t.*,
+               i.login_id,
+               ROW_NUMBER() OVER (
+                   PARTITION BY t.herd_number
+                   ORDER BY CASE
+                                WHEN s.has_n = 1 AND t.death_indicator = 'N' THEN 1
+                                ELSE 2
+                            END,
+                            t.start_date DESC
+               ) rn
+        FROM vwco_ems_client_details t
+        JOIN herd_numbers i       ON i.app_from_herd = t.herd_number
+        JOIN herd_number_status s ON s.herd_number   = t.herd_number
+        WHERE s.has_n = 1
+    )
+    WHERE rn = 1
+    AND   death_indicator = 'N'
+    AND   REGEXP_LIKE(TRIM(payee_name), '^[[:alpha:]-]+ [[:alpha:]-]+$')
+    ORDER BY DBMS_RANDOM.VALUE
+)
+SELECT login_id, name, herd_number, address
+FROM picked
+WHERE ROWNUM <= 200;
