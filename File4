@@ -1,258 +1,56 @@
-// ===================================================================================================================================
-// File          : TC_01_Login.java
-// Package       : stepdefinitions
-// Description   : Step definitions for TC_01 - Login into the application.
-//                 Maps Gherkin steps from TC_01_Login.feature (and TC_02_InvalidCredentials_Login.feature)
-//                 to CommonFunctions actions. Locators sourced exclusively from ObjReader (ObjectRepository.properties).
-//
-//                 PLAYWRIGHT MIGRATION (15-09-2026):
-//                   The only functional change is clickWelcomeLoginIfPresent(). A fresh Playwright browser context can be
-//                   redirected straight to the Keycloak sign-in page, where the BISS "Log in" button does not exist.
-//                   The welcome button is now clicked only when it is actually displayed. Every other line is unchanged.
-//
-// Author        : Aniket Pathare | aniket.pathare@goverment.ie
-// Date Created  : 10-03-2026
-// Updated       : 15-09-2026 - Playwright migration (conditional welcome "Log in" click)
-// Updated       : 06-10-2026 - "user clicks on Login button": new-user Next screens after the password Login click are
-//                              clicked through (commonFunctions.LoginScreens) before the OTP box is filled
-// ===================================================================================================================================
+Feature: TC_17_ENTS - Transfer End-to-End with Staff ENTSCore Verification
 
-package stepdefinitions;
+  # Migrated from: TC_17_ENTS.feature (1 scenario)
+  # Same-agent transfer (206) then staff verifies in ENTSCore
+  # Reused: TC_01_ENTS (transfer steps), TC_15_ENTS (staff verification)
+  # Author: Aniket Pathare | Created: 31-03-2026 | Updated: 07-10-2026
+  #
+  # 07-10-2026: database herds instead of A1020300 -> A1010126 (Maureen Wynne). The OwnerID is captured on the
+  # transferor BEFORE the transfer is created, so the pair is picked first ("the agent picks a same-agent transfer
+  # pair for ...", TC_17_ENTS.java) and kept by the create step. Both herds come from aga6352's Agent Login pool and
+  # are checked in its Transfer Out list (not expired, portal name used).
 
-import commonFunctions.CommonFunctions;
-import commonFunctions.UiHelpers;
-import io.cucumber.java.en.Given;
-import io.cucumber.java.en.Then;
-import io.cucumber.java.en.When;
-import utilities.ObjReader;
+  Background:
+    Given the agent user is on the login page
+    When the individual logs in as transferor "aga6352"
+    And the agent opens the "Basic Income Support for Sustainability" application
+    Then the agent should land on the BISS Home page
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
 
-import static commonFunctions.CommonFunctions.iAction;
+  @sanity @transfers @staff-verification
+  Scenario: AT-ENTS-TRANSFER-STAFF - Complete transfer and verify in ENTSCore
 
-public class TC_01_Login
-{
-    // Seconds to wait for the optional BISS welcome page before assuming Keycloak is already displayed
-    private static final int iWelcomePageWaitSeconds = 5;
+    # --- Pick the pair, then capture the transferor's OwnerID ---
+    When the agent picks a same-agent transfer pair for "Change of Legal Entity"
+    And the agent searches for herd "{transferor.herd}" and opens it
+    And the agent navigates to the "Entitlements / Usage" side nav tab
+    And the agent captures the OwnerID of the herd
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clickWelcomeLoginIfPresent
-    // Description   : Clicks the BISS welcome page "Log in" button only when it is displayed.
-    //                 If the application has already redirected to the Keycloak sign-in page, nothing is clicked.
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Date Created  : 15-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private void clickWelcomeLoginIfPresent()
-    {
-        if (UiHelpers.isVisible("iWelcomeLoginBtn", iWelcomePageWaitSeconds))
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), "");
-            CommonFunctions.log.info("BISS welcome page displayed - Log in button clicked.");
-        }
-        else
-        {
-            CommonFunctions.log.info("BISS welcome page not displayed - already on the Keycloak sign-in page.");
-        }
-    }
+    # --- Same-agent transfer (206) ---
+    When the agent creates a transfer application with the following details
+      | transferorHerd | {transferor.herd}      |
+      | transfereeHerd | {transferee.herd}      |
+      | transfereeName | {transferee.name}      |
+      | transferType   | Change of Legal Entity |
+      | entitlements   | 0.01                   |
+      | notes          | Test Notes             |
+    And the agent uploads the transferor signature document
+    And the agent sends the transfer for acceptance
+    Then the transfer key should be captured
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : launchApplication
-    // Description   : Given step - confirms application launch. Browser is already open from Hooks.beforeAllExecution().
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : Hooks.beforeAllExecution() must have completed successfully
-    // Date Created  : 10-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @Given("User Launches the application")
-    public void launchApplication()
-    {
-        CommonFunctions.log.info("Application launched via Hooks. Browser is active and URL loaded.");
-    }
+    # --- Transferee (same agent) ---
+    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+    And the agent switches to the "Transfers" tab on the My Client page
+    And the ETF partner completes the transferee acceptance flow
+      | transfereeHerd | {transferee.herd} |
+      | notes          | Approved Test     |
+    Then the transfer should be submitted successfully
 
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : enterValidFieldValue
-    // Description   : Enters Username or Password based on the string argument passed from the feature file.
-    //                 Username flow : clicks Welcome Login button (if shown) -> enters username -> clicks Continue button
-    //                 Password flow : enters password into the password field
-    // Parameters    : pColumnName (String) - "Username" or "Password" as passed from the Gherkin step
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : Browser must be open; test data row must be loaded for TD: resolution
-    // Date Created  : 10-03-2026 | Updated: 15-09-2026 (conditional welcome click)
-    // ***************************************************************************************************************************************************************************************
-    @When("user enters valid {string}")
-    public void enterValidFieldValue(String pColumnName)
-    {
-        try
-        {
-            if (pColumnName == null || pColumnName.trim().isEmpty())
-            {
-                throw new RuntimeException("Field name passed from feature file cannot be blank.");
-            }
-
-            if (pColumnName.equalsIgnoreCase("Username"))
-            {
-                clickWelcomeLoginIfPresent();
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), "TD:Username");
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), "");
-                CommonFunctions.log.info("Username entered and Continue clicked successfully.");
-            }
-            else if (pColumnName.equalsIgnoreCase("Password"))
-            {
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
-                CommonFunctions.log.info("Password entered successfully.");
-            }
-            else
-            {
-                throw new RuntimeException("Unsupported field value from feature file : '" + pColumnName + "'. Accepted values: Username, Password.");
-            }
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Failed to enter value for field : '" + pColumnName + "' | Reason : " + iException.getMessage(), iException);
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : clickLoginButton
-    // Description   : Clicks the login submit button and enters the MFA OTP code.
-    //                 NOTE: OTP value "111111" is the SIT bypass code - replace with TD:OTP when a real authenticator is used.
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : Username and password must already have been entered
-    // Date Created  : 10-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("user clicks on Login button")
-    public void clickLoginButton()
-    {
-        try
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), "");
-            CommonFunctions.log.info("Login button clicked.");
-            commonFunctions.LoginScreens.skipNewUserScreens("[LOGIN]");
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), "111111");
-            CommonFunctions.log.info("MFA OTP entered successfully.");
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), "");
-            CommonFunctions.log.info("Login button clicked.");
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Failed during login button click or OTP entry : " + iException.getMessage(), iException);
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : verifyLoginSuccessful
-    // Description   : Verifies login success by reading text from the dashboard title element.
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : Login must have been completed; dashboard must be loaded
-    // Date Created  : 10-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @Then("User should be successfully able to login")
-    public void verifyLoginSuccessful()
-    {
-        try
-        {
-            iAction("VERIFYELEMENT", ObjReader.getLocatorType("iDashboardTitle"), ObjReader.getLocator("iBissTitle"), "");
-
-            String iDashboardText = iAction("GETTEXT", ObjReader.getLocatorType("iBissTitle"), ObjReader.getLocator("iBissTitle"), "");
-
-            if (iDashboardText == null || iDashboardText.trim().isEmpty())
-            {
-                throw new AssertionError("Login verification failed. Dashboard title text is blank after login.");
-            }
-
-            Hooks.captureStep("Dashboard displayed after login - " + iDashboardText);
-            CommonFunctions.log.info("Login verified successfully. Dashboard title : '" + iDashboardText + "'");
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Login verification step failed : " + iException.getMessage(), iException);
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : LogoutApplication
-    // Description   : Clicks the logout Sign Out Button.
-    // Parameters    : None
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : User must be logged in
-    // Date Created  : 12-03-2026
-    // ***************************************************************************************************************************************************************************************
-    @When("A user logging out of an application")
-    public void LogoutApplication()
-    {
-        try
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"), "");
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), "");
-            CommonFunctions.log.info("Logout/Signout button clicked.");
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Failed during logging out of application : " + iException.getMessage(), iException);
-        }
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : enterInvalidCredentials
-    // Description   : Negative login flow used by TC_02_InvalidCredentials_Login.
-    //                 Password flow : enters username -> invalid password -> verifies Keycloak error -> enters valid password
-    // Parameters    : pColumnName (String) - "Username" or "Password" as passed from the Gherkin step
-    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
-    // Precondition  : Browser must be open; test data row must be loaded for TD: resolution
-    // Date Created  : 10-03-2026 | Updated: 15-09-2026 (conditional welcome click)
-    // ***************************************************************************************************************************************************************************************
-    @When("user enters invalid credentials {string}")
-    public void enterInvalidCredentials(String pColumnName)
-    {
-        try
-        {
-            if (pColumnName == null || pColumnName.trim().isEmpty())
-            {
-                throw new RuntimeException("Field name passed from feature file cannot be blank.");
-            }
-
-            // Hit the initial 'Log In' button on the BISS landing screen (only when it is displayed)
-            clickWelcomeLoginIfPresent();
-
-            if (pColumnName.equalsIgnoreCase("Username"))
-            {
-                CommonFunctions.log.info("Invalid Username scenario - no action defined yet (unchanged from Selenium version).");
-            }
-            else if (pColumnName.equalsIgnoreCase("Password"))
-            {
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"), "TD:Username");
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), "");
-                CommonFunctions.log.info("Username entered and Continue clicked successfully.");
-
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "Invalid");
-                CommonFunctions.log.info("Invalid Password entered successfully.");
-
-                iAction("CLICK", "XPATH", ObjReader.getLocator("iLoginbtn"), "");
-                CommonFunctions.log.info("Login button clicked.");
-
-                iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iInvalidCredErr"), "");
-
-                String iErrText = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iInvalidCredErr"), "");
-
-                if (iErrText == null || iErrText.trim().isEmpty())
-                {
-                    throw new AssertionError("Login verification failed. Error Message should get displayed post entering invalid credentials");
-                }
-                CommonFunctions.log.info("Invalid Credentials Error Message Validation Completed : '" + iErrText + "'");
-                Hooks.captureStep("Invalid credentials error displayed - " + iErrText);
-
-              iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"), "TD:Password");
-                CommonFunctions.log.info("Password entered successfully.");
-            }
-            else
-            {
-                throw new RuntimeException("Unsupported field value from feature file : '" + pColumnName + "'. Accepted values: Username, Password.");
-            }
-        }
-        catch (Exception iException)
-        {
-            throw new RuntimeException("Failed to enter value for field : '" + pColumnName + "' | Reason : " + iException.getMessage(), iException);
-        }
-    }
-}
+    # --- Staff ENTSCore verification ---
+    When the staff user logs into ENTSCore as "AGR2214"
+    And the staff searches for the herd by OwnerID
+    And the staff navigates to year "2026" and "Transfers" tab
+    Then the transfer submission should be visible in ENTSCore
