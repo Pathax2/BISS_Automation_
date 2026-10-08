@@ -1,287 +1,388 @@
-// ===================================================================================================================================
-// File          : TC_08_ENTS.java
-// Package       : stepdefinitions.ENTS
-// Description   : Individual-as-TRANSFEROR and Agent-as-TRANSFEREE steps (TC_08_ENTS, TC_09_ENTS, TC_10_ENTS).
-//
-//                 Steps in this file (4):
-//                   1. the individual logs in as transferor {string}      (also the login step of every other ENTS feature)
-//                   2. the individual creates a transfer application with the following details (DataTable)
-//                   3. the agent logs in as transferee agent {string}
-//                   4. the agent completes the same agent transferee acceptance flow (DataTable)
-//
-//                 Playwright edition (30-09-2026, from the Selenium file):
-//                   - Same step texts, same ObjectRepository keys, same flow.
-//                   - The three copied Keycloak login blocks (username, PIN loop, TOTP, T&C, Account Expired) and the
-//                     local performLogout / isVisible are replaced by EntsSession.loginAs / logout. loginAs also fills
-//                     the mobile number form when Keycloak asks for it. An expired account fails the step with the
-//                     login in the message (the Selenium copies marked the BISS runtime agent, a different user).
-//                   - Step 1 closes the personal details dialog when the login is an individual (not aga* / agr*).
-//                   - Step 2 has no herd search and no document upload, exactly like the Selenium version: the individual
-//                     is already on their own Transfers page and goes straight to Create Transfer. Transfer type,
-//                     highest-entitlement row, lease year and the "Leased entitlements can only be transferred by ..."
-//                     recovery are the same helpers TC_01_ENTS uses (selectTransferType, addEntitlementAndContinue,
-//                     handleLeasedEntitlementsError), so the two create steps cannot drift apart.
-//                   - Step 3 only logs out and logs in, as in Selenium; the feature file opens Home -> My Clients ->
-//                     Transfers itself.
-//                   - Step 4 searches the herd with EntsSession.openTransferOutHerd (waits for the row of THAT herd,
-//                     skips rows marked expired) instead of clicking the first View link, and the acceptance screens
-//                     are EntsSession.acceptWithTransferKey (shared with TC_05 and TC_07).
-//                   - Thread.sleep, WebDriverWait and findElement are gone (Playwright waits).
-//
-//                 Runtime data (utilities.EntsTestData) - the pair is built in two halves because the login comes first:
-//                   {transferor.login} in step 1 -> EntsTestData.nextIndividualTransferor picks an unused herd from the
-//                                                   Individual Login query and logs its owner in
-//                   step 2 with a "transfereeAgent | aga6325" row  -> completePairWithAgentTransferee (TC_08 / TC_10)
-//                   step 2 with a "transfereeType  | Individual" row -> completePairWithIndividualTransferee (TC_09)
-//                   {transferee.agent} / {transferee.login} then name the user who accepts.
-//                 Plain values (a login such as "FARMBLUE", a herd, a name) are used as they are, to pin a case.
-//
-//                 02-10-2026: step 2 uses EntsSession.searchTransferee. On "No transferee matches were found" a runtime
-//                 transferee is replaced by another herd of the same agent (EntsTestData.replaceTransferee, old one BAD
-//                 in the vault) and searched again in the same dialog, up to ents.transferee.retries (default 3).
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data), 02-10-2026 (transferee no match)
-// Updated       : 08-10-2026 - step 2 first checks that the transferor login opened the picked herd
-//                              (EntsSession.ensureIndividualTransferorHerd). TC_10_ENTS: login D3950957 opened the Registered
-//                              Farm Partnership DFP10449, where Merger is not allowed. Such a transferor is marked BAD and
-//                              another one is logged in, up to ents.transferor.retries.
-// ===================================================================================================================================
+# ===================================================================================================================================
+# File          : application.properties
+# Description   : Base configuration defaults for the BISS automation framework (Playwright edition).
+#                 These values apply to ALL environments unless overridden by a profile file.
+#                 Profile files (application-dev.properties, application-docker.properties, etc.)
+#                 overlay and override these values for specific environments.
+#
+# Folder        : src/test/resources/config/application.properties
+#
+# Resolution    : -Dkey=value  >  BISS_KEY environment variable  >  application-<env>.properties  >  this file
+# Activation    : This file is always loaded. Profile overlay activated via -Denv=<profile> (default dev)
+#
+# Author        : Aniket Pathare | aniket.pathare@goverment.ie
+# Date Created  : 10-03-2026
+# Updated       : 16-09-2026 - Playwright keys added, Selenium-only keys removed
+#                 16-09-2026 - browser.zoom.percent (67), click.strategy, click.attempt.timeout.ms 5000
+#                 16-09-2026 - browser.https.upgrades, dialog handling, [BROWSER] event log
+#                 17-09-2026 - browser.cleanup.before.start, browser.cleanup.temp.folders, execution.fail.fast
+#                 18-09-2026 - browser.cleanup.scope, trace.screenshots, trace.snapshots (suite run speed)
+#                 18-09-2026 - browser.reuse: one browser for the whole run, clean session per test case
+# ===================================================================================================================================
 
-package stepdefinitions.ENTS;
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Browser Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Supported values: CHROME | CHROMIUM | EDGE | FIREFOX | WEBKIT
+browser=CHROME
 
-import io.cucumber.datatable.DataTable;
-import io.cucumber.java.en.*;
-import org.junit.jupiter.api.Assertions;
-import utilities.ConfigManager;
-import utilities.EntsTestData;
-import utilities.ObjReader;
+# Installed browser to drive instead of Playwright's bundled Chromium: blank | chrome | msedge
+# (a value here also stops Playwright from trying to download browsers)
+browser.channel=
 
-import java.util.Locale;
-import java.util.Map;
-import java.util.logging.Logger;
+# false = Playwright default (--no-sandbox, needed when Chrome runs as root, e.g. in Docker). The dev profile sets true.
+browser.chromium.sandbox=false
 
-import static commonFunctions.CommonFunctions.iAction;
+# true = ONE browser for the whole run. Each test case still starts clean: new tab, cookies cleared and the site's
+# storage wiped, so every test case logs in again. Saves the 8-30 s Chrome start and the 10-14 s close per test case.
+# false = a new browser per test case (the behaviour up to 17-09).
+browser.reuse=true
 
-public class TC_08_ENTS
-{
-    private static final Logger log = Logger.getLogger(TC_08_ENTS.class.getName());
+# 0 = keep the same browser for the whole run. Set e.g. 10 to start a fresh browser every 10 test cases.
+browser.reuse.max.testcases=0
 
-    // Token that makes step 1 pick an individual from the Individual Login query before logging in
-    private static final String TRANSFEROR_LOGIN_TOKEN = "{transferor.login}";
+# Browser processes stopped before each test case starts (replaces the Selenium killProcessByName("chrome")):
+#   none       = nothing stopped
+#   automation = only browsers started by Playwright or Selenium (your own Chrome windows stay open)
+#   all        = every chrome.exe (msedge.exe for Edge), like the Selenium framework - your own Chrome windows close too
+# chromedriver.exe left over from Selenium runs is stopped by automation and all.
+browser.cleanup.before.start=automation
 
+# true = on the first test case of a run, delete old Playwright temp folders (profiles, driver copies) from %TEMP%
+browser.cleanup.temp.folders=true
 
-    // ===================================================================================================================================
-    //  LOGIN AS THE TRANSFEROR (agent, individual or ETF partner)
-    // ===================================================================================================================================
+# automation mode only: run = scan process command lines once per run (fast), testcase = before every test case (slow)
+browser.cleanup.scope=run
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the individual logs in as transferor {string}
-    // Description   : Logs in from the Keycloak page as the given user. The password comes from the TestData Password
-    //                 column (TD:Password), the same for every user.
-    //                 {transferor.login}: picks an unused individual (herd + login) from the Individual Login query first
-    //                 (EntsTestData.nextIndividualTransferor) and logs that individual in; the create step of the section
-    //                 then picks the transferee.
-    //                 For an individual login (anything that is not aga* / agr*) the personal details dialog is closed
-    //                 when shown (ents.personal.details.seconds, default 5).
-    // Parameters    : pUsername (String) - login name, e.g. "aga6060", "FARMBLUE", or {transferor.login}
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login, individual pick)
-    // ***************************************************************************************************************************************************************************************
-    @When("the individual logs in as transferor {string}")
-    public void theIndividualLogsInAsTransferor(String pUsername)
-    {
-        String iRaw = pUsername == null ? "" : pUsername.trim();
+# true = never download browsers (laptops behind the department web gateway)
+playwright.skip.browser.download=false
 
-        if (TRANSFEROR_LOGIN_TOKEN.equalsIgnoreCase(iRaw))
-        {
-            EntsTestData.nextIndividualTransferor("individual transferor");
-        }
+# Run browser in headless mode (no visible window) - set true for CI/Bamboo agents and Docker
+headless=false
 
-        String iUsername = EntsTestData.resolve(iRaw);
-        log.info("[STEP] When the individual logs in as transferor: " + iUsername);
+# Window / viewport
+browser.maximize=false
+viewport.width=1920
+viewport.height=1080
 
-        Assertions.assertFalse(iUsername == null || iUsername.isEmpty(), "No login to use in 'the individual logs in as transferor'.");
+# Locale and timezone used by every browser context
+browser.locale=en-IE
+browser.timezone=Europe/Dublin
 
-        EntsSession.loginAs(iUsername, "[LOGIN]");
+# Accept internal / self-signed certificates
+ignore.https.errors=false
 
-        if (isIndividual(iUsername))
-        {
-            EntsSession.closePersonalDetailsIfShown(ConfigManager.getInt("ents.personal.details.seconds", 5));
-        }
-    }
+# Open http:// links over https:// first, exactly like normal Chrome (Chrome 'HTTPS-Upgrades').
+# Playwright turns this off by default; without it the BISS Exit link (http://agfood.icentest...) times out on port 80.
+browser.https.upgrades=true
 
-    // Agent and ETF partner logins start with "aga" / "agr"; everything else is treated as an individual
-    private static boolean isIndividual(String pUsername)
-    {
-        String iLower = pUsername.toLowerCase(Locale.ROOT);
-        return EntsTestData.isIndividualLogin(pUsername) || !(iLower.startsWith("aga") || iLower.startsWith("agr"));
-    }
+# Safety net: hosts that are always redirected from http:// to https:// (comma-separated, *.domain allowed).
+# Leave blank unless a host still times out with browser.https.upgrades=true. Example:
+# browser.https.upgrade.hosts=agfood.icentest.agriculture.gov.ie
+browser.https.upgrade.hosts=
 
+# Browser proxy (blank = use the operating system settings)
+browser.proxy.server=
+browser.proxy.bypass=
 
-    // ===================================================================================================================================
-    //  INDIVIDUAL CREATES THE TRANSFER
-    // ===================================================================================================================================
+# Visual aids for local runs
+highlight.enabled=false
+playwright.slowmo.ms=0
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the individual creates a transfer application with the following details (DataTable)
-    // Description   : The individual is already on their own Transfers page, so this step goes straight to
-    //                 Create Transfer, searches the transferee, picks the transfer type, adds the entitlement row with
-    //                 the highest available value (lease year for a Lease), recovers from the leased-entitlements
-    //                 error like TC_01_ENTS, and types the notes. No herd search and no document upload.
-    //
-    //                 DataTable keys:
-    //                   transfereeHerd  (String) - herd number, or {transferee.herd}
-    //                   transfereeName  (String) - full name,   or {transferee.name}
-    //                   transfereeAgent (String) - OPTIONAL. Agent / ETF partner who manages the transferee: with tokens the
-    //                                              transferee is picked from that agent's pool (TC_08 / TC_10)
-    //                   transfereeType  (String) - OPTIONAL. "Individual": the transferee is another individual, picked
-    //                                              from the Individual Login query (TC_09)
-    //                   transferType    (String) - transfer type, e.g. "Gift of Entitlements"
-    //                   entitlements    (String) - amount to transfer, e.g. "0.01"
-    //                   leaseYear       (String) - OPTIONAL. "Yes" for a Lease
-    //                   notes           (String) - notes for the transfer summary
-    //
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
-    // ***************************************************************************************************************************************************************************************
-    @And("the individual creates a transfer application with the following details")
-    public void theIndividualCreatesATransferApplication(DataTable pDataTable)
-    {
-        log.info("[STEP] And the individual creates a transfer application with the following details");
+# Page zoom, same as Ctrl+minus in Chrome (100 = normal). 67 matches the Selenium framework
+# (ChromeOptions profile.default_zoom_level = -2.196545). Other examples: 70, 75, 80, 90
+browser.zoom.percent=67
 
-        Map<String, String> iRaw = pDataTable.asMap(String.class, String.class);
+# Extra CSS zoom on the page body only (the old per-action document.body.style.zoom='84%').
+# 100 = off. Normally leave this at 100 and use browser.zoom.percent instead.
+ui.zoom.percent=100
 
-        // Second half of the pair (the login step picked the individual transferor)
-        if (EntsTestData.tableHasToken(iRaw))
-        {
-            String iPurpose = iRaw.getOrDefault("transferType", "").trim();
+# false = first matching element (Selenium behaviour), true = Playwright strict mode
+locator.strict=false
 
-            // 08-10-2026: the transferor login must have opened the picked herd, not a partnership it belongs to
-            EntsSession.ensureIndividualTransferorHerd(iPurpose);
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Wait Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Maximum seconds for any element action (click, fill, visible ...)
+explicit.wait.seconds=20
 
-            if ("Individual".equalsIgnoreCase(iRaw.getOrDefault("transfereeType", "").trim()))
-            {
-                EntsTestData.completePairWithIndividualTransferee(iPurpose);
-            }
-            else
-            {
-                EntsTestData.completePairWithAgentTransferee(iRaw.getOrDefault("transfereeAgent", "").trim(), iPurpose);
-            }
-        }
+# Maximum seconds for page navigation
+page.load.timeout.seconds=30
 
-        Map<String, String> iData = EntsTestData.resolveTable(iRaw);
+# Polling interval for custom waits (milliseconds)
+wait.polling.interval.ms=250
 
-        String  iTransfereeHerd = iData.get("transfereeHerd").trim();
-        String  iTransfereeName = iData.get("transfereeName").trim();
-        String  iTransferType   = iData.get("transferType").trim();
-        String  iEntitlements   = iData.get("entitlements").trim();
-        String  iNotes          = iData.get("notes").trim();
-        boolean iHasLeaseYear   = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
+# Click strategy for CLICK, RADIOBUTTON, CHECKBOX, LIST ...
+#   auto   = normal click; JavaScript click if the normal click is blocked (Selenium ElementClickIntercepted behaviour)
+#   js     = always JavaScript click (arguments[0].click())
+#   native = normal click only, no JavaScript fallback
+# The JSCLICK action always uses a JavaScript click, whatever this is set to.
+click.strategy=auto
 
-        // Create Transfer Application (the individual is already on their own Transfers page)
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
+# How long a normal click may be blocked (overlay, spinner) before the JavaScript click is used (milliseconds)
+click.attempt.timeout.ms=5000
 
-        // Search for the transferee; when the same herd is returned twice, select the row with no End Date.
-        // "No transferee matches were found" (02-10-2026): the transferee is managed by another agent, so its portal name
-        // cannot be read first and the DB name can differ. With runtime data the transferee is replaced (same agent pool)
-        // and searched again in the same dialog, up to ents.transferee.retries times (default 3).
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
-        boolean iRuntime = EntsTestData.tableHasToken(iRaw);
-        int     iMax     = iRuntime ? Math.max(1, ConfigManager.getInt("ents.transferee.retries", 3)) : 1;
-        for (int iTry = 1; !EntsSession.searchTransferee(iTransfereeHerd, iTransfereeName); iTry++)
-        {
-            String iReason = "Transferee Search found no match for " + iTransfereeHerd + " / '" + iTransfereeName
-                    + "' (the portal name differs from the DB name, or the herd cannot receive transfers)";
-            if (iTry >= iMax)
-            {
-                throw new IllegalStateException("[TRANSFER] " + iReason
-                        + (iRuntime ? " - tried " + iMax + " transferee(s), see ents.transferee.retries" : ""));
-            }
-            log.warning("[TRANSFER] Try " + iTry + "/" + iMax + ": " + iReason + " - picking another transferee.");
-            EntsTestData.replaceTransferee(iReason, iTransferType);
-            Map<String, String> iRetry = EntsTestData.resolveTable(iRaw);
-            iTransfereeHerd = iRetry.get("transfereeHerd").trim();
-            iTransfereeName = iRetry.get("transfereeName").trim();
-        }
+# Browser pop-up dialogs (alert / confirm / prompt): accept = click OK, dismiss = click Cancel.
+# 'Leave site?' pop-ups are always accepted. UiHelpers.acceptNextDialog() / dismissNextDialog() override one dialog.
+dialog.default.action=accept
 
-        // Transfer type, Next, highest entitlement row + lease year + Add + Next, leased-entitlements recovery
-        TC_01_ENTS.selectTransferType(iTransferType);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
-        TC_01_ENTS.addEntitlementAndContinue(iEntitlements, iHasLeaseYear);
-        iTransferType = TC_01_ENTS.handleLeasedEntitlementsError(iTransferType, iEntitlements);
+# [BROWSER] lines in the run log: page changes, new tabs, dialogs, failed requests, HTTP 4xx/5xx, console errors
+log.browser.events=true
+log.browser.console.errors=true
 
-        // Notes
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+# How long an "if present" / "if applicable" step looks for an optional element before deciding it is absent.
+# This wait is paid every time such an element is NOT there, so keep it small (the action timeout above is not used).
+probe.timeout.seconds=3
 
-        log.info("Individual transfer created | Type=" + iTransferType + " | Transferor login=" + EntsTestData.loggedInUser()
-                + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
-    }
+# WAITVISIBLE / VERIFYELEMENT / LIST option timeouts (seconds)
+wait.visible.seconds=30
+verify.element.timeout.seconds=20
+list.option.timeout.seconds=30
 
+# My Clients: how long to wait for the Quick Filter bar (Herd Expired, Draft ...) after My Clients is clicked.
+# The bar is drawn after the client list loads; agents with many clients (aga6077) can take more than 10 s.
+# Returns at once when the bar is already shown. Not shown: one more My Clients click, then the same wait again.
+clients.list.timeout.seconds=45
 
-    // ===================================================================================================================================
-    //  AGENT LOGS IN AS THE TRANSFEREE
-    // ===================================================================================================================================
+# Transferee Search "No transferee matches were found": how many transferees to try before the step fails.
+# Each failed one is marked BAD in the vault and another herd of the same agent (or individual pool) is searched.
+ents.transferee.retries=3
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent logs in as transferee agent {string}
-    // Description   : Logs out of the individual session and logs in as the agent. The feature file then opens
-    //                 Home -> My Clients -> Transfers itself, as in the Selenium version.
-    // Parameters    : pAgentUsername (String) - agent login, e.g. "aga6325", or {transferee.agent}
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent logs in as transferee agent {string}")
-    public void theAgentLogsInAsTransfereeAgent(String pAgentUsername)
-    {
-        String iUsername = EntsTestData.resolve(pAgentUsername);
-        log.info("[STEP] When the agent logs in as transferee agent: " + iUsername);
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Retry Configuration
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Number of times to retry a failed test case (0 = no retry)
+retry.count=1
 
-        EntsSession.logout();
-        EntsSession.loginAs(iUsername, "[LOGIN-TRANSFEREE-AGENT]");
+# Exception types that trigger a retry (comma-separated simple class names) - Playwright names
+retry.on.exceptions=TimeoutError,PlaywrightException
 
-        log.info("Agent logged in as transferee: " + iUsername);
-    }
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Test Data
+# -----------------------------------------------------------------------------------------------------------------------------------
+test.data.file.path=src/test/resources/Test_Data/TestData.xlsx
+test.data.sheet.name=Data
 
+# Write the runtime HerdNumber / Username back into TestData.xlsx
+testdata.writeback.enabled=true
 
-    // ===================================================================================================================================
-    //  AGENT ACCEPTS THE TRANSFER
-    // ===================================================================================================================================
+# Oracle herd/agent bootstrap before each test case (false = use the sheet values)
+db.bootstrap=true
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent completes the same agent transferee acceptance flow (DataTable)
-    // Description   : Searches the transferee herd in the agent's Transfer Out list, opens its first not-expired row,
-    //                 then runs the acceptance screens (EntsSession.acceptWithTransferKey): ETF button or View Transfer
-    //                 Application, the captured transfer key, notes, Submit Application to DAFM, T&C, confirm.
-    //
-    //                 DataTable keys:
-    //                   transfereeHerd (String) - herd number, or {transferee.herd}
-    //                   notes          (String) - transferee notes, e.g. "Approved Test"
-    //
-    //                 Depends on the key captured by TC_01_ENTS "the transfer key should be captured".
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data)
-    // ***************************************************************************************************************************************************************************************
-    @And("the agent completes the same agent transferee acceptance flow")
-    public void theAgentCompletesTheSameAgentTransfereeAcceptanceFlow(DataTable pDataTable)
-    {
-        log.info("[STEP] And the agent completes the same agent transferee acceptance flow");
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Execution Control
+# -----------------------------------------------------------------------------------------------------------------------------------
+execution.control.path=src/test/resources/Execution_Control_File/ExecutionControl.xlsx
+execution.control.sheet=Sheet1
 
-        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+# Write PASS / FAIL back into the Status column
+execution.control.writeback=true
 
-        String iTransfereeHerd = iData.get("transfereeHerd").trim();
-        String iNotes          = iData.get("notes").trim();
-        String iTransferKey    = TC_01_ENTS.iCapturedTransferKey;
+# Comma-separated IDs to run regardless of the Execution flag (blank = Execution=Y rows)
+testcase.ids=
 
-        Assertions.assertFalse(iTransferKey == null || iTransferKey.isEmpty(),
-                "Transfer key must have been captured in the Transferor flow before the agent can accept.");
+# true  = when a scenario fails, the remaining scenarios of that test case are skipped and the runner moves on to the
+#         next test case in ExecutionControl.xlsx (a failed step already stops its own scenario)
+# false = every scenario of the test case still runs
+execution.fail.fast=true
 
-        EntsSession.openTransferOutHerd(iTransfereeHerd);
-        log.info("Transferee herd opened: " + iTransfereeHerd);
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Object Repository
+# -----------------------------------------------------------------------------------------------------------------------------------
+object.repository.path=src/test/resources/Object_Repository/ObjectRepository.properties
 
-        EntsSession.acceptWithTransferKey(iTransferKey, iNotes);
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Feature Files
+# -----------------------------------------------------------------------------------------------------------------------------------
+feature.directory.path=src/test/resources/Test_Cases/
+glue.package=stepdefinitions
 
-        log.info("Agent transferee acceptance completed for herd: " + iTransfereeHerd
-                + " | login=" + EntsTestData.loggedInUser());
-    }
-}
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Reporting
+# -----------------------------------------------------------------------------------------------------------------------------------
+report.docs.path=Test_Report/docs
+report.screenshots.path=Test_Report/screenshots
+report.html.path=Test_Report/html/
+report.traces.path=Test_Report/traces
+report.downloads.path=Test_Report/downloads
+junit.xml.path=target/surefire-reports/
+
+# Playwright trace: off | on | retain-on-failure
+trace.mode=retain-on-failure
+
+# Screencast inside the trace: false keeps every action fast, true records a filmstrip of the run
+trace.screenshots=false
+# DOM snapshot per action - this is what the trace viewer replays. Keep true.
+trace.snapshots=true
+
+# Screenshot on PASS as well (true = capture every step, false = failure only)
+screenshot.on.pass=false
+
+# Auto-delete screenshots older than N days (0 = never delete)
+screenshot.retention.days=30
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Email Notification
+# -----------------------------------------------------------------------------------------------------------------------------------
+notify.email.enabled=false
+notify.email.smtp.host=smtp.office365.com
+notify.email.smtp.port=587
+notify.email.smtp.starttls=true
+notify.email.from=automation@biss.ie
+notify.email.to=qa-team@biss.ie
+# notify.email.password - set via Bamboo plan variable or BISS_NOTIFY_EMAIL_PASSWORD, never store here
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Database (optional - leave blank if not used)
+# -----------------------------------------------------------------------------------------------------------------------------------
+db.enabled=false
+db.driver=oracle.jdbc.OracleDriver
+db.url=
+db.username=
+# db.password - set via Bamboo plan variable or BISS_DB_PASSWORD, never store here
+db.connection.pool.size=5
+db.query.timeout.seconds=30
+# 08-10-2026: longest time one query may run before it fails with its label (0 = no limit). Before this a slow query
+# hung the run with the browser waiting on the login page. Queries over 20 s are logged as "Slow query".
+db.query.max.seconds=300
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------------------------------------------------------------
+log.level=INFO
+log.output.path=target/logs/
+
+# ---- ENTS runtime test data (utilities.EntsTestData) ----
+# Rows fetched per ENTS query (random order). The Agent Login query runs once per agent per run.
+ents.pool.size=200
+# true = a herd listed in the used-herds file is never picked again
+ents.skip.used.herds=true
+# One line per herd handed out: timestamp,testcase,role,herd,login,purpose. Delete the file to start again.
+ents.used.herds.file=runtime-data/ents_used_herds.csv
+# Agent Login query: only herds holding entitlements in this scheme year (blank = all years, as on Confluence)
+ents.scheme.year=2026
+# Agent Login query: only herds of this customer type (vwco_ents_herd_abls_rpt.cust_type). Blank = all types.
+# Joint Venture herds (e.g. D3900895) are not in the agent's Transfer Out list.
+ents.cust.type=Individual
+# Individual Login query (07-10-2026): only herds holding MORE than this many entitlements in ents.scheme.year, the
+# same rule as the Agent Login query (ent_num_ents > 10). -1 = no entitlement filter (the query before 07-10-2026).
+ents.individual.min.ents=10
+# Individual Login query (08-10-2026): leave out herds with more than one online login or more than one live holder
+# name - on those the login and the name can belong to different people (TC_09_ENTS: T1973669 "Joseph Tully" / SEANGALL)
+# Off by default (08-10-2026): the T1973669 case is fixed by the newest-holder rule, the portal checks catch the rest,
+# and the extra counting slows the query down. Set true to test it - watch for "Slow query" in the log.
+ents.individual.single.holder=false
+# When a picked transferor is not in the agent's Transfer Out list, try this many pairs before failing
+ents.pair.retries=15
+# How long to wait for the Transfer Out search result before treating the herd as not found
+ents.search.seconds=8
+# Transferee acceptance: how long to wait for "Access an application using Transfer Key" on the Transfers page
+ents.transfer.key.button.seconds=10
+# Transferee acceptance: the logged-in holder (page header Farmer Name / Herd Number) must be the herd and name the
+# transfer was sent to. false = check the herd number only
+ents.transferee.name.check=true
+# Individual transferor ({transferor.login}): when the login opens another herd (e.g. a Registered Farm Partnership),
+# try this many transferors before the create step fails
+ents.transferor.retries=3
+# Only herds whose DB name is exactly two words, e.g. "Martin Starr" (skips Jnr/Snr, middle names, companies)
+ents.name.two.words=true
+# Use the Name shown in the Transfer Out list instead of the DB name for the transferee search
+ents.name.from.portal=true
+# ENTS test cases skip the BISS herd + agent DB lookup (they get their data from the ENTS queries)
+db.bootstrap.ents=false
+
+# ---- Test Data Vault (utilities.TestDataVault, filled by TC_00_DATA before the run) - 01-10-2026 ----
+# true = ENTS and BISS test cases take their herds and logins from runtime-data/vault first and only query Oracle
+#        when the vault has nothing for them. false = every test case queries Oracle as before.
+data.vault.enabled=true
+# Folder of herds.csv, people.csv, vault.meta, the Excel view and the archive. Holds farmer names - never commit it.
+data.vault.dir=runtime-data/vault
+# The weekly database refresh day. A jar filled before the most recent one is archived and refilled by TC_00_DATA.
+data.refresh.day=MONDAY
+# true = TC_00_DATA archives the jar and fetches everything again, whatever the checks say (one-off, then set back)
+data.force.refresh=false
+# Cheap "always goes up" value per database; a change between two harvests means the database was refreshed.
+# Blank = no fingerprint for that database.
+data.fingerprint.sql.DATA=SELECT MAX(app_id) FROM vwbs_application
+data.fingerprint.sql.INET=
+data.fingerprint.sql.ENTS=SELECT MAX(ohs_own_id) FROM tden_owner_history
+# Rows fetched per pool = max(data.min.rows, rows needed x data.spare.factor), capped at ents.pool.size
+data.spare.factor=3
+data.min.rows=10
+# Parallel fetching: pools at once, and INET login lookups at once inside a BISS pool
+data.threads=6
+data.inet.threads=4
+data.fetch.timeout.seconds=300
+# Rows per pool checked against the database when the jar was NOT refilled (0 = no spot check)
+data.spot.check=5
+# Stock report warns below this many available rows
+data.low.stock=5
+# During a run: this many BAD herds in a row from one pool make it refetch itself with the live query
+data.bad.in.a.row=3
+# Which test cases the jar is filled for:
+#   all      = every TestCase_ID in ExecutionControl.xlsx, whatever its Execution flag (run TC_00_DATA alone, use the jar all week)
+#   selected = only Execution=Y rows of this run (-Dtestcase.ids always wins when it is set)
+data.demand.scope=all
+# Agents to harvest that no feature file names (comma-separated), e.g. backup agents
+data.extra.agents=
+
+# {auto.agent} token (01-10-2026): the agent with the most usable herds instead of a hard-coded login.
+# data.auto.agents.rank = how many agents the "ENTS Top agents" query ranks (TC_00_DATA stores the list in vault.meta)
+# data.auto.agents.like = which logins count as agents in that query (SQL LIKE pattern, lower case)
+data.auto.agents.rank=10
+data.auto.agents.like=ag%
+
+# Reuse mode (01-10-2026): an ENTS transfer moves 0.01 entitlements, so a herd can be used again and again.
+#   true  = after a CONFIRMED transfer both herds go back to AVAILABLE (vault reason "used Nx"), even within the run.
+#           Stay USED until the next weekly refill: lease transferees, herds of an unconfirmed transfer.
+#           runtime-data/ents_used_herds.csv is still written as a log but no longer read.
+#   false = every herd is used once per weekly refill (the behaviour before 01-10-2026)
+# data.reuse.pools = which vault pools are reused. BISS pools must never be listed here.
+data.reuse.herds=true
+data.reuse.pools=ENTS_AGENT,ENTS_ETF,ENTS_INDIVIDUAL,ENTS_NO_ENTS
+
+# NR/CISYF (Young Farmer) herds for the @tc13 test cases - TC_13, TC_15, TC_16, TC_21 to TC_25_ENTS (02-10-2026)
+#   nrcisyf.herd.source = youngfarmer (default) : vault pool ENTS_YOUNG_FARMER, then Simon's "ENTS Young Farmer herds"
+#                                                 query (herd + agent in one row), then the Selenium BISS lookup
+#                         legacy                : the Selenium BISS_DATA + BISS_INET lookup only
+#   nrcisyf.pool.size   = rows the live query fetches when the vault has nothing
+#   nrcisyf.herds       = optional fixed herd list for the query (comma separated), e.g. Simon's D1461126,D195C519,W1750439
+nrcisyf.herd.source=youngfarmer
+nrcisyf.pool.size=200
+nrcisyf.herds=
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Staff (internal portal) - stepdefinitions.BISS.STAFF.StaffSteps + utilities.StaffTestData - 05-10-2026
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Staff test cases (IDs containing _STAFF) skip the BISS herd + agent DB lookup; their data comes from StaffTestData
+db.bootstrap.staff=false
+# Staff login page. Blank = the StaffURL column of the Config sheet, otherwise the environment URL (Hooks.iUrl) as in Selenium
+staff.url=
+# Rows fetched per data pool (submitted herds, parcels, references ...). Tags such as @parcels:10 or @herds:15:admincheck ask for more
+staff.pool.size=20
+# Map generation: poll the Generated Maps table this many times, waiting this many seconds between polls (Selenium: 500 x 5 s)
+staff.map.poll.attempts=500
+staff.map.poll.seconds=5
+# How long to wait for the map PDF tab after Download is clicked
+staff.map.tab.seconds=30
+# Scheme year used by steps that do not name one (Online Response)
+staff.default.scheme.year=2025
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Login screens (commonFunctions.LoginScreens) - 06-10-2026
+# -----------------------------------------------------------------------------------------------------------------------------------
+# The new-user Next screens can show straight after the password Login click, before the OTP box. Every login waits for
+# the first of the screens that can follow (Next, PIN, OTP, Terms, a Keycloak message) and clicks Next while it is shown.
+login.screen.wait.seconds=15
+# The authenticator set-up has 7 steps, so 6 Next clicks are needed - do not set this below 6
+login.newuser.next.max=10
+# One-time code typed on the code screen and on step 7 of the authenticator set-up (test environments only)
+login.test.otp=111111
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Temporary Chrome profile (67% zoom) - 08-10-2026
+# -----------------------------------------------------------------------------------------------------------------------------------
+# background = deleted on a background thread when the browser closes, so the run does not wait for it (default)
+# now        = deleted before the run goes on (before 08-10-2026; took minutes on Windows after a long test case)
+# off        = left in %TEMP%; BrowserProcessCleaner removes old biss-pw-profile-* folders before the next launch
+browser.profile.delete=background
