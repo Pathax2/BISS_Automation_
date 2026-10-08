@@ -4,21 +4,32 @@
 // Description   : Keycloak screens that can appear between two login steps, shared by every BISS and ENTS login
 //                 (TC_03, TC_18, TC_01_Login, EntsSession.loginAs).
 //
-//                 skipNewUserScreens - the new-user introduction screens ("Next" button, id=next, up to 7 screens).
-//                   They were handled only after the PIN screen. On 06-10-2026 they appeared straight after the password
-//                   Login click, before the OTP box, and the login failed waiting for the OTP box. Every login now calls
-//                   this right after the password Login click (and the re-logins also after the PIN Login click).
+//                 skipNewUserScreens - the "Install Microsoft Authenticator" set-up screens (Next button id=next,
+//                   7 steps "1 / 7" ... "7 / 7"). On 06-10-2026 they appeared straight after the password Login click,
+//                   before the one-time code box. Every login calls this right after the password Login click (and the
+//                   re-logins also after the PIN Login click).
 //
-//                 No extra wait on a normal login: the method waits for the FIRST of the screens that can follow
-//                 (Next, PIN, OTP / TOTP, mobile number, Terms and Conditions, a Keycloak message such as Account
-//                 Expired) and returns at once when it is not the Next screen.
+//                 enterOneTimeCode - types 111111 and submits it, on whichever code screen is shown:
+//                   - the normal one-time code screen          -> iOPTtxtbox + iLoginbtn (kc-login)
+//                   - the authenticator set-up screen (step 7)  -> input#totp + input#saveTOTPBtn (form kc-totp-settings-form)
+//
+//                 Fix 08-10-2026 (Next was "not found" although id=next matched):
+//                   The set-up page holds all 7 steps at once; steps 2-7 are <section hidden>. Step 7 contains the code box
+//                   input#totp, which matches iOPTtxtbox / iTOTPtextbox and comes BEFORE button#next in the page. The old
+//                   code waited for the FIRST element of one combined XPath to be visible - that first element was the hidden
+//                   code box, so the wait timed out and Next was never clicked. Now every screen is checked on its own
+//                   (visible elements only), and the code box only counts once it is visible, i.e. on step 7.
+//                   Next is clicked only while it is visible AND enabled; on the last step the loop stops.
+//                   After the PIN Login click callers use skipNewUserScreens(prefix, true): the PIN form can still be on the
+//                   page for a moment and must not end the wait.
 //
 //                 Settings (application.properties):
 //                   login.screen.wait.seconds  - how long to wait for the next login screen (default 15)
-//                   login.newuser.next.max     - most Next clicks before giving up (default 10)
+//                   login.newuser.next.max     - most Next clicks before giving up (default 10; the set-up has 7 steps,
+//                                                so 6 clicks are needed - do not set it below 6)
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 06-10-2026
+// Date Created  : 06-10-2026 | Updated: 08-10-2026 (hidden code box hid the Next button, authenticator set-up code)
 // ===================================================================================================================================
 
 package commonFunctions;
@@ -26,6 +37,9 @@ package commonFunctions;
 import com.microsoft.playwright.Locator;
 import utilities.ConfigManager;
 import utilities.ObjReader;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public final class LoginScreens
 {
@@ -35,91 +49,218 @@ public final class LoginScreens
     // Mobile number form shown after the PIN for some users (same XPath as TC_03 / EntsSession)
     private static final String MOBILE_NUMBER_XPATH = "//form[@id='kc-totp-login-form']//input[@id='mobile_number']";
 
+    // Authenticator set-up screen (body data-page-id="login-login-config-totp"): code box and Submit of its last step
+    private static final String SETUP_CODE_XPATH   = "//form[@id='kc-totp-settings-form']//input[@id='totp']";
+    private static final String SETUP_SUBMIT_XPATH = "//form[@id='kc-totp-settings-form']//input[@id='saveTOTPBtn']";
+
+    // Step counter of the set-up screen, e.g. "3 / 7" (logged only)
+    private static final String STEP_PROGRESS_XPATH = "//*[@id='step-progress']";
+
+    private static final int POLL_MS = 250;
+
     private LoginScreens() { }
 
 
     // ***************************************************************************************************************************************************************************************
     // Function Name : skipNewUserScreens
-    // Description   : Waits for the next login screen and, while it is a new-user introduction screen, clicks Next.
-    //                 Returns as soon as a PIN, OTP / TOTP, mobile number, Terms and Conditions or Keycloak message
-    //                 screen is shown, so a login without the new-user screens loses no time.
-    //                 When none of these screens shows within login.screen.wait.seconds, it logs a warning and returns;
-    //                 the caller's next action then fails with its own message.
+    // Description   : Waits for the next login screen and, while it is a set-up step with an enabled Next button, clicks
+    //                 Next. Returns as soon as a PIN, one-time code, mobile number, Terms and Conditions or Keycloak message
+    //                 screen is VISIBLE, so a login without the set-up screens loses no time.
+    //                 When nothing shows within login.screen.wait.seconds it logs a warning and returns; the caller's next
+    //                 action then fails with its own message.
     // Parameters    : pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
     // Returns       : int - how many times Next was clicked (0 on a normal login)
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 06-10-2026
+    // Date Created  : 06-10-2026 | Updated: 08-10-2026 (each screen checked on its own, visible elements only)
     // ***************************************************************************************************************************************************************************************
     public static int skipNewUserScreens(String pLogPrefix)
     {
-        int    iWait     = ConfigManager.getInt("login.screen.wait.seconds", 5);
-        int    iMax      = ConfigManager.getInt("login.newuser.next.max", 5);
-        String iNext     = ObjReader.getLocator("iNextBtnNewUser");
-        String iAnyNext  = String.join(" | ",
-                iNext,
-                ObjReader.getLocator("iPinForm"),
-                ObjReader.getLocator("iOPTtxtbox"),
-                ObjReader.getLocator("iTOTPtextbox"),
-                ObjReader.getLocator("iAcceptTermsCheckbox"),
-                MOBILE_NUMBER_XPATH,
-                FEEDBACK_XPATH);
+        return skipNewUserScreens(pLogPrefix, false);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : skipNewUserScreens
+    // Description   : As above. Call it with pAfterPin = true right after the PIN Login click: the PIN form can still be on
+    //                 the page for a moment while Keycloak loads the next screen, so it must not end the wait there.
+    // Parameters    : pLogPrefix (String)  - log prefix, e.g. "[LOGIN]"
+    //                 pAfterPin  (boolean) - true after the PIN Login click (the PIN form is not a screen to stop at)
+    // Returns       : int - how many times Next was clicked (0 on a normal login)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 08-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static int skipNewUserScreens(String pLogPrefix, boolean pAfterPin)
+    {
+        int    iWait = ConfigManager.getInt("login.screen.wait.seconds", 15);
+        int    iMax  = ConfigManager.getInt("login.newuser.next.max", 10);
+        String iNext = ObjReader.getLocator("iNextBtnNewUser");
+
+        // Screens that end the loop - checked one by one, so a hidden element never hides a visible one
+        List<String> iOtherScreens = new ArrayList<>();
+        if (!pAfterPin) iOtherScreens.add(ObjReader.getLocator("iPinForm"));
+        iOtherScreens.add(ObjReader.getLocator("iOPTtxtbox"));
+        iOtherScreens.add(ObjReader.getLocator("iTOTPtextbox"));
+        iOtherScreens.add(ObjReader.getLocator("iAcceptTermsCheckbox"));
+        iOtherScreens.add(MOBILE_NUMBER_XPATH);
+        iOtherScreens.add(FEEDBACK_XPATH);
 
         int iClicks = 0;
         while (true)
         {
-            if (!UiHelpers.isVisible(UiHelpers.byXpath(iAnyNext), iWait))
+            String iShown = waitForScreen(iNext, iOtherScreens, iWait);
+
+            if (iShown == null)
             {
-                CommonFunctions.log.warning(pLogPrefix + " No login screen (Next, PIN, OTP, Terms, message) shown within "
+                CommonFunctions.log.warning(pLogPrefix + " No login screen (Next, PIN, one-time code, Terms, message) shown within "
                         + iWait + " s" + (iClicks == 0 ? "." : " after " + iClicks + " Next click(s)."));
                 return iClicks;
             }
 
-            if (!shownNow(iNext)) break;
+            if (!iShown.equals(iNext)) break;          // PIN, code box (step 7), Terms, message ... - the caller goes on
+
+            if (!enabledNow(iNext))
+            {
+                CommonFunctions.log.info(pLogPrefix + " Next is disabled (" + progress() + ") - last set-up step reached.");
+                break;
+            }
 
             if (iClicks >= iMax)
             {
-                throw new IllegalStateException(pLogPrefix + " The new-user Next screen is still shown after " + iMax
-                        + " clicks (login.newuser.next.max).");
+                throw new IllegalStateException(pLogPrefix + " The set-up Next button is still shown after " + iMax
+                        + " clicks (" + progress() + "). Raise login.newuser.next.max (the set-up has 7 steps).");
             }
 
+            String iBefore = progress();
             CommonFunctions.iAction("CLICK", "XPATH", iNext, null);
             iClicks++;
-            CommonFunctions.log.info(pLogPrefix + " New-user screen - Next clicked (" + iClicks + ")");
-            waitUntilGone(iNext);
+            CommonFunctions.log.info(pLogPrefix + " Set-up screen " + iBefore + " - Next clicked (" + iClicks + ")");
+            waitForStepChange(iBefore);
         }
 
         if (iClicks > 0)
         {
-            CommonFunctions.log.info(pLogPrefix + " New-user screens done - Next clicked " + iClicks + " time(s).");
+            CommonFunctions.log.info(pLogPrefix + " Set-up screens done - Next clicked " + iClicks + " time(s) (" + progress() + ").");
         }
         return iClicks;
     }
 
-    // true when the first match is visible right now (no waiting)
-    private static boolean shownNow(String pXpath)
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : enterOneTimeCode
+    // Description   : Types the one-time code (111111 in the test environments) and submits it. On the authenticator set-up
+    //                 screen the code box and button are input#totp / input#saveTOTPBtn (the normal Login button kc-login is
+    //                 not on that page), and Terms and Conditions are accepted when they follow.
+    //                 On the normal screen: iOPTtxtbox + iLoginbtn, as before.
+    // Parameters    : pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Returns       : boolean - true when it was the authenticator set-up screen
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 08-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean enterOneTimeCode(String pLogPrefix)
+    {
+        String iCode = ConfigManager.getOrDefault("login.test.otp", "111111").trim();
+
+        if (visibleNow(SETUP_CODE_XPATH))
+        {
+            CommonFunctions.iAction("TEXTBOX", "XPATH", SETUP_CODE_XPATH,   iCode);
+            CommonFunctions.iAction("CLICK",   "XPATH", SETUP_SUBMIT_XPATH, null);
+            CommonFunctions.log.info(pLogPrefix + " Authenticator set-up: one-time code submitted.");
+
+            String iTerms = ObjReader.getLocator("iAcceptTermsCheckbox");
+            if (UiHelpers.isVisible(UiHelpers.byXpath(iTerms), ConfigManager.getInt("probe.timeout.seconds", 3)))
+            {
+                CommonFunctions.iAction("CLICK", "XPATH", iTerms, null);
+                CommonFunctions.iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"), null);
+                CommonFunctions.log.info(pLogPrefix + " Terms & Conditions accepted.");
+            }
+            return true;
+        }
+
+        CommonFunctions.iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iOPTtxtbox"), iCode);
+        CommonFunctions.iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),  null);
+        return false;
+    }
+
+
+    // ===================================================================================================================================
+    //  HELPERS
+    // ===================================================================================================================================
+
+    // Polls until Next or one of the other screens is VISIBLE; returns the XPath that is shown (Next wins when both are),
+    // or null after pSeconds. Each XPath is checked on its own, so hidden matches (the step 7 code box) are ignored.
+    private static String waitForScreen(String pNext, List<String> pOthers, int pSeconds)
+    {
+        long iEnd = System.currentTimeMillis() + pSeconds * 1000L;
+        do
+        {
+            for (String iOther : pOthers)
+            {
+                if (visibleNow(iOther)) return iOther;
+            }
+            if (visibleNow(pNext)) return pNext;
+            CommonFunctions.getPage().waitForTimeout(POLL_MS);
+        }
+        while (System.currentTimeMillis() < iEnd);
+        return null;
+    }
+
+    // true when ANY element matching the XPath is visible right now (no waiting)
+    private static boolean visibleNow(String pXpath)
     {
         try
         {
-            return UiHelpers.byXpath(pXpath).first().isVisible();
+            for (Locator iMatch : UiHelpers.findAll(UiHelpers.byXpath(pXpath)))
+            {
+                if (iMatch.isVisible()) return true;
+            }
         }
         catch (RuntimeException iGone)
         {
-            return false;
+            // page navigating - treat as not shown and poll again
+        }
+        return false;
+    }
+
+    // true when the first VISIBLE match is enabled (the set-up Next / Previous buttons get the disabled attribute)
+    private static boolean enabledNow(String pXpath)
+    {
+        try
+        {
+            for (Locator iMatch : UiHelpers.findAll(UiHelpers.byXpath(pXpath)))
+            {
+                if (iMatch.isVisible()) return iMatch.isEnabled();
+            }
+        }
+        catch (RuntimeException iGone)
+        {
+            // page navigating
+        }
+        return false;
+    }
+
+    // Step counter text, e.g. "3 / 7", or "-" when the page has none
+    private static String progress()
+    {
+        try
+        {
+            Locator iProgress = UiHelpers.byXpath(STEP_PROGRESS_XPATH).first();
+            return iProgress.isVisible() ? iProgress.innerText().trim() : "-";
+        }
+        catch (RuntimeException iGone)
+        {
+            return "-";
         }
     }
 
-    // After a Next click the same button is on the next screen too: wait briefly for the page to change so the
-    // loop does not see the old button again. A page that keeps the button in place simply ends the wait.
-    private static void waitUntilGone(String pXpath)
+    // After a Next click the button stays on the page (the steps are sections of one page): wait up to 2 s for the
+    // step counter to change, so the loop does not click again before the next step is shown
+    private static void waitForStepChange(String pBefore)
     {
-        Locator iButton = UiHelpers.byXpath(pXpath).first();
-        try
+        if ("-".equals(pBefore)) { CommonFunctions.getPage().waitForTimeout(500); return; }
+        long iEnd = System.currentTimeMillis() + 2000L;
+        while (System.currentTimeMillis() < iEnd && pBefore.equals(progress()))
         {
-            UiHelpers.waitHidden(iButton, 1);
-        }
-        catch (RuntimeException iStillShown)
-        {
-            // same element kept between screens - the loop checks it again
+            CommonFunctions.getPage().waitForTimeout(POLL_MS);
         }
     }
 }
