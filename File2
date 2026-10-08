@@ -1,716 +1,1161 @@
-package utilities;
-
-import commonFunctions.CommonFunctions;
-import database.DBRouter;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-// =====================================================================================================================================
-// File          : DataHarvester.java
-// Package       : utilities
-// Description   : Fills the TestDataVault BEFORE the first browser opens (run by TC_00_DATA, or by a nightly job).
+// ===================================================================================================================================
+// File          : Hooks.java
+// Package       : stepdefinitions
+// Description   : Cucumber lifecycle hooks - PLAYWRIGHT edition.
 //
-//                 1. DEMAND SCAN   reads ExecutionControl.xlsx and the feature files, and works out which pools are needed
-//                                  and how many rows each. data.demand.scope decides which rows count:
-//                                    all      (default) every TestCase_ID in the sheet, whatever its Execution flag, so a
-//                                             TC_00_DATA run on its own fills the jar for the whole week
-//                                    selected only Execution=Y rows (or -Dtestcase.ids when that is set)
-//                                    logs in as transferor "aga6060"            -> ENTS_AGENT / aga6060
-//                                    transfereeAgent | aga6325                  -> ENTS_AGENT / aga6325
-//                                    re-logs in as the transferee agent "x"     -> ENTS_AGENT / x
-//                                    ETF partner "x", ETF partner logs in as "x" -> ENTS_AGENT / x
-//                                    {transferor.login}, {transferee.login},
-//                                    transfereeType | Individual                -> ENTS_INDIVIDUAL
-//                                    "herd without entitlements" (TC_02_ENTS)   -> ENTS_NO_ENTS / <agent>
-//                                    {auto.agent}                               -> the best agents of "ENTS Top agents"
-//                                    "searches for the NRCISYF herd ..." (@tc13) -> ENTS_YOUNG_FARMER, 1 + one per
-//                                                                                 submission / saved draft (02-10-2026)
-//                                    BISS test case (no _ENTS)                   -> BISS_NOT_STARTED / herd.year
-//                                    BISS test case with _IND                    -> BISS_IND_CISYF  / herd.year
-//                                  Rows needed = sections x 2 for ENTS, 1 for BISS; fetched = max(data.min.rows,
-//                                  needed x data.spare.factor), capped at ents.pool.size.
-//                                  An ENTS_AGENT need whose Agent Login query returns nothing (ETF partners such as
-//                                  agr15512 are not in herd_agt) is fetched with "ENTS ETF partner herds" and stored as
-//                                  pool ENTS_ETF / <login> (01-10-2026).
-//                 2. FRESHNESS     data.force.refresh, the weekly refresh day (TestDataVault.staleReason) and the database
-//                                  fingerprints (data.fingerprint.sql.<DB>): when any says the jar is out of date, the old
-//                                  jar is archived and every pool is fetched again.
-//                 3. PARALLEL FETCH every pool that is below its target runs at the same time (data.threads, default 6)
-//                                  through the thread-safe DBRouter.query, so the wall time is the slowest query, not
-//                                  the sum. BISS pools also look up the INET login of each herd in parallel.
-//                 4. SPOT CHECK    when the jar was NOT refilled, data.spot.check rows per pool are checked against the
-//                                  database (ENTS: current agent link; BISS: no application started in the year, then
-//                                  INET login). A failed row is marked BAD; when
-//                                  more than half of a pool's checked rows fail, that pool is fetched again.
-//                 5. REPORT        vault.meta (filled date + fingerprints), the Excel view and the stock report.
-//
-//                 Nothing here opens a browser. Credentials stay in db.properties (DBRouter); passwords are never read.
+//                 Changes versus the Selenium Hooks:
+//                   - killProcessByName("chrome"/"chromedriver") moved to utilities.BrowserProcessCleaner, called by
+//                     PlaywrightFactory before every launch (browser.cleanup.before.start; skipped in containers)
+//                   - Browser launched through CommonFunctions.launchBrowser -> PlaywrightFactory
+//                   - URL can be overridden with -Dapp.url / BISS_APP_URL (container network names differ)
+//                   - DB herd bootstrap can be switched off with -Ddb.bootstrap=false / BISS_DB_BOOTSTRAP=false
+//                     (sheet values are used - needed for TC_01 POC and for containers without Oracle access)
+//                   - Failure screenshot is also attached to the Cucumber scenario (visible in Cucumber HTML report)
+//                   - Playwright trace zip kept for failed test cases (Test_Report/traces)
+//                   - ReportManager.setWordDocPath(...) call removed (method does not exist in ReportManager)
+//                   - All DB resolution logic (@preliminary, @tc13, markAgentExpired, blacklist) UNCHANGED
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 01-10-2026
-// Updated       : 05-10-2026 - BISS spot check: a herd that has started an application in the scheme year (Draft,
-//                              Submitted, Helpdesk, Draft Dept) is marked BAD (DBRouter "BISS herd application started")
-// Updated       : 07-10-2026 - ENTS_INDIVIDUAL pool: only herds with more than ents.individual.min.ents entitlements in
-//                              ents.scheme.year (EntsTestData.individualEntitlementFilter), like the Agent Login pool
-// =====================================================================================================================================
+// Date Created  : 10-03-2026
+// Updated       : 15-09-2026 - Selenium to Playwright migration
+// Updated       : 18-09-2026 - [TIMING] line per test case: setup (DB, cleanup, browser), scenarios, teardown
+// Updated       : 17-09-2026 - Fail-fast: after a failed scenario the rest of the test case is skipped (execution.fail.fast)
+//                              Word report / ReportIndex status now follows the Cucumber result
+// Updated       : 25-09-2026 - Individual end-to-end (TC_03_IND): test case IDs containing "_IND" take the herd from
+//                              DATA "List of not started individual herds with CISYF flag" and the login from
+//                              INET "Get Individual Login for herd". markAgentExpired re-resolves an individual pair too.
+// Updated       : 01-10-2026 - Test Data Vault (utilities.TestDataVault, filled by TC_00_DATA):
+//                                - the BISS herd + login come from the vault first (pool BISS_NOT_STARTED / BISS_IND_CISYF);
+//                                  the DATA + INET lookup below runs only when the vault has nothing for the test case
+//                                - the vault row is marked USED when the test case passes, BAD when it fails
+//                                - markAgentExpired marks the login EXPIRED in the vault and takes the next vault row
+//                                - test case IDs containing "_DATA" (TC_00_DATA) open no browser, read no TestData.xlsx
+//                                  row and write no Word report
+// Updated       : 05-10-2026 - Staff test cases (IDs containing "_STAFF", e.g. TC_01_STAFF) log in to the internal portal
+//                              and take herds / parcels / references from utilities.StaffTestData, so the BISS herd +
+//                              agent lookup is skipped for them by default (db.bootstrap.staff, default false)
+// Updated       : 08-10-2026 - Partnership end-to-end (TC_03_PART): test case IDs containing "_PART" take the herd from
+//                              DATA "List of not started partnership herds" (vault pool BISS_PARTNERSHIP) and the agent
+//                              from INET "Get Login Id for herd", exactly like TC_03. agentHerdQueryLabel() names the
+//                              query for every agent herd lookup (bootstrap, blacklist re-fetch, expired agent, TC_03 retry).
+// ===================================================================================================================================
 
-public final class DataHarvester
+package stepdefinitions;
+
+import commonFunctions.CommonFunctions;
+import io.cucumber.java.After;
+import io.cucumber.java.AfterAll;
+import io.cucumber.java.Before;
+import io.cucumber.java.BeforeAll;
+import io.cucumber.java.Scenario;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import reporting.ReportManager;
+import utilities.ConfigManager;
+import utilities.ExcelUtilities;
+import utilities.RetryAnalyser;
+import utilities.ScreenshotManager;
+import utilities.SoftAssertManager;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Random;
+import java.util.Set;
+
+public class Hooks
 {
-    private DataHarvester() { }
+    public static XWPFDocument iDocument    = null;
+    public static String       iDocPath     = null;
+    public static String       iTestCaseID  = null;
+    public static String       iEnvironment = null;
+    public static String       iUrl         = null;
+    private static final StringBuilder iAccumulatedErrors  = new StringBuilder();
+    private static String              iLastScreenshotPath = "";
+    private static long                iScenarioStartTime  = 0L;
+    private static boolean             iAnyScenarioFailed  = false;
+    private static String              iFirstFailedScenario = "";
+    private static long                iTestCaseStartMs      = 0L;
+    private static long                iSetupMs              = 0L;
+    private static long                iScenarioMs           = 0L;
+    private boolean                    iSkippedByFailFast   = false;
 
-    private static final String LOG = "[HARVEST] ";
+    private static final String iTestDataFilePath  = ConfigManager.getOrDefault("test.data.file.path", "src/test/resources/Test_Data/TestData.xlsx");
+    private static final String iTestDataSheetName = ConfigManager.getOrDefault("test.data.sheet.name", "Data");
+    private static final String iConfigSheetName   = "Config";
+    private static final String iDefaultBrowser    = "CHROME";
 
-    // One pool/key the selected test cases need, and how many rows
-    public static final class Need
+    // Standard runtime herd / username (used by TC_03 through TC_17)
+    public static String RUNTIME_HERD     = null;
+    public static String RUNTIME_USERNAME = null;
+
+    // Preliminary Checks runtime data (used by TC_18, TC_19, TC_20)
+    public static String OVERCLAIM_HERD         = null;
+    public static String OVERCLAIM_USERNAME     = null;
+    public static String DUAL_CLAIM_HERD        = null;
+    public static String DUAL_CLAIM_USERNAME    = null;
+    public static String AGRI_ACTIVITY_HERD     = null;
+    public static String AGRI_ACTIVITY_USERNAME = null;
+
+    // TC_13 NRCISYF runtime data
+    public static String CISYF_HERD     = null;
+    public static String CISYF_USERNAME = null;
+
+    // Blacklisted herds - re-fetch if we land on one of these
+    public static final Set<String> BLACKLISTED_HERDS = Set.of(
+            "R1230577","C2280025","C1281036","Q1060377","M1391623","M1701886","D1160614",
+            "X1120993","P1261051","E209434X","D1174054","H2621144","B1240361","G1930639",
+            "G194082X","B1560048","R1050781","D201078X","M1952021","W1040563","J1770847","J1710089","B1150150",
+            "B1380562","C129112X","G1221786","T209028X","A1030615","T1790688","G1280928","G1930167",
+            "Y1070492","Y1791564","R1040514","C1430554","C1289029","D4040032","B1014078","D2450985"
+    );
+
+    // Expired agents - populated at runtime when "Account Expired" is detected on screen
+    public static final Set<String> EXPIRED_AGENTS = new HashSet<>();
+
+    private static boolean isDbBootstrapEnabled()
     {
-        public final String pool;
-        public final String key;
-        public int rows;
-        public final Set<String> testCases = new LinkedHashSet<>();
-
-        Need(String pPool, String pKey) { pool = pPool; key = pKey; }
-
-        String id() { return pool + "/" + key; }
+        // ENTS test cases log in with the users named in the feature file and get their herds from
+        // utilities.EntsTestData, so the BISS herd + agent lookup (DATA + INET) is skipped for them by default.
+        if (isEntsTestCase())
+        {
+            return ConfigManager.getBool("db.bootstrap.ents", false);
+        }
+        // Staff test cases log in to the internal portal and read their data from utilities.StaffTestData
+        if (isStaffTestCase())
+        {
+            return ConfigManager.getBool("db.bootstrap.staff", false);
+        }
+        return ConfigManager.getBool("db.bootstrap", true);
     }
 
-    // =================================================================================================
-    // PUBLIC ENTRY POINT
-    // =================================================================================================
+    // True for ENTS test case IDs, e.g. TC_01_ENTS
+    private static boolean isEntsTestCase()
+    {
+        return iTestCaseID != null && iTestCaseID.toUpperCase(java.util.Locale.ROOT).contains("_ENTS");
+    }
+
+    // True for staff (internal portal) test case IDs, e.g. TC_01_STAFF
+    private static boolean isStaffTestCase()
+    {
+        return iTestCaseID != null && iTestCaseID.toUpperCase(java.util.Locale.ROOT).contains("_STAFF");
+    }
+
+    // True for partnership end-to-end test case IDs, e.g. TC_03_PART - a partnership herd, logged in as its agent
+    public static boolean isPartnershipTestCase()
+    {
+        return iTestCaseID != null && iTestCaseID.toUpperCase(java.util.Locale.ROOT).contains("_PART");
+    }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : run
-    // Description   : The whole harvest: freshness -> demand -> fetch (parallel) -> spot check -> report.
-    // Parameters    : pForce         (boolean) - true = refill everything whatever the freshness checks say
-    //                 pBlacklist     (Set)     - BISS herds never to hand out (Hooks.BLACKLISTED_HERDS)
-    //                 pExpiredLogins (Set)     - logins known to be expired in this run (Hooks.EXPIRED_AGENTS)
-    // Returns       : the stock report text (also logged)
+    // Function Name : agentHerdQueryLabel
+    // Description   : DATA query for the herd of an agent test case: partnership herds for _PART test cases (TC_03_PART),
+    //                 otherwise the usual Not Started herds. Used by every agent herd lookup, so a replacement herd
+    //                 (blacklisted herd, expired agent, herd not in My Clients) is of the same kind.
+    // Returns       : String - DBRouter label
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 08-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static String agentHerdQueryLabel()
+    {
+        return isPartnershipTestCase() ? "List of not started partnership herds" : "List of herds with no errors at all";
+    }
+
+    // True for individual end-to-end test case IDs, e.g. TC_03_IND - the herd owner logs in, not an agent
+    private static boolean isIndividualTestCase()
+    {
+        return iTestCaseID != null && iTestCaseID.toUpperCase(java.util.Locale.ROOT).contains("_IND");
+    }
+
+    // True for the data extraction test case (TC_00_DATA): no browser, no TestData.xlsx row, no Word report
+    private static boolean isDataTestCase()
+    {
+        return iTestCaseID != null && iTestCaseID.toUpperCase(java.util.Locale.ROOT).contains("_DATA");
+    }
+
+    // The vault row the BISS herd came from ("" when it came from the live DB lookup or the sheet)
+    private static String iVaultHerd = "";
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : takeFromVault
+    // Description   : Takes the BISS herd + login for this test case from the Test Data Vault (filled by TC_00_DATA).
+    //                 Pool BISS_IND_CISYF for individual test cases, BISS_NOT_STARTED otherwise; key = herd.year.
+    //                 Blacklisted herds and EXPIRED_AGENTS logins are skipped. Returns false when the vault is off,
+    //                 empty for this pool or has nothing usable left - the caller then runs the live lookup as before.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 01-10-2026
     // ***************************************************************************************************************************************************************************************
-    public static String run(boolean pForce, Set<String> pBlacklist, Set<String> pExpiredLogins)
+    private static boolean takeFromVault()
     {
-        long iStart = System.currentTimeMillis();
+        if (!utilities.TestDataVault.isEnabled()) return false;
 
-        // -- 1. Freshness ---------------------------------------------------------------------------------------------
-        Map<String, String> iFingerprints = fingerprints();
-        String iStale = pForce ? "refill forced" : TestDataVault.staleReason();
-        if (iStale.isEmpty()) iStale = fingerprintChange(iFingerprints);
+        String iPool = isIndividualTestCase()  ? utilities.TestDataVault.POOL_BISS_IND_CISYF
+                     : isPartnershipTestCase() ? utilities.TestDataVault.POOL_BISS_PARTNERSHIP
+                     : utilities.TestDataVault.POOL_BISS_NOT_STARTED;
+        String iYear = System.getProperty("herd.year", "2026").trim();
 
-        boolean iRefillAll = !iStale.isEmpty();
-        if (iRefillAll)
+        if (!utilities.TestDataVault.hasPool(iPool, iYear))
         {
-            CommonFunctions.log.warning(LOG + "Jar out of date: " + iStale + " -> archiving it and fetching every pool again.");
-            TestDataVault.archiveAndClear(iStale);
-        }
-        else
-        {
-            CommonFunctions.log.info(LOG + "Jar is fresh (filled " + TestDataVault.filledAt() + ") - topping up pools that are low.");
+            CommonFunctions.log.info("[BOOT] Vault has no pool " + iPool + "/" + iYear + " (run TC_00_DATA first) - using the live DB lookup.");
+            return false;
         }
 
-        // -- 2. Demand ------------------------------------------------------------------------------------------------
-        Map<String, Need> iNeeds = scanDemand();
-        if (iNeeds.isEmpty())
+        utilities.TestDataVault.Row iRow = utilities.TestDataVault.reserve(iPool, iYear, BLACKLISTED_HERDS, EXPIRED_AGENTS, iTestCaseID, "BISS bootstrap");
+        if (iRow == null)
         {
-            CommonFunctions.log.warning(LOG + "No test case in scope needs vault data. With data.demand.scope=selected only Execution=Y rows "
-                    + "count - set it to all (the default) to fill the jar for every test case in ExecutionControl.xlsx.");
+            CommonFunctions.log.warning("[BOOT] Vault pool " + iPool + "/" + iYear + " has no available row left - using the live DB lookup.");
+            return false;
         }
 
-        // -- 3. Fetch what is below target, in parallel ---------------------------------------------------------------
-        List<Need> iToFetch = new ArrayList<>();
-        for (Need iNeed : iNeeds.values())
-        {
-            int iTarget    = target(iNeed.rows);
-            int iAvailable = availableFor(iNeed);
-            if (iRefillAll || iAvailable < iTarget)
-            {
-                iToFetch.add(iNeed);
-                CommonFunctions.log.info(LOG + iNeed.id() + ": " + iAvailable + " available, target " + iTarget
-                        + " (needed by " + iNeed.testCases + ") -> fetching");
-            }
-            else
-            {
-                CommonFunctions.log.info(LOG + iNeed.id() + ": " + iAvailable + " available, target " + iTarget + " -> enough");
-            }
-        }
-        fetchAll(iToFetch, pBlacklist, pExpiredLogins);
-
-        // -- 4. Spot check the rows that were already in the jar ---------------------------------------------------------
-        if (!iRefillAll)
-        {
-            List<Need> iStalePools = spotCheck(iNeeds.values(), iToFetch);
-            if (!iStalePools.isEmpty())
-            {
-                CommonFunctions.log.warning(LOG + "Spot check found " + iStalePools.size() + " stale pool(s) - fetching them again.");
-                fetchAll(iStalePools, pBlacklist, pExpiredLogins);
-            }
-        }
-
-        // -- 5. Record + report ---------------------------------------------------------------------------------------
-        if (iRefillAll || !iToFetch.isEmpty() || TestDataVault.filledAt().isEmpty())
-        {
-            TestDataVault.markFilled(iFingerprints);
-        }
-        TestDataVault.writeExcelView();
-
-        String iReport = TestDataVault.stockReport();
-        CommonFunctions.log.info(LOG + "Harvest finished in " + (System.currentTimeMillis() - iStart) / 1000 + " s" + iReport);
-        for (String iLow : TestDataVault.lowStockPools())
-        {
-            CommonFunctions.log.warning(LOG + "LOW STOCK: " + iLow);
-        }
-        return iReport;
+        RUNTIME_HERD     = iRow.herd;
+        RUNTIME_USERNAME = iRow.login;
+        iVaultHerd       = iRow.herd;
+        System.setProperty("TD:HerdNumber", RUNTIME_HERD);
+        System.setProperty("TD:Username",   RUNTIME_USERNAME);
+        CommonFunctions.log.info("[BOOT] From vault: Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME + " (" + iPool + ")");
+        return true;
     }
-
-    // =================================================================================================
-    // 1. FINGERPRINTS
-    // =================================================================================================
-
-    // One cheap "always goes up" value per database. Blank setting = that database is not fingerprinted.
-    private static Map<String, String> fingerprints()
-    {
-        Map<String, String> iPrints = new LinkedHashMap<>();
-        Map<String, String> iSql = new LinkedHashMap<>();
-        iSql.put("DATA", ConfigManager.getOrDefault("data.fingerprint.sql.DATA", "SELECT MAX(app_id) FROM vwbs_application"));
-        iSql.put("INET", ConfigManager.getOrDefault("data.fingerprint.sql.INET", ""));
-        iSql.put("ENTS", ConfigManager.getOrDefault("data.fingerprint.sql.ENTS", "SELECT MAX(ohs_own_id) FROM tden_owner_history"));
-
-        for (Map.Entry<String, String> iEntry : iSql.entrySet())
-        {
-            String iQuery = iEntry.getValue().trim();
-            if (iQuery.isEmpty()) continue;
-            try
-            {
-                List<Map<String, Object>> iRows = DBRouter.queryRaw(iEntry.getKey(), iQuery);
-                String iValue = iRows.isEmpty() ? "" : String.valueOf(iRows.get(0).values().iterator().next());
-                iPrints.put(iEntry.getKey(), iValue);
-                CommonFunctions.log.info(LOG + "Fingerprint " + iEntry.getKey() + " = " + iValue);
-            }
-            catch (Exception e)
-            {
-                CommonFunctions.log.warning(LOG + "Fingerprint query for " + iEntry.getKey() + " failed (" + e.getMessage()
-                        + ") - skipping this check. Set data.fingerprint.sql." + iEntry.getKey() + " to a cheap query, or blank to disable.");
-            }
-        }
-        return iPrints;
-    }
-
-    // "" when every stored fingerprint still matches, otherwise the reason
-    private static String fingerprintChange(Map<String, String> pCurrent)
-    {
-        for (Map.Entry<String, String> iEntry : pCurrent.entrySet())
-        {
-            String iStored = TestDataVault.storedFingerprint(iEntry.getKey());
-            if (!iStored.isEmpty() && !iStored.equals(iEntry.getValue()))
-            {
-                return "database " + iEntry.getKey() + " was refreshed (fingerprint " + iStored + " -> " + iEntry.getValue() + ")";
-            }
-        }
-        return "";
-    }
-
-    // =================================================================================================
-    // 2. DEMAND SCAN
-    // =================================================================================================
-
-    private static final Pattern P_LOGIN_TRANSFEROR  = Pattern.compile("logs in as transferor \"([^\"{}]+)\"");
-    private static final Pattern P_TRANSFEREE_AGENT  = Pattern.compile("transfereeAgent\\s*\\|\\s*([A-Za-z0-9]+)");
-    private static final Pattern P_RELOGIN_AGENT     = Pattern.compile("re-logs? in as the transferee agent \"([^\"{}]+)\"");
-    private static final Pattern P_LOGIN_AGENT       = Pattern.compile("logs in as transferee agent \"([^\"{}]+)\"");
-    private static final Pattern P_ETF_PARTNER       = Pattern.compile("ETF partner \"([^\"{}]+)\"");
-    private static final Pattern P_SECTION           = Pattern.compile("creates a transfer (application with the following details|with manual entitlements)");
-    private static final Pattern P_INDIVIDUAL        = Pattern.compile("\\{transferor\\.login}|\\{transferee\\.login}|transfereeType\\s*\\|\\s*Individual");
-    private static final Pattern P_NO_ENTS           = Pattern.compile("herd without entitlements");
-    private static final Pattern P_NRCISYF_HERD      = Pattern.compile("searches for the NRCISYF herd and opens the application");
-    private static final Pattern P_NRCISYF_CONSUME   = Pattern.compile("submits the NRCISYF application with declaration|saves and exits the NRCISYF application");
-    private static final Pattern P_AUTO_AGENT        = Pattern.compile("\\{auto\\.agent(?:\\.(\\d+))?}");
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : scanDemand
-    // Description   : Reads the selected ExecutionControl rows and their feature files; returns one Need per pool/key.
-    //                 data.extra.agents (comma-separated logins) is always added, for agents used outside feature files.
+    // Function Name : markAgentExpired
+    // Description   : Adds the agent to EXPIRED_AGENTS and re-resolves a fresh herd+agent pair (unchanged logic).
+    // Parameters    : pExpiredUsername - the agent username that showed Account Expired
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 01-10-2026
+    // Date Created  : 05-05-2026
     // ***************************************************************************************************************************************************************************************
-    public static Map<String, Need> scanDemand()
+    public static void markAgentExpired(String pExpiredUsername)
     {
-        Map<String, Need> iNeeds = new LinkedHashMap<>();
-        String iYear = System.getProperty("herd.year", ConfigManager.getOrDefault("herd.year", String.valueOf(LocalDate.now().getYear()))).trim();
-        List<String> iTopAgents = null;   // fetched once, only when a feature uses {auto.agent}
+        if (pExpiredUsername == null || pExpiredUsername.isBlank()) return;
 
-        for (String iTestCase : selectedTestCases())
+        EXPIRED_AGENTS.add(pExpiredUsername.trim());
+        CommonFunctions.log.warning("[EXPIRED-AGENT] SSO Account Expired detected for: "
+                + pExpiredUsername + " - added to EXPIRED_AGENTS. Re-resolving herd+agent.");
+
+        // NR/CISYF (@tc13, 02-10-2026): the replacement must be another Young Farmer herd + its agent, not a BISS herd.
+        // Before this, an expired NR/CISYF agent was replaced by a BISS herd and CISYF_HERD kept the old agent's herd.
+        if (CISYF_HERD != null && CISYF_USERNAME != null && CISYF_USERNAME.trim().equalsIgnoreCase(pExpiredUsername.trim()))
         {
-            String iUpper = iTestCase.toUpperCase(Locale.ROOT);
-            if (iUpper.contains("_DATA")) continue;
-
-            String iFeature = featureText(iTestCase);
-
-            if (iUpper.contains("_ENTS"))
+            if (utilities.TestDataVault.isEnabled())
             {
-                int iSections = Math.max(1, count(P_SECTION, iFeature));
-                Set<String> iAgents = new LinkedHashSet<>();
-                for (Pattern iPattern : new Pattern[]{ P_LOGIN_TRANSFEROR, P_TRANSFEREE_AGENT, P_RELOGIN_AGENT, P_LOGIN_AGENT, P_ETF_PARTNER })
-                {
-                    Matcher iMatcher = iPattern.matcher(iFeature);
-                    while (iMatcher.find())
-                    {
-                        String iLogin = iMatcher.group(1).trim();
-                        if (isAgentLogin(iLogin)) iAgents.add(iLogin);
-                    }
-                }
-                // {auto.agent} / {auto.agent.N}: the N best agents by herd count, other than the feature's own agents.
-                // At run time EntsTestData.resolveAgent ranks by vault stock, so the agents filled here are the ones
-                // it will find at the top. One extra agent is filled as a spare.
-                Matcher iAuto = P_AUTO_AGENT.matcher(iFeature);
-                int iAutoMax = 0;
-                while (iAuto.find()) iAutoMax = Math.max(iAutoMax, iAuto.group(1) == null ? 1 : Integer.parseInt(iAuto.group(1)));
-                if (iAutoMax > 0)
-                {
-                    if (iTopAgents == null)
-                    {
-                        iTopAgents = EntsTestData.topAgentsLive(ConfigManager.getInt("data.auto.agents.rank", 10));
-                        TestDataVault.storeTopAgents(iTopAgents);
-                        CommonFunctions.log.info(LOG + "Top agents by herd count: " + iTopAgents);
-                    }
-                    int iAdded = 0;
-                    for (String iTop : iTopAgents)
-                    {
-                        boolean iOwn = false;
-                        for (String iAgent : iAgents) if (iAgent.equalsIgnoreCase(iTop)) iOwn = true;
-                        if (iOwn) continue;
-                        iAgents.add(iTop);
-                        if (++iAdded > iAutoMax) break;   // the N asked for, plus one spare
-                    }
-                }
-
-                for (String iAgent : iAgents)
-                {
-                    need(iNeeds, TestDataVault.POOL_ENTS_AGENT, iAgent, iSections * 2, iTestCase);
-                    if (P_NO_ENTS.matcher(iFeature).find())
-                    {
-                        need(iNeeds, TestDataVault.POOL_ENTS_NO_ENTS, iAgent, iSections, iTestCase);
-                    }
-                }
-                if (P_INDIVIDUAL.matcher(iFeature).find())
-                {
-                    need(iNeeds, TestDataVault.POOL_ENTS_INDIVIDUAL, "", iSections * 2, iTestCase);
-                }
-                // NR/CISYF (@tc13): one herd to start with, plus one for every submission or saved draft
-                if (P_NRCISYF_HERD.matcher(iFeature).find())
-                {
-                    need(iNeeds, TestDataVault.POOL_ENTS_YOUNG_FARMER, "", 1 + count(P_NRCISYF_CONSUME, iFeature), iTestCase);
-                }
+                utilities.TestDataVault.markLoginExpired(pExpiredUsername, "Account Expired on the Keycloak login page");
+                utilities.TestDataVault.markBad(CISYF_HERD, "agent " + pExpiredUsername + " expired");
             }
-            else if (iUpper.contains("_IND"))
+            String[] iNext = utilities.NrcisyfTestData.nextHerd("", BLACKLISTED_HERDS, EXPIRED_AGENTS, "agent expired");
+            if (iNext != null)
             {
-                need(iNeeds, TestDataVault.POOL_BISS_IND_CISYF, iYear, 1, iTestCase);
+                CISYF_HERD       = iNext[0];
+                CISYF_USERNAME   = iNext[1];
+                RUNTIME_HERD     = iNext[0];
+                RUNTIME_USERNAME = iNext[1];
+                CommonFunctions.log.info("[EXPIRED-AGENT] Next Young Farmer herd: " + CISYF_HERD + " | agent=" + CISYF_USERNAME);
+                return;
             }
-            else if (iFeature.contains("@preliminary") || iFeature.contains("@tc13"))
-            {
-                CommonFunctions.log.info(LOG + iTestCase + " uses the @preliminary / @tc13 hooks - left on the live query path.");
-            }
-            else
-            {
-                need(iNeeds, TestDataVault.POOL_BISS_NOT_STARTED, iYear, 1, iTestCase);
-            }
+            CommonFunctions.log.warning("[EXPIRED-AGENT] No Young Farmer herd left - using the BISS lookup below (Selenium behaviour).");
         }
 
-        for (String iExtra : ConfigManager.getOrDefault("data.extra.agents", "").split("[,;\\s]+"))
+        // Vault: remember the expired login, give the current row back as BAD and take the next one
+        if (utilities.TestDataVault.isEnabled())
         {
-            if (!iExtra.isBlank()) need(iNeeds, TestDataVault.POOL_ENTS_AGENT, iExtra.trim(), 2, "data.extra.agents");
-        }
-
-        StringBuilder iSummary = new StringBuilder(LOG + "Demand: ");
-        for (Need iNeed : iNeeds.values()) iSummary.append(iNeed.id()).append("=").append(iNeed.rows).append(" ");
-        CommonFunctions.log.info(iSummary.toString().trim());
-        return iNeeds;
-    }
-
-    private static void need(Map<String, Need> pNeeds, String pPool, String pKey, int pRows, String pTestCase)
-    {
-        Need iNeed = pNeeds.computeIfAbsent(pPool + "/" + pKey, k -> new Need(pPool, pKey));
-        iNeed.rows += pRows;
-        iNeed.testCases.add(pTestCase);
-    }
-
-    private static boolean isAgentLogin(String pLogin)
-    {
-        String iLower = pLogin.toLowerCase(Locale.ROOT);
-        return iLower.startsWith("aga") || iLower.startsWith("agr");
-    }
-
-    private static int count(Pattern pPattern, String pText)
-    {
-        int iCount = 0;
-        Matcher iMatcher = pPattern.matcher(pText);
-        while (iMatcher.find()) iCount++;
-        return iCount;
-    }
-
-    // The test cases the jar is filled for: every row of ExecutionControl.xlsx (data.demand.scope=all, default),
-    // only Execution=Y rows (data.demand.scope=selected), or exactly -Dtestcase.ids when that is set
-    private static List<String> selectedTestCases()
-    {
-        List<String> iSelected = new ArrayList<>();
-        String iIds = ConfigManager.getOrDefault("testcase.ids", "").trim();
-        if (!iIds.isEmpty())
-        {
-            for (String iId : iIds.split("[,;\\s]+")) if (!iId.isBlank()) iSelected.add(iId.trim());
-            CommonFunctions.log.info(LOG + "Demand scope: testcase.ids " + iSelected);
-            return iSelected;
-        }
-
-        boolean iAllRows = !"selected".equalsIgnoreCase(ConfigManager.getOrDefault("data.demand.scope", "all").trim());
-        String  iPath    = ConfigManager.getOrDefault("execution.control.path", "src/test/resources/Execution_Control_File/ExecutionControl.xlsx");
-        String  iSheet   = ConfigManager.getOrDefault("execution.control.sheet", "Sheet1");
-        int     iSkipped = 0;
-        try
-        {
-            ExcelUtilities iExcel = new ExcelUtilities(iPath);
-            int iRows = iExcel.getRowCount(iSheet);
-            for (int iRow = 1; iRow <= iRows; iRow++)
+            utilities.TestDataVault.markLoginExpired(pExpiredUsername, "Account Expired on the Keycloak login page");
+            if (!iVaultHerd.isEmpty())
             {
-                String iId = iExcel.getCellValue(iSheet, iRow, "TestCase_ID").trim();
-                if (iId.isEmpty()) continue;
-                if (!iAllRows)
+                utilities.TestDataVault.markBad(iVaultHerd, "login " + pExpiredUsername + " expired");
+                iVaultHerd = "";
+            }
+            if (takeFromVault()) return;
+        }
+
+        // Individual test case: the replacement must be another individual herd + its own login
+        if (isIndividualTestCase())
+        {
+            if (!resolveIndividualHerdAndUser())
+            {
+                throw new RuntimeException("[EXPIRED-INDIVIDUAL] Could not find a replacement individual herd+login after marking "
+                        + pExpiredUsername + " as expired. Try -Dherd.limit=100 or check the individual queries.");
+            }
+            return;
+        }
+
+        String iYear  = System.getProperty("herd.year",  "2026").trim();
+        String iLimit = System.getProperty("herd.limit", "25").trim();
+
+        boolean iFound = false;
+
+        for (int iAttempt = 1; iAttempt <= 5 && !iFound; iAttempt++)
+        {
+            int iNewLimit = Integer.parseInt(iLimit) + (iAttempt * 10);
+            database.DBRouter.runDB("DATA", agentHerdQueryLabel(), iYear, String.valueOf(iNewLimit));
+
+            List<Map<String, Object>> iRows = database.DBRouter.getRows();
+            if (iRows == null || iRows.isEmpty()) continue;
+
+            List<String> iCandidates = new ArrayList<>();
+            for (Map<String, Object> r : iRows)
+            {
+                String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
+                if (!h.isEmpty()) iCandidates.add(h);
+            }
+            Collections.shuffle(iCandidates, new Random(System.nanoTime()));
+
+            for (String iCandidate : iCandidates)
+            {
+                if (BLACKLISTED_HERDS.contains(iCandidate)) continue;
+
+                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
+                String iUser = database.DBRouter.getValue("USERNAME");
+
+                if (iUser == null || iUser.isBlank()) continue;
+                iUser = iUser.trim();
+
+                if (EXPIRED_AGENTS.contains(iUser))
                 {
-                    String iFlag = iExcel.getCellValue(iSheet, iRow, "Execution").trim();
-                    if (!iFlag.equalsIgnoreCase("Y")) { iSkipped++; continue; }
+                    CommonFunctions.log.warning("[EXPIRED-AGENT] Candidate agent " + iUser + " is also expired - skipping.");
+                    continue;
                 }
-                iSelected.add(iId);
-            }
-        }
-        catch (Exception e)
-        {
-            CommonFunctions.log.warning(LOG + "Could not read " + iPath + " (" + e.getMessage() + ") - demand scan limited to data.extra.agents.");
-        }
-        CommonFunctions.log.info(LOG + "Demand scope: " + (iAllRows ? "all " + iSelected.size() + " test case(s) in ExecutionControl.xlsx"
-                : iSelected.size() + " Execution=Y test case(s), " + iSkipped + " skipped (data.demand.scope=selected)"));
-        return iSelected;
-    }
 
-    // The feature file text of a test case ("" when it cannot be found - the harvest goes on without it)
-    private static String featureText(String pTestCase)
-    {
-        String iRoot = ConfigManager.getOrDefault("feature.directory.path", "src/test/resources/Test_Cases/");
-        try (java.util.stream.Stream<java.nio.file.Path> iWalk = Files.walk(Paths.get(iRoot)))
-        {
-            java.nio.file.Path iMatch = iWalk.filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().equalsIgnoreCase(pTestCase + ".feature"))
-                    .findFirst().orElse(null);
-            if (iMatch == null)
-            {
-                CommonFunctions.log.warning(LOG + "Feature file for " + pTestCase + " not found under " + iRoot);
-                return "";
-            }
-            return new String(Files.readAllBytes(iMatch), StandardCharsets.UTF_8);
-        }
-        catch (IOException e)
-        {
-            CommonFunctions.log.warning(LOG + "Could not read the feature file of " + pTestCase + ": " + e.getMessage());
-            return "";
-        }
-    }
+                RUNTIME_HERD     = iCandidate;
+                RUNTIME_USERNAME = iUser;
+                iFound = true;
 
-    // =================================================================================================
-    // 3. FETCH (parallel)
-    // =================================================================================================
-
-    // AVAILABLE rows for a need; an agent need also counts the ETF pool of the same login
-    private static int availableFor(Need pNeed)
-    {
-        int iCount = TestDataVault.countStatus(pNeed.pool, pNeed.key, TestDataVault.AVAILABLE);
-        if (TestDataVault.POOL_ENTS_AGENT.equals(pNeed.pool))
-        {
-            iCount += TestDataVault.countStatus(TestDataVault.POOL_ENTS_ETF, pNeed.key, TestDataVault.AVAILABLE);
-        }
-        return iCount;
-    }
-
-    private static int target(int pNeeded)
-    {
-        int iSpare = Math.max(1, ConfigManager.getInt("data.spare.factor", 3));
-        int iMin   = ConfigManager.getInt("data.min.rows", 10);
-        int iCap   = ConfigManager.getInt("ents.pool.size", 200);
-        return Math.min(iCap, Math.max(iMin, pNeeded * iSpare));
-    }
-
-    private static void fetchAll(List<Need> pNeeds, Set<String> pBlacklist, Set<String> pExpiredLogins)
-    {
-        if (pNeeds.isEmpty()) return;
-
-        int iThreads = Math.max(1, Math.min(ConfigManager.getInt("data.threads", 6), pNeeds.size()));
-        ExecutorService iPool = Executors.newFixedThreadPool(iThreads);
-        Map<Need, Future<List<TestDataVault.Row>>> iFutures = new LinkedHashMap<>();
-        long iStart = System.currentTimeMillis();
-
-        for (Need iNeed : pNeeds)
-        {
-            iFutures.put(iNeed, iPool.submit(() -> fetchPool(iNeed, pBlacklist, pExpiredLogins)));
-        }
-        iPool.shutdown();
-
-        for (Map.Entry<Need, Future<List<TestDataVault.Row>>> iEntry : iFutures.entrySet())
-        {
-            Need iNeed = iEntry.getKey();
-            try
-            {
-                List<TestDataVault.Row> iRows = iEntry.getValue().get(ConfigManager.getInt("data.fetch.timeout.seconds", 300), TimeUnit.SECONDS);
-                // The rows carry their own pool: an agent need can come back as ENTS_ETF rows (ETF partner)
-                String iTargetPool = iRows.isEmpty() ? iNeed.pool : iRows.get(0).pool;
-                TestDataVault.putPool(iTargetPool, iNeed.key, iRows);
-            }
-            catch (Exception e)
-            {
-                String iCause = e.getCause() == null ? e.getMessage() : e.getCause().getMessage();
-                CommonFunctions.log.severe(LOG + iNeed.id() + " could not be fetched: " + iCause
-                        + " - the test cases that need it (" + iNeed.testCases + ") will fall back to live queries.");
-            }
-        }
-        CommonFunctions.log.info(LOG + pNeeds.size() + " pool(s) fetched in " + (System.currentTimeMillis() - iStart) / 1000
-                + " s with " + iThreads + " thread(s).");
-    }
-
-    // The rows of one pool (runs on a worker thread - only DBRouter.query, nothing shared)
-    private static List<TestDataVault.Row> fetchPool(Need pNeed, Set<String> pBlacklist, Set<String> pExpiredLogins)
-    {
-        int    iLimit = target(pNeed.rows);
-        String iYear  = ConfigManager.getOrDefault("ents.scheme.year", "").trim();
-        String iType  = ConfigManager.getOrDefault("ents.cust.type", "").trim();
-        String iTwo   = ConfigManager.getBool("ents.name.two.words", true) ? "Y" : "";
-        List<TestDataVault.Row> iRows = new ArrayList<>();
-        long iStart = System.currentTimeMillis();
-
-        switch (pNeed.pool)
-        {
-            case TestDataVault.POOL_ENTS_AGENT:
-            {
-                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS Agent Login herds", pNeed.key, String.valueOf(iLimit), iYear, iType, iTwo))
-                {
-                    iRows.add(new TestDataVault.Row(pNeed.pool, pNeed.key, TestDataVault.text(r, "HERD_NUMBER"),
-                            TestDataVault.text(r, "HERD_NAME"), TestDataVault.text(r, "ADDRESSLINE1"), pNeed.key));
-                }
-                if (iRows.isEmpty())
-                {
-                    // Not in herd_agt - try the login as an ETF partner (tden_herd_etf_link)
-                    for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS ETF partner herds", pNeed.key, String.valueOf(iLimit), iYear, iTwo))
-                    {
-                        iRows.add(new TestDataVault.Row(TestDataVault.POOL_ENTS_ETF, pNeed.key, TestDataVault.text(r, "HERD_NUMBER"),
-                                TestDataVault.text(r, "HERD_NAME"), TestDataVault.text(r, "ADDRESSLINE1"), pNeed.key));
-                    }
-                    CommonFunctions.log.info(LOG + pNeed.key + " is not in herd_agt - ETF partner query: " + iRows.size() + " herd(s)");
-                }
+                CommonFunctions.log.info("[EXPIRED-AGENT] Re-resolved: Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
                 break;
             }
-            case TestDataVault.POOL_ENTS_NO_ENTS:
-            {
-                String iNoEntsYear = iYear.isEmpty() ? String.valueOf(LocalDate.now().getYear()) : iYear;
-                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS Agent herds without entitlements", pNeed.key, String.valueOf(iLimit), iNoEntsYear, iType))
-                {
-                    iRows.add(new TestDataVault.Row(pNeed.pool, pNeed.key, TestDataVault.text(r, "HERD_NUMBER"),
-                            TestDataVault.text(r, "HERD_NAME"), TestDataVault.text(r, "ADDRESSLINE1"), pNeed.key));
-                }
-                break;
-            }
-            case TestDataVault.POOL_ENTS_YOUNG_FARMER:
-            {
-                // Simon's Young Farmer query: herd + its agent in one row (nrcisyf.herds limits it to a fixed list)
-                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS Young Farmer herds", String.valueOf(iLimit),
-                        ConfigManager.getOrDefault("nrcisyf.herds", "").trim()))
-                {
-                    String iHerd  = TestDataVault.text(r, "HERD_ID");
-                    String iLogin = TestDataVault.text(r, "LOGIN_ID").toLowerCase(Locale.ROOT);
-                    if (iHerd.isEmpty() || iLogin.isEmpty()) continue;
-                    if (pBlacklist != null && pBlacklist.contains(iHerd)) continue;
-                    if (pExpiredLogins != null && pExpiredLogins.contains(iLogin)) continue;
-                    iRows.add(new TestDataVault.Row(pNeed.pool, pNeed.key, iHerd, "", "", iLogin));
-                }
-                break;
-            }
-            case TestDataVault.POOL_ENTS_INDIVIDUAL:
-            {
-                int iIndLimit = Math.max(iLimit, ConfigManager.getInt("ents.individual.pool.size", 0));
-                String[] iEnts = EntsTestData.individualEntitlementFilter();   // 07-10-2026: entitlement filter
-                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS Individual Login herds", String.valueOf(iIndLimit), iTwo, iType, iEnts[0], iEnts[1]))
-                {
-                    String iLogin = TestDataVault.text(r, "LOGIN_ID");
-                    if (iLogin.isEmpty() || (pExpiredLogins != null && pExpiredLogins.contains(iLogin))) continue;
-                    iRows.add(new TestDataVault.Row(pNeed.pool, "", TestDataVault.text(r, "HERD_NUMBER"),
-                            TestDataVault.text(r, "NAME"), TestDataVault.text(r, "ADDRESS"), iLogin));
-                }
-                break;
-            }
-            case TestDataVault.POOL_BISS_NOT_STARTED:
-            {
-                List<String> iHerds = new ArrayList<>();
-                for (Map<String, Object> r : DBRouter.query("DATA", "List of herds with no errors at all", pNeed.key, String.valueOf(iLimit)))
-                {
-                    String iHerd = TestDataVault.text(r, "APP_HERD_NO");
-                    if (!iHerd.isEmpty() && (pBlacklist == null || !pBlacklist.contains(iHerd)) && !iHerds.contains(iHerd)) iHerds.add(iHerd);
-                }
-                Collections.shuffle(iHerds);
-                iRows.addAll(lookupLogins(pNeed, iHerds, "Get Login Id for herd", "USERNAME", pExpiredLogins));
-                break;
-            }
-            case TestDataVault.POOL_BISS_IND_CISYF:
-            {
-                List<String> iHerds = new ArrayList<>();
-                for (Map<String, Object> r : DBRouter.query("DATA", "List of not started individual herds with CISYF flag", pNeed.key, String.valueOf(iLimit)))
-                {
-                    String iHerd = TestDataVault.text(r, "APP_HERD_NO");
-                    if (!iHerd.isEmpty() && (pBlacklist == null || !pBlacklist.contains(iHerd)) && !iHerds.contains(iHerd)) iHerds.add(iHerd);
-                }
-                iRows.addAll(lookupLogins(pNeed, iHerds, "Get Individual Login for herd", "LOGIN", pExpiredLogins));
-                break;
-            }
-            default:
-                throw new IllegalArgumentException(LOG + "Unknown pool " + pNeed.pool);
         }
 
-        CommonFunctions.log.info(LOG + pNeed.id() + ": " + iRows.size() + " row(s) in " + (System.currentTimeMillis() - iStart) / 1000 + " s");
-        return iRows;
+        if (!iFound)
+        {
+            throw new RuntimeException("[EXPIRED-AGENT] Could not find a replacement herd+agent after marking "
+                    + pExpiredUsername + " as expired. All candidates exhausted. Try -Dherd.limit=50 or check DB data.");
+        }
     }
 
-    // BISS: one INET lookup per herd, a few at a time. Herds without a usable login are dropped.
-    private static List<TestDataVault.Row> lookupLogins(Need pNeed, List<String> pHerds, String pLabel, String pColumn, Set<String> pExpiredLogins)
+    private static void rerunIfBlacklisted()
     {
-        List<TestDataVault.Row> iRows = Collections.synchronizedList(new ArrayList<>());
-        int iThreads = Math.max(1, Math.min(ConfigManager.getInt("data.inet.threads", 4), Math.max(1, pHerds.size())));
-        ExecutorService iPool = Executors.newFixedThreadPool(iThreads);
-        List<Future<?>> iFutures = new ArrayList<>();
+        int retries = 0;
 
-        for (String iHerd : pHerds)
+        while (RUNTIME_HERD != null && BLACKLISTED_HERDS.contains(RUNTIME_HERD) && retries < 50)
         {
-            iFutures.add(iPool.submit((Callable<Void>) () ->
+            retries++;
+            CommonFunctions.log.warning("[HOOKS] Blacklisted herd detected: " + RUNTIME_HERD + " - re-fetching (attempt " + retries + ")");
+
+            database.DBRouter.runDB("DATA", agentHerdQueryLabel(),
+                    String.valueOf(java.time.Year.now().getValue()), String.valueOf(10 + retries));
+
+            List<Map<String, Object>> rows = database.DBRouter.getRows();
+            if (rows == null || rows.isEmpty())
             {
-                for (Map<String, Object> r : DBRouter.query("INET", pLabel, iHerd))
+                throw new RuntimeException("[HOOKS] Re-fetch returned no rows - cannot find replacement herd.");
+            }
+
+            boolean replaced = false;
+            for (Map<String, Object> r : rows)
+            {
+                String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
+                if (!h.isEmpty() && !BLACKLISTED_HERDS.contains(h))
                 {
-                    String iLogin = TestDataVault.text(r, pColumn);
-                    if (iLogin.isEmpty() || (pExpiredLogins != null && pExpiredLogins.contains(iLogin))) continue;
-                    iRows.add(new TestDataVault.Row(pNeed.pool, pNeed.key, iHerd, "", "", iLogin));
+                    RUNTIME_HERD = h;
+                    CommonFunctions.log.info("[HOOKS] Replacement herd selected: " + RUNTIME_HERD);
+                    replaced = true;
                     break;
                 }
-                return null;
-            }));
+            }
+
+            if (!replaced)
+            {
+                CommonFunctions.log.warning("[HOOKS] No non-blacklisted herd found - retrying...");
+            }
         }
-        iPool.shutdown();
-        for (Future<?> iFuture : iFutures)
+
+        if (RUNTIME_HERD != null && BLACKLISTED_HERDS.contains(RUNTIME_HERD))
         {
-            try { iFuture.get(ConfigManager.getInt("data.fetch.timeout.seconds", 300), TimeUnit.SECONDS); }
-            catch (Exception e) { CommonFunctions.log.warning(LOG + pNeed.id() + " INET lookup failed for one herd: " + e.getMessage()); }
+            throw new RuntimeException("[HOOKS] Could not resolve a non-blacklisted herd after " + retries + " retries. Last herd=" + RUNTIME_HERD);
         }
-        return new ArrayList<>(iRows);
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : bootstrapRuntimeHerdAndUser
+    // Description   : DATA -> INET herd/username resolution (logic moved unchanged out of beforeAllExecution).
+    // Parameters    : pHerdFromSheet  - HerdNumber column from TestData.xlsx
+    //                 pUnameFromSheet - Username column from TestData.xlsx
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 10-03-2026 | Updated: 15-09-2026 (extracted method)
+    // ***************************************************************************************************************************************************************************************
+    private static void bootstrapRuntimeHerdAndUser(String pHerdFromSheet, String pUnameFromSheet)
+    {
+        // Individual test case (TC_03_IND): individual herd + the herd owner's own login
+        if (isIndividualTestCase())
+        {
+            bootstrapIndividualHerdAndUser(pHerdFromSheet, pUnameFromSheet);
+            return;
+        }
+
+        String herdYear         = System.getProperty("herd.year",  "2026").trim();
+        String herdLimit        = System.getProperty("herd.limit", "25").trim();
+        String herdRetry        = System.getProperty("herd.retry", "3").trim();
+        String usernameOverride = System.getProperty("usernameOverride", "").trim();
+
+        if (!usernameOverride.isEmpty())
+        {
+            RUNTIME_USERNAME = usernameOverride;
+            RUNTIME_HERD     = pHerdFromSheet;
+            CommonFunctions.log.info("[BOOT] Using usernameOverride=" + RUNTIME_USERNAME + ", herd(sheet)=" + RUNTIME_HERD);
+            rerunIfBlacklisted();
+            return;
+        }
+
+        // Test Data Vault first (TC_00_DATA filled it); the DATA + INET lookup below is the fallback
+        if (takeFromVault())
+        {
+            rerunIfBlacklisted();
+            return;
+        }
+
+        final int maxAttempts = Integer.parseInt(herdRetry);
+        final int limit       = Integer.parseInt(herdLimit);
+        boolean   found       = false;
+
+        for (int attempt = 1; attempt <= maxAttempts && !found; attempt++)
+        {
+            database.DBRouter.runDB("DATA", agentHerdQueryLabel(), herdYear, String.valueOf(limit), "");
+            List<Map<String, Object>> rows = database.DBRouter.getRows();
+            if (rows == null || rows.isEmpty())
+            {
+                throw new RuntimeException("Runtime DB (DATA) returned no herds for year=" + herdYear + ", limit=" + limit);
+            }
+
+            List<String> candidates = new ArrayList<>();
+            for (Map<String, Object> r : rows)
+            {
+                String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
+                if (!h.isEmpty() && !candidates.contains(h)) candidates.add(h);
+            }
+            Collections.shuffle(candidates, new Random(System.nanoTime()));
+
+            CommonFunctions.log.info("[BOOT] Attempt " + attempt + "/" + maxAttempts + " - trying " + candidates.size()
+                    + " randomized candidate(s) from DATA (year=" + herdYear + ", limit=" + limit + ")");
+
+            int idx = 0;
+            for (String candidate : candidates)
+            {
+                idx++;
+                CommonFunctions.log.info("[BOOT] Candidate [" + idx + "/" + candidates.size() + "] : " + candidate);
+
+                database.DBRouter.runDB("INET", "Get Login Id for herd", candidate);
+                String candidateUser = database.DBRouter.getValue("USERNAME");
+
+                if (candidateUser != null && !candidateUser.isBlank())
+                {
+                    if (EXPIRED_AGENTS.contains(candidateUser.trim()))
+                    {
+                        CommonFunctions.log.warning("[BOOT] Agent " + candidateUser.trim()
+                                + " is in EXPIRED_AGENTS (SSO account expired) - skipping herd=" + candidate);
+                        continue;
+                    }
+
+                    RUNTIME_HERD     = candidate;
+                    RUNTIME_USERNAME = candidateUser.trim();
+                    CommonFunctions.log.info("[BOOT] SELECTED Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
+
+                    rerunIfBlacklisted();
+                    found = true;
+                    break;
+                }
+                else
+                {
+                    CommonFunctions.log.warning("[BOOT] INET: no USERNAME for herd=" + candidate + " - next candidate...");
+                }
+            }
+
+            if (!found)
+            {
+                CommonFunctions.log.warning("[BOOT] No mapped USERNAME found in attempt " + attempt
+                        + ". Re-running DATA query to get a fresh set of " + limit + " candidates...");
+            }
+        }
+
+        if (!found)
+        {
+            if (!pUnameFromSheet.isBlank())
+            {
+                RUNTIME_USERNAME = pUnameFromSheet;
+                RUNTIME_HERD     = (RUNTIME_HERD == null || RUNTIME_HERD.isBlank()) ? pHerdFromSheet : RUNTIME_HERD;
+                CommonFunctions.log.warning("[BOOT] Falling back to Username from sheet: " + RUNTIME_USERNAME + " | Herd=" + RUNTIME_HERD);
+                rerunIfBlacklisted();
+            }
+            else
+            {
+                throw new RuntimeException("Runtime DB (INET) returned no USERNAME after " + herdRetry
+                        + " attempt(s). Try -Dherd.limit=10 or set -DusernameOverride=... for this run.");
+            }
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : bootstrapIndividualHerdAndUser
+    // Description   : Individual version of bootstrapRuntimeHerdAndUser (TC_03_IND). Same rules as the agent version:
+    //                 -DusernameOverride wins, then the DB lookup, then the Username / HerdNumber columns of the sheet.
+    // Parameters    : pHerdFromSheet  - HerdNumber column from TestData.xlsx
+    //                 pUnameFromSheet - Username column from TestData.xlsx
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 25-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static void bootstrapIndividualHerdAndUser(String pHerdFromSheet, String pUnameFromSheet)
+    {
+        String usernameOverride = System.getProperty("usernameOverride", "").trim();
+        if (!usernameOverride.isEmpty())
+        {
+            RUNTIME_USERNAME = usernameOverride;
+            RUNTIME_HERD     = pHerdFromSheet;
+            CommonFunctions.log.info("[BOOT-IND] Using usernameOverride=" + RUNTIME_USERNAME + ", herd(sheet)=" + RUNTIME_HERD);
+            return;
+        }
+
+        // Test Data Vault first (TC_00_DATA filled it); the DATA + INET lookup is the fallback
+        if (takeFromVault())
+        {
+            return;
+        }
+
+        if (resolveIndividualHerdAndUser())
+        {
+            return;
+        }
+
+        if (!pUnameFromSheet.isBlank())
+        {
+            RUNTIME_USERNAME = pUnameFromSheet;
+            RUNTIME_HERD     = pHerdFromSheet;
+            CommonFunctions.log.warning("[BOOT-IND] Falling back to Username from sheet: " + RUNTIME_USERNAME + " | Herd=" + RUNTIME_HERD);
+            return;
+        }
+
+        throw new RuntimeException("[BOOT-IND] No individual herd with a login found. Check DATA \"List of not started individual herds "
+                + "with CISYF flag\" (herd.year) and INET \"Get Individual Login for herd\", or set -DusernameOverride=... for this run.");
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : resolveIndividualHerdAndUser
+    // Description   : Picks a random Not Started CISYF individual herd and its own login:
+    //                   DATA "List of not started individual herds with CISYF flag" (herd.year, herd.limit)
+    //                     -> shuffled, blacklisted herds and the current herd skipped
+    //                   INET "Get Individual Login for herd" for each candidate
+    //                     -> first login not in EXPIRED_AGENTS is used (a herd can have more than one login)
+    //                 The DATA query is re-run with a larger limit up to herd.retry times (default 3).
+    //                 Sets RUNTIME_HERD / RUNTIME_USERNAME and the TD:HerdNumber / TD:Username properties.
+    // Returns       : true when a herd + login was found
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 25-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static boolean resolveIndividualHerdAndUser()
+    {
+        String iYear     = System.getProperty("herd.year",  "2026").trim();
+        int    iLimit    = Integer.parseInt(System.getProperty("herd.limit", "25").trim());
+        int    iAttempts = Integer.parseInt(System.getProperty("herd.retry", "3").trim());
+        String iPrevious = RUNTIME_HERD == null ? "" : RUNTIME_HERD;
+
+        for (int iAttempt = 1; iAttempt <= iAttempts; iAttempt++)
+        {
+            int iRows = iLimit * iAttempt;
+            database.DBRouter.runDB("DATA", "List of not started individual herds with CISYF flag", iYear, String.valueOf(iRows));
+
+            List<String> iCandidates = new ArrayList<>();
+            for (Map<String, Object> r : database.DBRouter.getRows())
+            {
+                String h = Objects.toString(r.get("APP_HERD_NO"), "").trim();
+                if (!h.isEmpty() && !iCandidates.contains(h) && !h.equals(iPrevious) && !BLACKLISTED_HERDS.contains(h))
+                {
+                    iCandidates.add(h);
+                }
+            }
+            Collections.shuffle(iCandidates, new Random(System.nanoTime()));
+
+            CommonFunctions.log.info("[BOOT-IND] Attempt " + iAttempt + "/" + iAttempts + " - " + iCandidates.size()
+                    + " individual candidate(s) (year=" + iYear + ", limit=" + iRows + ")");
+
+            for (String iCandidate : iCandidates)
+            {
+                database.DBRouter.runDB("INET", "Get Individual Login for herd", iCandidate);
+
+                for (Map<String, Object> r : database.DBRouter.getRows())
+                {
+                    String iLogin = Objects.toString(r.get("LOGIN"), "").trim();
+                    if (iLogin.isEmpty()) continue;
+
+                    if (EXPIRED_AGENTS.contains(iLogin))
+                    {
+                        CommonFunctions.log.warning("[BOOT-IND] Login " + iLogin + " of herd " + iCandidate + " is expired - skipping.");
+                        continue;
+                    }
+
+                    RUNTIME_HERD     = iCandidate;
+                    RUNTIME_USERNAME = iLogin;
+                    System.setProperty("TD:HerdNumber", RUNTIME_HERD);
+                    System.setProperty("TD:Username",   RUNTIME_USERNAME);
+                    CommonFunctions.log.info("[BOOT-IND] SELECTED Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
+                    return true;
+                }
+
+                CommonFunctions.log.warning("[BOOT-IND] INET: no usable login for herd=" + iCandidate + " - next candidate...");
+            }
+        }
+        return false;
     }
 
     // =================================================================================================
-    // 4. SPOT CHECK
+    // BEFORE ALL - runs once before any scenario in the test run
     // =================================================================================================
-
-    // Checks a few AVAILABLE rows of every pool that was not just fetched; returns the pools that look stale
-    private static List<Need> spotCheck(Iterable<Need> pNeeds, List<Need> pJustFetched)
+    @BeforeAll
+    public static void beforeAllExecution()
     {
-        int iSample = ConfigManager.getInt("data.spot.check", 5);
-        List<Need> iStale = new ArrayList<>();
-        if (iSample <= 0) return iStale;
+        iTestCaseStartMs = System.currentTimeMillis();
 
-        for (Need iNeed : pNeeds)
+        try
         {
-            if (pJustFetched.contains(iNeed)) continue;
-            List<TestDataVault.Row> iRows = TestDataVault.available(iNeed.pool, iNeed.key);
-            if (iRows.isEmpty()) continue;
-            Collections.shuffle(iRows);
+            iTestCaseID  = System.getProperty("testcase",    "").trim();
+            iEnvironment = System.getProperty("environment", "").trim();
 
-            int iChecked = 0, iBad = 0;
-            for (TestDataVault.Row iRow : iRows.subList(0, Math.min(iSample, iRows.size())))
+            if (iTestCaseID.isEmpty())  { throw new RuntimeException("TestCase_ID system property missing."); }
+            if (iEnvironment.isEmpty()) { throw new RuntimeException("Environment system property missing."); }
+
+            iAccumulatedErrors.setLength(0);
+            iLastScreenshotPath = "";
+            iAnyScenarioFailed  = false;
+            iFirstFailedScenario = "";
+            iDocument           = null;
+            iDocPath            = "";
+
+            CommonFunctions.log.info("========== EXECUTION START : " + iTestCaseID + " ==========");
+            CommonFunctions.loadDescriptionCache();
+            CommonFunctions.clearStepLog();
+
+            iVaultHerd       = "";
+            RUNTIME_HERD     = null;
+            RUNTIME_USERNAME = null;
+
+            // TC_00_DATA: database only - no TestData.xlsx row, no browser, no Word report
+            if (isDataTestCase())
             {
-                String iProblem;
-                try { iProblem = checkRow(iRow); }
-                catch (Exception e) { CommonFunctions.log.warning(LOG + "Spot check of " + iRow.herd + " failed to run: " + e.getMessage()); continue; }
+                iUrl = ConfigManager.getOrDefault("app.url", "");
+                System.setProperty("TD:HerdNumber", "");
+                System.setProperty("TD:Username",   "");
+                iSetupMs = System.currentTimeMillis() - iTestCaseStartMs;
+                CommonFunctions.log.info("[BOOT] Data test case - no browser is opened. BeforeAll complete.");
+                return;
+            }
 
-                iChecked++;
-                if (!iProblem.isEmpty())
+            ExcelUtilities iTestDataExcel = new ExcelUtilities(iTestDataFilePath);
+            iTestDataExcel.loadCurrentTestDataRow(iTestDataSheetName, iTestCaseID);
+
+            int iConfigRow = iTestDataExcel.findRow(iConfigSheetName, "Env", iEnvironment);
+            if (iConfigRow == -1) { throw new RuntimeException("Environment not found in Config sheet : " + iEnvironment); }
+
+            iUrl = ConfigManager.getOrDefault("app.url", "");
+            if (iUrl.isEmpty())
+            {
+                iUrl = iTestDataExcel.getCellValue(iConfigSheetName, iConfigRow, "URL").trim();
+            }
+            else
+            {
+                CommonFunctions.log.info("[BOOT] URL overridden by app.url : " + iUrl);
+            }
+            if (iUrl.isEmpty()) { throw new RuntimeException("URL blank for environment : " + iEnvironment); }
+
+            String herdFromSheet  = "";
+            String unameFromSheet = "";
+            try { herdFromSheet  = ExcelUtilities.getCurrentTestDataValue("HerdNumber"); } catch (Exception ignored) {}
+            try { unameFromSheet = ExcelUtilities.getCurrentTestDataValue("Username");   } catch (Exception ignored) {}
+
+            RUNTIME_HERD     = null;
+            RUNTIME_USERNAME = null;
+
+            if (isDbBootstrapEnabled())
+            {
+                bootstrapRuntimeHerdAndUser(herdFromSheet, unameFromSheet);
+            }
+            else
+            {
+                RUNTIME_HERD     = herdFromSheet;
+                RUNTIME_USERNAME = unameFromSheet;
+                CommonFunctions.log.info("[BOOT] " + (isEntsTestCase() ? "ENTS test case (db.bootstrap.ents=false)"
+                        : isStaffTestCase() ? "Staff test case (db.bootstrap.staff=false)" : "db.bootstrap=false")
+                        + " - using sheet values | Herd=" + RUNTIME_HERD + " | Username=" + RUNTIME_USERNAME);
+            }
+
+            System.setProperty("TD:HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
+            System.setProperty("TD:Username",   RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
+
+            if (isDbBootstrapEnabled() && ConfigManager.getBool("testdata.writeback.enabled", true))
+            {
+                try
                 {
-                    iBad++;
-                    TestDataVault.markBad(iRow.herd, "spot-check: " + iProblem);
+                    int dataRowIdx = iTestDataExcel.findRow(iTestDataSheetName, "TestCase_ID", iTestCaseID);
+                    if (dataRowIdx != -1)
+                    {
+                        iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "HerdNumber", RUNTIME_HERD == null ? "" : RUNTIME_HERD);
+                        iTestDataExcel.setCellValue(iTestDataSheetName, dataRowIdx, "Username", RUNTIME_USERNAME == null ? "" : RUNTIME_USERNAME);
+                        CommonFunctions.log.info("[BOOT->Excel] Data updated: HerdNumber=" + RUNTIME_HERD + ", Username=" + RUNTIME_USERNAME);
+                    }
+                    else
+                    {
+                        CommonFunctions.log.warning("[BOOT->Excel] Row not found for TestCase_ID=" + iTestCaseID + " (skipped write-back)");
+                    }
+                }
+                catch (Exception e)
+                {
+                    CommonFunctions.log.warning("[BOOT->Excel] Persist failed: " + e.getMessage());
                 }
             }
-            CommonFunctions.log.info(LOG + "Spot check " + iNeed.id() + ": " + iBad + " bad of " + iChecked + " checked");
-            if (iChecked > 0 && iBad * 2 > iChecked) iStale.add(iNeed);
+
+            String iBrowserType = System.getProperty("browser", iDefaultBrowser).trim().toUpperCase();
+            CommonFunctions.launchBrowser(iBrowserType, iUrl);
+
+            Object[] iReportObjects = CommonFunctions.startWordReport(iTestCaseID);
+            iDocument = (XWPFDocument) iReportObjects[0];
+            iDocPath  = String.valueOf(iReportObjects[1]);
+
+            iSetupMs = System.currentTimeMillis() - iTestCaseStartMs;
+            CommonFunctions.log.info("BeforeAll complete | URL=" + iUrl + " | Report=" + iDocPath
+                    + " | Setup took " + (iSetupMs / 1000) + " s (DB bootstrap + browser cleanup + browser start)");
         }
-        return iStale;
+        catch (Exception iException)
+        {
+            throw new RuntimeException("BeforeAll failed for [" + iTestCaseID + "] : " + iException.getMessage(), iException);
+        }
     }
 
-    // "" when the row still looks usable, otherwise what is wrong
-    private static String checkRow(TestDataVault.Row pRow)
+    // ***************************************************************************************************************************************************************************************
+    // @Before("@preliminary") - unchanged logic
+    // ***************************************************************************************************************************************************************************************
+    @Before("@preliminary")
+    public void resolveRuntimePreliminaryHerds(Scenario pScenario)
     {
-        switch (pRow.pool)
+        final int    MAX_ATTEMPTS = 100;
+        final String YEAR         = System.getProperty("herd.year", "2026").trim();
+
+        CommonFunctions.log.info("[PRELIM-HOOK] Resolving preliminary herds for: " + pScenario.getName());
+
+        boolean iAllResolved = false;
+
+        for (int iOffset = 0; iOffset < MAX_ATTEMPTS; iOffset++)
         {
-            case TestDataVault.POOL_ENTS_AGENT:
-            case TestDataVault.POOL_ENTS_NO_ENTS:
-                return DBRouter.query("ENTS", "ENTS herd has current agent link", pRow.herd, pRow.key).isEmpty()
-                        ? "agent link to " + pRow.key + " has ended" : "";
-            case TestDataVault.POOL_BISS_NOT_STARTED:
+            CommonFunctions.log.info("[PRELIM-HOOK] Attempt " + (iOffset + 1) + "/" + MAX_ATTEMPTS + " - offset=" + iOffset);
+
+            database.DBRouter.runDB("DATA", "Preliminary checks herds", YEAR, String.valueOf(iOffset));
+
+            List<Map<String, Object>> iRows = database.DBRouter.getRows();
+            if (iRows == null || iRows.isEmpty())
             {
-                String iStarted = applicationStarted(pRow);
-                if (!iStarted.isEmpty()) return iStarted;
-                for (Map<String, Object> r : DBRouter.query("INET", "Get Login Id for herd", pRow.herd))
-                {
-                    if (TestDataVault.text(r, "USERNAME").equalsIgnoreCase(pRow.login)) return "";
-                }
-                return "INET no longer maps the herd to " + pRow.login;
+                CommonFunctions.log.warning("[PRELIM-HOOK] No rows from DB at offset=" + iOffset + ". Stopping.");
+                break;
             }
-            case TestDataVault.POOL_BISS_IND_CISYF:
+
+            String iOverclaimHerd    = null; String iOverclaimUser    = null;
+            String iDualClaimHerd    = null; String iDualClaimUser    = null;
+            String iAgriActivityHerd = null; String iAgriActivityUser = null;
+
+            for (Map<String, Object> iRow : iRows)
             {
-                String iStarted = applicationStarted(pRow);
-                if (!iStarted.isEmpty()) return iStarted;
-                for (Map<String, Object> r : DBRouter.query("INET", "Get Individual Login for herd", pRow.herd))
+                String iLvc  = Objects.toString(iRow.get("LVC_DESC"),    "").trim();
+                String iHerd = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
+                if (iHerd.isEmpty()) continue;
+
+                database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
+                String iUsername = database.DBRouter.getValue("USERNAME");
+
+                if (iUsername == null || iUsername.isBlank())
                 {
-                    if (TestDataVault.text(r, "LOGIN").equalsIgnoreCase(pRow.login)) return "";
+                    CommonFunctions.log.warning("[PRELIM-HOOK] No INET agent for " + iLvc + " herd=" + iHerd + " - retrying next offset.");
+                    continue;
                 }
-                return "INET no longer maps the herd to " + pRow.login;
+
+                iUsername = iUsername.trim();
+                CommonFunctions.log.info("[PRELIM-HOOK] DB+INET resolved: " + iLvc + " -> " + iHerd + " / " + iUsername);
+
+                switch (iLvc)
+                {
+                    case "Overclaim":
+                        iOverclaimHerd    = iHerd; iOverclaimUser    = iUsername; break;
+                    case "Dual claim":
+                        iDualClaimHerd    = iHerd; iDualClaimUser    = iUsername; break;
+                    case "Agricultural Activity":
+                        iAgriActivityHerd = iHerd; iAgriActivityUser = iUsername; break;
+                    default:
+                        break;
+                }
             }
-            case TestDataVault.POOL_ENTS_YOUNG_FARMER:
+
+            if (iOverclaimHerd != null && iDualClaimHerd != null && iAgriActivityHerd != null)
             {
-                for (Map<String, Object> r : DBRouter.query("ENTS", "ENTS herd has NRCISYF application", pRow.herd))
+                OVERCLAIM_HERD     = iOverclaimHerd;    OVERCLAIM_USERNAME     = iOverclaimUser;
+                DUAL_CLAIM_HERD    = iDualClaimHerd;    DUAL_CLAIM_USERNAME    = iDualClaimUser;
+                AGRI_ACTIVITY_HERD = iAgriActivityHerd; AGRI_ACTIVITY_USERNAME = iAgriActivityUser;
+
+                CommonFunctions.log.info("[PRELIM-HOOK] All 3 resolved:");
+                CommonFunctions.log.info("[PRELIM-HOOK]  Overclaim     -> " + OVERCLAIM_HERD + " / " + OVERCLAIM_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK]  Dual claim    -> " + DUAL_CLAIM_HERD + " / " + DUAL_CLAIM_USERNAME);
+                CommonFunctions.log.info("[PRELIM-HOOK]  Agri Activity -> " + AGRI_ACTIVITY_HERD + " / " + AGRI_ACTIVITY_USERNAME);
+
+                if (pScenario.getSourceTagNames().contains("@TC_18") || pScenario.getSourceTagNames().contains("@TC_15"))
                 {
-                    String iCount = TestDataVault.text(r, "CNT");
-                    if (!iCount.isEmpty() && !"0".equals(iCount)) return "has an NR/CISYF application now";
+                    RUNTIME_USERNAME = OVERCLAIM_USERNAME;
                 }
-                return DBRouter.query("ENTS", "ENTS herd has current agent link", pRow.herd, pRow.login).isEmpty()
-                        ? "agent link to " + pRow.login + " has ended" : "";
+                else if (pScenario.getSourceTagNames().contains("@TC_19") || pScenario.getSourceTagNames().contains("@TC_16"))
+                {
+                    RUNTIME_USERNAME = DUAL_CLAIM_USERNAME;
+                }
+                else if (pScenario.getSourceTagNames().contains("@TC_20") || pScenario.getSourceTagNames().contains("@TC_17"))
+                {
+                    RUNTIME_USERNAME = AGRI_ACTIVITY_USERNAME;
+                }
+
+                CommonFunctions.log.info("[PRELIM-HOOK] RUNTIME_USERNAME synced -> " + RUNTIME_USERNAME + " | Background login will use this agent.");
+
+                iAllResolved = true;
+                break;
             }
-            default:
-                return "";   // individuals: no cheap check defined
+
+            CommonFunctions.log.warning("[PRELIM-HOOK] Not all 3 resolved at offset=" + iOffset
+                    + " - Overclaim=" + (iOverclaimHerd != null ? "Y" : "N")
+                    + " DualClaim="   + (iDualClaimHerd != null ? "Y" : "N")
+                    + " AgriAct="     + (iAgriActivityHerd != null ? "Y" : "N"));
+        }
+
+        if (!iAllResolved)
+        {
+            throw new RuntimeException("[PRELIM-HOOK] Could not resolve all 3 preliminary check herds after " + MAX_ATTEMPTS + " attempts for year=" + YEAR);
         }
     }
 
-    // BISS pools (05-10-2026): "" when the herd still has no Draft / Submitted / Helpdesk / Draft Dept application in
-    // the row's scheme year (the vault key of a BISS row is the year), otherwise what is wrong
-    private static String applicationStarted(TestDataVault.Row pRow)
+    // ***************************************************************************************************************************************************************************************
+    // @Before("@tc13")
+    // Description   : Picks the NR/CISYF herd and its agent for the scenario (Hooks.CISYF_HERD / CISYF_USERNAME, also
+    //                 RUNTIME_HERD / RUNTIME_USERNAME for the Background login).
+    //                 02-10-2026: first utilities.NrcisyfTestData - vault pool ENTS_YOUNG_FARMER, then the live
+    //                 "ENTS Young Farmer herds" query (herd + agent in one query, ENTS database). Only when both have
+    //                 nothing, the Selenium lookup below runs unchanged (BISS_DATA herds + one BISS_INET login query per
+    //                 candidate, up to 50 attempts). nrcisyf.herd.source=legacy goes straight to the Selenium lookup.
+    // ***************************************************************************************************************************************************************************************
+    @Before("@tc13")
+    public void resolveRuntimeCISYFHerd(Scenario pScenario)
     {
-        for (Map<String, Object> r : DBRouter.query("DATA", "BISS herd application started", pRow.herd, pRow.key))
+        final String YEAR      = System.getProperty("herd.year", "2026").trim();
+        final int    MAX_TRIES = 50;
+
+        String[] iYoungFarmer = utilities.NrcisyfTestData.nextHerd("", BLACKLISTED_HERDS, EXPIRED_AGENTS, "@tc13 hook");
+        if (iYoungFarmer != null)
         {
-            String iCount = TestDataVault.text(r, "CNT");
-            if (!iCount.isEmpty() && !"0".equals(iCount)) return "application started in " + pRow.key;
+            CISYF_HERD       = iYoungFarmer[0];
+            CISYF_USERNAME   = iYoungFarmer[1];
+            RUNTIME_HERD     = iYoungFarmer[0];
+            RUNTIME_USERNAME = iYoungFarmer[1];
+            CommonFunctions.log.info("[TC13-HOOK] Young Farmer herd resolved: Herd=" + CISYF_HERD + " | Username=" + CISYF_USERNAME);
+            return;
         }
-        return "";
+
+        CommonFunctions.log.info("[TC13-HOOK] Resolving random CISYF J-prefix herd for: " + pScenario.getName());
+
+        boolean iFound = false;
+
+        for (int iAttempt = 1; iAttempt <= MAX_TRIES && !iFound; iAttempt++)
+        {
+            int iLimit = 50 + ((iAttempt - 1) * 25);
+
+            CommonFunctions.log.info("[TC13-HOOK] Attempt " + iAttempt + "/" + MAX_TRIES + " - querying BISS_DATA (year=" + YEAR + ", limit=" + iLimit + ")");
+
+            database.DBRouter.runDB("DATA", "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF", YEAR, String.valueOf(iLimit));
+
+            List<Map<String, Object>> iRows = database.DBRouter.getRows();
+
+            if (iRows == null || iRows.isEmpty())
+            {
+                CommonFunctions.log.warning("[TC13-HOOK] BISS_DATA returned no CISYF herds at limit=" + iLimit + ". Retrying...");
+                continue;
+            }
+
+            List<String> iCandidates = new ArrayList<>();
+            for (Map<String, Object> iRow : iRows)
+            {
+                String iHerd = Objects.toString(iRow.get("APP_HERD_NO"), "").trim();
+                if (!iHerd.isEmpty()) iCandidates.add(iHerd);
+            }
+            Collections.shuffle(iCandidates, new Random(System.nanoTime()));
+
+            int iIdx = 0;
+            for (String iCandidate : iCandidates)
+            {
+                iIdx++;
+
+                if (BLACKLISTED_HERDS.contains(iCandidate))
+                {
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " is blacklisted - skipping.");
+                    continue;
+                }
+
+                database.DBRouter.runDB("INET", "Get Login Id for herd", iCandidate);
+                String iUsername = database.DBRouter.getValue("USERNAME");
+
+                if (iUsername == null || iUsername.isBlank())
+                {
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " - no INET agent found. Skipping.");
+                    continue;
+                }
+
+                iUsername = iUsername.trim();
+
+                if (EXPIRED_AGENTS.contains(iUsername))
+                {
+                    CommonFunctions.log.warning("[TC13-HOOK] Candidate [" + iIdx + "] " + iCandidate + " - agent " + iUsername + " is in EXPIRED_AGENTS. Skipping.");
+                    continue;
+                }
+
+                CISYF_HERD       = iCandidate;
+                CISYF_USERNAME   = iUsername;
+                RUNTIME_HERD     = iCandidate;
+                RUNTIME_USERNAME = iUsername;
+                iFound = true;
+
+                CommonFunctions.log.info("[TC13-HOOK] CISYF herd resolved: Herd=" + CISYF_HERD + " | Username=" + CISYF_USERNAME);
+                break;
+            }
+
+            if (!iFound)
+            {
+                CommonFunctions.log.warning("[TC13-HOOK] No valid candidate in attempt " + iAttempt + " - retrying with larger limit.");
+            }
+        }
+
+        if (!iFound)
+        {
+            throw new RuntimeException("[TC13-HOOK] Could not resolve a CISYF J-prefix herd after " + MAX_TRIES + " attempts for year=" + YEAR
+                    + ". Verify the query returns rows in BISS_DATA for this environment.");
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : skipRestOfTestCaseAfterFailure
+    // Description   : Fail-fast. Runs first, before every other @Before hook (order 0).
+    //                 When an earlier scenario of this test case has failed, this scenario is SKIPPED: no DB lookup,
+    //                 no steps. Cucumber then finishes the feature, AfterAll closes the browser and writes the report,
+    //                 and TestRunner marks the row FAIL and starts the next test case in ExecutionControl.xlsx.
+    //                 Inside one scenario nothing extra is needed: Cucumber already skips every step after a failed step.
+    //                 execution.fail.fast=false switches this off (all scenarios run, as before).
+    // Parameters    : pScenario (Scenario) - the scenario about to start
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 17-09-2026
+    // ***************************************************************************************************************************************************************************************
+    @Before(order = 0)
+    public void skipRestOfTestCaseAfterFailure(Scenario pScenario)
+    {
+        iSkippedByFailFast = false;
+
+        if (iAnyScenarioFailed && ConfigManager.getBool("execution.fail.fast", true))
+        {
+            iSkippedByFailFast = true;
+            CommonFunctions.log.warning("---------- Scenario SKIPPED (fail-fast) : " + pScenario.getName()
+                    + " | earlier failure in [" + iFirstFailedScenario + "] ----------");
+
+            // Cucumber reports a TestAbortedException as SKIPPED (not as another failure)
+            throw new org.opentest4j.TestAbortedException("Skipped: scenario [" + iFirstFailedScenario
+                    + "] of " + iTestCaseID + " already failed (execution.fail.fast=true)");
+        }
+    }
+
+    // =================================================================================================
+    // BEFORE - runs before every scenario
+    // =================================================================================================
+    @Before
+    public void beforeScenarioExecution(Scenario pScenario)
+    {
+        SoftAssertManager.reset();
+        RetryAnalyser.clearRetryState();
+        utilities.EntsTestData.resetScenario();
+        iScenarioStartTime = System.currentTimeMillis();
+        CommonFunctions.log.info("---------- Scenario START : " + pScenario.getName() + " ----------");
+
+        String iScenarioTags = String.join(" ", pScenario.getSourceTagNames());
+        ReportManager.beginTestCase(iTestCaseID, pScenario.getName(), iScenarioTags);
+    }
+
+    // =================================================================================================
+    // AFTER - runs after every scenario
+    // =================================================================================================
+    @After
+    public void afterScenarioExecution(Scenario pScenario)
+    {
+        if (iSkippedByFailFast)
+        {
+            // Nothing ran in this scenario - no soft assertions, screenshot or divider to write
+            iAccumulatedErrors.append("Scenario [").append(pScenario.getName()).append("] SKIPPED (fail-fast)\n");
+            return;
+        }
+
+        boolean iSoftAssertFailed = false;
+        try
+        {
+            SoftAssertManager.assertAll();
+        }
+        catch (AssertionError iSoftFailure)
+        {
+            // Soft assertion failures fail the scenario, but Cucumber only records that after this hook ends
+            iSoftAssertFailed = true;
+            throw iSoftFailure;
+        }
+        finally
+        {
+            boolean iScenarioFailed   = pScenario.isFailed() || iSoftAssertFailed;
+            long    iScenarioDuration = System.currentTimeMillis() - iScenarioStartTime;
+            iScenarioMs += iScenarioDuration;
+            ScreenshotManager.appendScenarioDivider(iDocument, pScenario.getName(), !iScenarioFailed, iScenarioDuration);
+
+            try
+            {
+                if (iScenarioFailed)
+                {
+                    if (!iAnyScenarioFailed)
+                    {
+                        iFirstFailedScenario = pScenario.getName();
+                    }
+                    iAnyScenarioFailed = true;
+                    CommonFunctions.log.severe("---------- Scenario FAILED : " + pScenario.getName() + " ----------");
+
+                    iAccumulatedErrors.append("Scenario [").append(pScenario.getName())
+                            .append("] FAILED. Status=").append(iSoftAssertFailed ? "SOFT_ASSERTION" : pScenario.getStatus().name()).append("\n");
+
+                    byte[] iPng = ScreenshotManager.captureBytes(CommonFunctions.getPage());
+                    if (iPng != null)
+                    {
+                        pScenario.attach(iPng, "image/png", "Failure - " + pScenario.getName());
+                    }
+
+                    try
+                    {
+                        if (iDocument != null && iDocPath != null && !iDocPath.isEmpty())
+                        {
+                            iLastScreenshotPath = CommonFunctions.addScreenshotToReport(iDocument, iDocPath, iTestCaseID);
+                        }
+                        else
+                        {
+                            String iSafeName = iTestCaseID + "_" + pScenario.getName().replaceAll("[^a-zA-Z0-9]", "_");
+                            iLastScreenshotPath = CommonFunctions.takeScreenshot(iSafeName);
+                        }
+                    }
+                    catch (Exception iShotException)
+                    {
+                        CommonFunctions.log.severe("Screenshot failed : " + iShotException.getMessage());
+                    }
+                }
+                else
+                {
+                    CommonFunctions.log.info("---------- Scenario PASSED : " + pScenario.getName() + " ----------");
+                }
+            }
+            catch (Exception iException)
+            {
+                CommonFunctions.log.severe("After hook error : " + iException.getMessage());
+            }
+        }
+    }
+
+    // =================================================================================================
+    // AFTER ALL - runs once after all scenarios complete
+    // =================================================================================================
+    @AfterAll
+    public static void afterAllExecution()
+    {
+        // Vault: the BISS herd of this test case is finished with - USED when it passed, BAD (with the reason) when not
+        try
+        {
+            if (!iVaultHerd.isEmpty())
+            {
+                if (iAnyScenarioFailed)
+                {
+                    utilities.TestDataVault.markBad(iVaultHerd, "test case " + iTestCaseID + " failed in [" + iFirstFailedScenario + "]");
+                }
+                else
+                {
+                    utilities.TestDataVault.markUsed(iVaultHerd);
+                }
+                iVaultHerd = "";
+            }
+
+            // NR/CISYF (02-10-2026): Young Farmer herds picked but never submitted go back to AVAILABLE after a pass
+            if (!iAnyScenarioFailed) utilities.NrcisyfTestData.releaseUntouched();
+        }
+        catch (Exception iException)
+        {
+            CommonFunctions.log.warning("[VAULT] Could not update the vault row : " + iException.getMessage());
+        }
+
+        try
+        {
+            if (iAccumulatedErrors.length() > 0)
+            {
+                System.setProperty("lastFailureReason." + iTestCaseID, iAccumulatedErrors.toString().trim());
+            }
+            if (!iLastScreenshotPath.isEmpty())
+            {
+                System.setProperty("lastScreenshotPath." + iTestCaseID, iLastScreenshotPath);
+            }
+        }
+        catch (Exception iException)
+        {
+            CommonFunctions.log.severe("Failed to publish failure properties : " + iException.getMessage());
+        }
+
+        try
+        {
+            if (iDocument != null && iDocPath != null && !iDocPath.isEmpty())
+            {
+                // Status = Cucumber result, the same PASS/FAIL the console and ExecutionControl.xlsx show
+                CommonFunctions.finalizeWordReport(iDocument, iDocPath, iAnyScenarioFailed ? "FAIL" : "PASS");
+            }
+        }
+        catch (Exception iException)
+        {
+            CommonFunctions.log.severe("Word report finalization failed : " + iException.getMessage());
+        }
+
+        try
+        {
+            String iTrace = CommonFunctions.closeBrowser(iAnyScenarioFailed, iTestCaseID);
+            if (!iTrace.isEmpty())
+            {
+                System.setProperty("lastTracePath." + iTestCaseID, iTrace);
+            }
+        }
+        catch (Exception iException)
+        {
+            CommonFunctions.log.severe("Browser close failed : " + iException.getMessage());
+        }
+
+        long iTotalMs    = System.currentTimeMillis() - iTestCaseStartMs;
+        long iTeardownMs = Math.max(0L, iTotalMs - iSetupMs - iScenarioMs);
+
+        // Where the time went. Setup = DB herd lookup + browser cleanup + Chrome start + Word report.
+        // Scenarios = the steps themselves. Teardown = report finalize + trace + closing Chrome.
+        CommonFunctions.log.info("[TIMING] " + iTestCaseID
+                + " | total=" + (iTotalMs / 1000) + "s"
+                + " | setup=" + (iSetupMs / 1000) + "s"
+                + " | scenarios=" + (iScenarioMs / 1000) + "s"
+                + " | teardown=" + (iTeardownMs / 1000) + "s");
+
+        iSetupMs    = 0L;
+        iScenarioMs = 0L;
+
+        CommonFunctions.log.info("========== EXECUTION END : " + iTestCaseID + " ==========");
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : captureStep
+    // Description   : On-demand screenshot method for step definitions (unchanged call surface).
+    // Parameters    : pStepLabel (String) - describes what is being captured, shown as caption
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 26-03-2026
+    // ***************************************************************************************************************************************************************************************
+    public static void captureStep(String pStepLabel)
+    {
+        CommonFunctions.captureStepScreenshot(iDocument, iDocPath, pStepLabel);
     }
 }
