@@ -1,1245 +1,769 @@
 // ===================================================================================================================================
-// File          : TC_18.java
-// Package       : stepdefinitions
-// Description   : Step definitions shared across TC_18 (Overclaim), TC_19 (Dual Claim)
-//                 and TC_20 (No Agricultural Activity) Preliminary Checks automation.
+// File          : EntsSession.java
+// Package       : stepdefinitions.ENTS
+// Description   : Shared login / logout / navigation helpers for the ENTS step definitions (Playwright edition).
 //
-//                 Herd numbers and agent usernames are resolved at runtime from:
-//                   BISS_DATA - vwbs_land_validation (LVS_DESC = 'Pending')
-//                   BISS_INET - tdcr_user_info / tdco_customer_asscs
-//                 via the @Before("@preliminary") hook in Hooks.java.
+//                 In the Selenium framework TC_01_ENTS, TC_03_ENTS, TC_07_ENTS and TC_08_ENTS each carried their own copy
+//                 of the Keycloak login (PIN slots, TOTP, new-user Next screens, Terms & Conditions) and of performLogout().
+//                 The copies had drifted apart. This class holds one copy; every ENTS step calls it, and the steps
+//                 themselves keep the same Gherkin text as before.
 //
-//                 Retry flow for theAgentOpensAFarmerDashboardForPreliminaryCheckHerd:
+//                 Not a step definition class - no Cucumber annotations. Cucumber scans it as glue and ignores it.
 //
-//                   For each attempt (up to MAX_HERD_RETRIES):
-//                     1. Search current herd on My Clients
-//                     2. If 0 rows returned:
-//                          -> logout -> DB re-query at next offset -> INET validate
-//                          -> re-login if agent changed -> update Hooks -> retry
-//                     3. If row found but marked "Herd expired":
-//                          -> same recovery path
-//                     4. Row found and not expired -> click through to farmer dashboard
-//                     5. Navigate to Preliminary Checks tab
-//                     6. If tab shows no records:
-//                          -> same recovery path
-//                     7. Tab has records -> iFound = true -> break -> proceed
+//                 24-09-2026: selectOpenTransfereeMatch added. The Transferee Search dialog can return the same herd
+//                 twice ("2 matches found. Please select one:"); the row with no End Date is selected.
 //
-//                 All three failure modes go through the identical recovery path - same as TC_03 for consistency.
-//                 All locators externalised to ObjectRepository.properties.
-//
-//                 Playwright migration notes (behaviour is unchanged):
-//                   - getDriver().findElements(By.xpath(x))      -> countOf(x) / rowsOf(x): an immediate count or a
-//                     snapshot list, exactly like Selenium findElements (no waiting).
-//                   - WebElement.getAttribute(...)               -> UiHelpers.getAttribute(locator, name)
-//                   - WebElement.getText()                       -> Locator.innerText()
-//                   - input.getAttribute("value")                -> UiHelpers.inputValue(locator)
-//                   - Row-scoped ".//..." XPaths                 -> row.locator("xpath=.//...") - Playwright resolves a
-//                     leading dot against the row, so the ObjectRepository values are used unchanged.
-//                   - JavascriptExecutor clear + sendKeys + input/change events -> UiHelpers.setValueByJs(locator, value),
-//                     which sets the value and fires input, change and blur so Angular reactive forms pick it up.
-//                   - JavaScript click on a mat-select           -> UiHelpers.jsClick(locator)
-//                   - Thread.sleep(ms)                           -> pause(ms) (page.waitForTimeout, same duration)
-//                   - WebDriverWait + visibilityOfElementLocated -> UiHelpers.isVisible(locator, seconds)
-//                   - getDriver().navigate().to(url)             -> UiHelpers.navigateTo(url)
-//                   - PIN slots: clear() + sendKeys("1")         -> fill("") + pressSequentially("1"), disabled slots skipped
+//                 30-09-2026 (TC_05_ENTS / TC_06_ENTS, individual logins):
+//                   - loginAs fills the "mobile number" form when Keycloak shows it after the PIN (same form and value
+//                     as TC_03.enterMobileNumberIfAsked: login.test.mobile, default 1111111111).
+//                   - logout skips the Exit / Logout clicks when the Exit link is not on screen (already logged out, e.g.
+//                     right after "the transfer should be submitted successfully"), instead of waiting for them to fail.
+//                   - closePersonalDetailsIfShown closes the personal details dialog an individual can get after login.
+//                   - acceptWithTransferKey holds the transferee acceptance screens (ETF button or View, key, notes,
+//                     Submit to DAFM, T&C, confirm) that TC_05, TC_07 and TC_08 all share.
+//                 02-10-2026: searchTransferee fills and runs the Transferee Search dialog and returns false on
+//                 "No transferee matches were found" (the DB name of a herd managed by another agent can differ from the
+//                 portal name). The create steps then replace the transferee and search again in the same dialog.
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 17-04-2026 | Updated : 20-04-2026
-// Updated       : 18-09-2026 - Migrated to Playwright (no Selenium API left; same steps, same locators, same flow)
-// Updated       : 18-09-2026 - The My Clients breadcrumb is probed briefly instead of waiting the full action timeout
-// Updated       : 06-10-2026 - performLogin: new-user Next screens after the password and after the PIN Login click are
-//                              clicked through (commonFunctions.LoginScreens.skipNewUserScreens)
-// Updated       : 08-10-2026 - performLogin: OTP-only branch uses commonFunctions.LoginScreens.enterOneTimeCode
+// Date Created  : 22-09-2026 | Updated: 24-09-2026 (transferee multi-match), 30-09-2026 (individual logins), 02-10-2026 (no match)
+//                                       06-10-2026 (loginAs: new-user Next screens straight after the password Login click)
+//                                       08-10-2026 (loginAs: LoginScreens.skipNewUserScreens after the PIN, enterOneTimeCode)
+//                                       08-10-2026 (verifyTransfereeHolder; acceptWithTransferKey key button wait)
 // ===================================================================================================================================
 
-package stepdefinitions;
+package stepdefinitions.ENTS;
 
 import com.microsoft.playwright.Locator;
 import commonFunctions.CommonFunctions;
 import commonFunctions.UiHelpers;
-import io.cucumber.datatable.DataTable;
-import io.cucumber.java.en.And;
-import io.cucumber.java.en.Then;
-import io.cucumber.java.en.When;
-import org.junit.jupiter.api.Assertions;
+import stepdefinitions.Hooks;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
 import utilities.ObjReader;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.Locale;
+import java.util.Set;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static commonFunctions.CommonFunctions.iAction;
 
-public class TC_18
+final class EntsSession
 {
-    private static final Logger log = Logger.getLogger(TC_18.class.getName());
+    private static final Logger log = Logger.getLogger(EntsSession.class.getName());
 
-    // How long an optional element is looked for before it is treated as absent (probe.timeout.seconds, default 3)
-    private static final int PROBE_SECONDS = utilities.ConfigManager.getInt("probe.timeout.seconds", 3);
+    // How long an "if present" check waits before deciding the element is not there
+    static final int PROBE_SECONDS = ConfigManager.getInt("probe.timeout.seconds", 3);
 
+    // XPath of the Transfers tab on the My Clients page (same union the Selenium steps used)
+    static final String TRANSFERS_TAB_XPATH =
+            "//div[contains(@class,'mat-tab-label')]//span[normalize-space()='Transfers'] | //a[normalize-space()='Transfers']";
 
-    // -- "Herd expired" span inside the expired column cell of a data row ------------------------------------------
-    private static final String EXPIRED_SPAN_XPATH =
-            "//tbody[contains(@class,'mdc-data-table__content')]"
-                    + "//tr[contains(@class,'client-list-element-row')]"
-                    + "//td[contains(@class,'cdk-column-expired')]"
-                    + "//span[normalize-space()='Herd expired']";
-
-    // -- Preliminary Checks tab in the farmer dashboard ------------------------------------------------------------
-    private static final String PRELIM_TAB_XPATH = "//span[@class='mdc-tab__text-label'][normalize-space()='Preliminary Checks']";
-
-    // -- Data rows inside the Preliminary Checks table -------------------------------------------------------------
-    private static final String PRELIM_TABLE_ROW_XPATH = ".//td[contains(@class,'cdk-column-preliminaryChecks')][contains(normalize-space(),'Response required')]";
-
-    // -- Empty state message on the Preliminary Checks tab ---------------------------------------------------------
-    private static final String PRELIM_NO_RECORDS_XPATH = "//*[contains(normalize-space(),'no records to display')]";
-
-    // -- Breadcrumb / left-menu back to My Clients -----------------------------------------------------------------
-    private static final String MY_CLIENTS_BACK_XPATH = "//breadcrumb//a[contains(.,'My Clients')] | //a[normalize-space()='My Clients']";
+    private EntsSession() { }
 
 
-// ===================================================================================================================================
-//  FARMER DASHBOARD - PRELIMINARY CHECK HERD
-// ===================================================================================================================================
+    // ===================================================================================================================================
+    //  SMALL PLAYWRIGHT HELPERS (same meaning as in TC_03.java)
+    // ===================================================================================================================================
+
+    // Locator for a raw XPath
+    static Locator xp(String pXpath)
+    {
+        return UiHelpers.byXpath(pXpath);
+    }
+
+    // True when the first match becomes visible within pSeconds - never throws
+    static boolean isVisible(String pXpath, int pSeconds)
+    {
+        return UiHelpers.isVisible(xp(pXpath).first(), pSeconds);
+    }
+
+    // Immediate count, no waiting - same as findElements(...).size()
+    static int countOf(String pXpath)
+    {
+        return xp(pXpath).count();
+    }
+
+    // Replacement for Thread.sleep
+    static void pause(long pMilliseconds)
+    {
+        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
+    }
+
+
+    // ===================================================================================================================================
+    //  LOGIN
+    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent opens a farmer dashboard for preliminary check herd {string}
-    // Description   : Resolves herd + username from Hooks, searches My Clients, validates the row
-    //                 is not expired, clicks through to the dashboard, and confirms the Preliminary
-    //                 Checks tab has records.
+    // Function Name : loginAs
+    // Description   : Full Keycloak login for any ENTS user (agent, individual or ETF partner).
+    //                 Same sequence as the Selenium ENTS login steps:
+    //                   username -> Continue -> password (TD:Password) -> Login
+    //                   PIN screen:  PIN slots 1-7 -> PIN Login -> new-user Next screens -> T&C -> TOTP 111111 -> T&C
+    //                   otherwise :  OTP 111111 -> Login
+    //                 If the username box is not on screen (for example after an earlier section left the portal open),
+    //                 the base URL is opened first.
+    //                 Records the user in EntsTestData so a same-agent transfer knows whose herds to use.
     //
-    //                 All three failure modes trigger the SAME recovery path:
-    //                   Failure 1 - 0 rows in My Clients
-    //                   Failure 2 - Row found but "Herd expired"
-    //                   Failure 3 - Preliminary Checks tab shows no records
+    //                 Change from Selenium: "Account Expired" now fails the step with the user name in the message.
+    //                 The Selenium copies called Hooks.markAgentExpired() for the BISS runtime agent (a different user)
+    //                 and then logged in again as the same expired ENTS user, which could never succeed.
     //
-    //                 Recovery path (mirrors TC_03 exactly):
-    //                   -> logout current session
-    //                   -> re-query BISS_DATA ("Preliminary checks herds") at offset = iAttempt+1
-    //                   -> INET-validate the returned herd for this check type
-    //                   -> login as the resolved agent -> navigate to My Clients
-    //                   -> update Hooks fields -> loop
-    //
-    //                 pCheckType values: OVERCLAIM | DUAL_CLAIM | AGRI_ACTIVITY
-    // Parameters    : pCheckType - identifies which preliminary check type to open
+    // Parameters    : pUsername  (String) - login name, e.g. "aga6077", "agr15512", "PADDYMORGAN"
+    //                 pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 20-04-2026 | Updated: 18-09-2026 (Playwright - countOf replaces findElements)
+    // Date Created  : 22-09-2026 (merged from TC_03_ENTS, TC_07_ENTS and TC_08_ENTS)
     // ***************************************************************************************************************************************************************************************
-    @When("the agent opens a farmer dashboard for preliminary check herd {string}")
-    public void theAgentOpensAFarmerDashboardForPreliminaryCheckHerd(String pCheckType)
+    static void loginAs(String pUsername, String pLogPrefix)
     {
-        log.info("[STEP] When the agent opens a farmer dashboard for preliminary check herd: " + pCheckType);
+        log.info(pLogPrefix + " Logging in as: " + pUsername);
 
-        final int    MAX_HERD_RETRIES = 15;
-        final String YEAR             = System.getProperty("herd.year", "2026").trim();
-        final String iClientRowsXpath = ObjReader.getLocator("clientTableRows");
-
-        boolean iFound = false;
-
-        for (int iAttempt = 0; iAttempt < MAX_HERD_RETRIES; iAttempt++)
+        if (!isVisible(ObjReader.getLocator("iUsernametxtbox"), PROBE_SECONDS))
         {
-            String iCurrentHerd     = getPrelimHerd(pCheckType);
-            String iCurrentUsername = getPrelimUsername(pCheckType);
-
-            log.info("[PRELIM-RETRY] Attempt " + (iAttempt + 1) + "/" + MAX_HERD_RETRIES + " | checkType=" + pCheckType + " | herd=" + iCurrentHerd + " | agent=" + iCurrentUsername);
-
-            // -- Search for the herd on My Clients ------------------------------------------------------------------
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
-            pause(1000);
-
-            int iRowCount = countOf(iClientRowsXpath);
-
-            // ================================================================
-            // FAILURE 1 - 0 rows returned
-            // ================================================================
-            if (iRowCount == 0)
-            {
-                log.warning("[PRELIM-RETRY] FAILURE 1 | herd=" + iCurrentHerd + " returned 0 rows in My Clients.");
-                boolean iRecovered = recoverWithNewHerd(pCheckType, iAttempt, YEAR);
-                if (!iRecovered) break;
-                continue;
-            }
-
-            // ================================================================
-            // FAILURE 2 - Row found but "Herd expired"
-            // ================================================================
-            boolean iHerdExpired = countOf(EXPIRED_SPAN_XPATH) > 0;
-
-            if (iHerdExpired)
-            {
-                log.warning("[PRELIM-RETRY] FAILURE 2 | herd=" + iCurrentHerd + " is marked 'Herd expired'.");
-                boolean iRecovered = recoverWithNewHerd(pCheckType, iAttempt, YEAR);
-                if (!iRecovered) break;
-                continue;
-            }
-
-            // -- Row found and not expired - click through to the farmer dashboard ----------------------------------
-            log.info("[PRELIM-RETRY] Row valid - clicking through to farmer dashboard.");
-            //iAction("CLICK", "XPATH", ObjReader.getLocator("iFirstClientName"), null);
-            //pause(1500);
-
-            // -- Navigate to Preliminary Checks tab -----------------------------------------------------------------
-            iAction("CLICK",   "XPATH", PRELIM_TAB_XPATH, null);
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), "");
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("herdSearchInput"), iCurrentHerd);
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("herdSearchBtn"),   null);
-            pause(2000);
-
-            // ================================================================
-            // FAILURE 3 - Preliminary Checks tab shows no records
-            // ================================================================
-            int     iPrelimRows     = countOf(PRELIM_TABLE_ROW_XPATH);
-            boolean iPrelimTabEmpty = iPrelimRows == 0 || countOf(PRELIM_NO_RECORDS_XPATH) > 0;
-
-            if (iPrelimTabEmpty)
-            {
-                log.warning("[PRELIM-RETRY] FAILURE 3 | herd=" + iCurrentHerd + " Preliminary Checks tab has no records.");
-
-                // Navigate back to My Clients before recovery
-                // (we are inside a farmer dashboard so the breadcrumb is available).
-                // The breadcrumb is looked for briefly first - without that, a missing breadcrumb costs the full
-                // action timeout before the left menu is tried.
-                if (isVisible(MY_CLIENTS_BACK_XPATH, PROBE_SECONDS))
-                {
-                    iAction("CLICK", "XPATH", MY_CLIENTS_BACK_XPATH, null);
-                    pause(1000);
-                }
-                else
-                {
-                    log.warning("[PRELIM-RETRY] Breadcrumb not found - using left menu.");
-                    iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-                }
-
-                boolean iRecovered = recoverWithNewHerd(pCheckType, iAttempt, YEAR);
-                if (!iRecovered) break;
-                continue;
-            }
-
-            // -- All checks passed -----------------------------------------------------------------------------------
-            log.info("[PRELIM-RETRY] Attempt " + (iAttempt + 1) + " succeeded | herd=" + iCurrentHerd + " | " + iPrelimRows + " prelim record(s) found.");
-            iFound = true;
-            break;
-        }
-
-        if (!iFound)
-        {
-            throw new RuntimeException(
-                    "[PRELIM-RETRY] Could not find a usable herd for '" + pCheckType
-                            + "' after " + MAX_HERD_RETRIES + " attempts."
-                            + " Last herd tried: "   + getPrelimHerd(pCheckType)
-                            + " | Last agent: "      + getPrelimUsername(pCheckType)
-                            + ". Verify vwbs_land_validation has LVT_DESC='Preliminary Check'"
-                            + " AND LVS_DESC='Pending' AND LVC_DESC='"
-                            + getLvcDescForCheckType(pCheckType)
-                            + "' with a non-expired herd registration and a valid BISS_INET agent.");
-        }
-
-        log.info("[STEP] Farmer dashboard ready | checkType=" + pCheckType + " | herd=" + getPrelimHerd(pCheckType) + " | agent=" + getPrelimUsername(pCheckType));
-    }
-
-
-// ===================================================================================================================================
-//  PRELIMINARY CHECKS - BUSINESS STEPS
-// ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the preliminary checks card should be visible on the dashboard
-    // Description   : Opens the herd with the row View link, then asserts the
-    //                 biss-portal-preliminary-checks mat-card is visible on the farmer dashboard.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
-    // ***************************************************************************************************************************************************************************************
-    @Then("the preliminary checks card should be visible on the dashboard")
-    public void thePreliminaryChecksCardShouldBeVisibleOnTheDashboard()
-    {
-        log.info("[STEP] Then the preliminary checks card should be visible on the dashboard");
-
-        iAction("CLICK", "XPATH", ".//td[contains(@class,'cdk-column-action')]//a[normalize-space()='View']", null);
-        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iPrelimChecksCard"), null);
-        log.info("Preliminary Checks card confirmed visible on farmer dashboard.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the {string} preliminary check should show {string} on the dashboard
-    // Description   : Asserts the named check type row shows the expected status on the dashboard.
-    // Parameters    : pCheckName - check type label as shown on dashboard e.g. "Overclaim Checks"
-    //                 pStatus    - "Response required" or "No response required"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
-    // ***************************************************************************************************************************************************************************************
-    @And("the {string} preliminary check should show {string} on the dashboard")
-    public void thePreliminaryCheckShouldShowOnTheDashboard(String pCheckName, String pStatus)
-    {
-        log.info("[STEP] And the '" + pCheckName + "' preliminary check should show '" + pStatus + "' on the dashboard");
-
-        String iLocatorKey = pStatus.toLowerCase().contains("no response") ? "iPrelimCheckStatusNotRequired" : "iPrelimCheckStatusRequired";
-        String iXpath      = String.format(ObjReader.getLocator(iLocatorKey), pCheckName);
-
-        iAction("VERIFYELEMENT", "XPATH", iXpath, null);
-        log.info("Confirmed '" + pCheckName + "' shows: " + pStatus);
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent clicks View Preliminary Checks
-    // Description   : Clicks the "View preliminary checks" button on the dashboard card.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent clicks View Preliminary Checks")
-    public void theAgentClicksViewPreliminaryChecks()
-    {
-        log.info("[STEP] When the agent clicks View Preliminary Checks");
-
-        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iPrelimViewChecksBtn"), null);
-        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iPrelimViewChecksBtn"), null);
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iPrelimViewChecksBtn"), null);
-        log.info("Navigated to Preliminary Checks response page.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the Preliminary Checks response page should be displayed
-    // Description   : Confirms the prelims-accordion inside biss-response-page is visible.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
-    // ***************************************************************************************************************************************************************************************
-    @Then("the Preliminary Checks response page should be displayed")
-    public void thePreliminaryChecksResponsePageShouldBeDisplayed()
-    {
-        log.info("[STEP] Then the Preliminary Checks response page should be displayed");
-
-        iAction("VERIFYELEMENT", "XPATH", "//biss-response-page//mat-accordion[contains(@class,'prelims-accordion')]", null);
-        log.info("Preliminary Checks response page confirmed.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent clicks Submit on the Preliminary Checks page without selecting any response
-    // Description   : Negative test - Submit clicked before any radio selection.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent clicks Submit on the Preliminary Checks page without selecting any response")
-    public void theAgentClicksSubmitWithoutSelectingAnyResponse()
-    {
-        log.info("[STEP] When the agent clicks Submit without selecting any response - negative test");
-
-        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iPrelimSubmitBtn"), null);
-        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iPrelimSubmitBtn"), null);
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iPrelimSubmitBtn"), null);
-        log.info("Submit clicked without selections - expecting validation error.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then a validation error should be displayed on the Preliminary Checks page
-    // Description   : Asserts the form stays ng-invalid after a premature submit.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - UiHelpers.isVisible)
-    // ***************************************************************************************************************************************************************************************
-    @Then("a validation error should be displayed on the Preliminary Checks page")
-    public void aValidationErrorShouldBeDisplayedOnThePreliminaryChecksPage()
-    {
-        log.info("[STEP] Then a validation error should be displayed on the Preliminary Checks page");
-
-        boolean iFormInvalid = isVisible(ObjReader.getLocator("iPrelimFormInvalid"), 3);
-
-        Assertions.assertTrue(iFormInvalid, "Expected form to remain ng-invalid after submitting without selections.");
-        log.info("Validation error confirmed - form is ng-invalid as expected.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent responds to all preliminary check panels row by row
-    // Description   : Reads a DataTable of panel names and responses. For each panel:
-    //                   1. Skips it when there is no red error icon (no response required)
-    //                   2. Expands the panel when it is collapsed (aria-expanded = false)
-    //                   3. Counts the row-level radios matching the response label
-    //                   4. Clicks each radio by index - the locator is resolved again per click, so an Angular
-    //                      re-render cannot leave a stale element behind
-    //                 DataTable format:
-    //                   | Panel Name                      | Response    |
-    //                   | Overclaim Checks                | Accept      |
-    //                   | Dual Claim Checks               | No, Keep it |
-    //                   | No Agricultural Activity Checks | Reject      |
-    // Parameters    : pDataTable - DataTable with headers "Panel Name" and "Response"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - getAttribute / countOf)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent responds to all preliminary check panels row by row")
-    public void theAgentRespondsToAllPreliminaryCheckPanelsRowByRow(DataTable pDataTable)
-    {
-        log.info("[STEP] When the agent responds to all preliminary check panels row by row");
-
-        List<Map<String, String>> iTableRows = pDataTable.asMaps(String.class, String.class);
-
-        for (Map<String, String> iEntry : iTableRows)
-        {
-            String iPanelLabel    = iEntry.get("Panel Name").trim();
-            String iResponseLabel = iEntry.get("Response").trim();
-
-            log.info("[STEP] Panel: '" + iPanelLabel + "' | Response: '" + iResponseLabel + "'");
-
-            // -- 1. Skip panels without the red error icon ------------------------------------------------------------
-            String iErrorPanelXpath = String.format(ObjReader.getLocator("iPrelimPanelHeaderError"), iPanelLabel);
-            if (!isVisible(iErrorPanelXpath, 2))
-            {
-                log.info("[STEP] Panel '" + iPanelLabel + "' - no response required. Skipping.");
-                continue;
-            }
-
-            // -- 2. Expand panel if collapsed -------------------------------------------------------------------------
-            String iPanelHeaderXpath = String.format(ObjReader.getLocator("iPrelimPanelHeader"), iPanelLabel);
-            String iExpanded         = UiHelpers.getAttribute(xp(iPanelHeaderXpath), "aria-expanded");
-
-            if (!"true".equalsIgnoreCase(iExpanded))
-            {
-                iAction("CLICK", "XPATH", iPanelHeaderXpath, null);
-                log.info("[STEP] Expanded panel: " + iPanelLabel);
-                pause(800);
-            }
-
-            // -- 3. Count the row-level radios matching the response label --------------------------------------------
-            String iRowRadioXpath = String.format(ObjReader.getLocator("iPrelimRowRadioByLabel"), iResponseLabel);
-            int    iRadioCount    = countOf(iRowRadioXpath);
-
-            if (iRadioCount == 0)
-            {
-                throw new AssertionError("Panel '" + iPanelLabel + "': no row-level radio buttons found with label '"
-                        + iResponseLabel + "'. Verify label matches DOM text exactly.");
-            }
-
-            log.info("[STEP] Found " + iRadioCount + " row(s) to respond to in panel: " + iPanelLabel);
-
-            // -- 4. Click each radio - the indexed locator is resolved again per click --------------------------------
-            for (int i = 0; i < iRadioCount; i++)
-            {
-                String iIndexedXpath = "(" + iRowRadioXpath + ")[" + (i + 1) + "]";
-                iAction("WAITVISIBLE",   "XPATH", iIndexedXpath, null);
-                iAction("WAITCLICKABLE", "XPATH", iIndexedXpath, null);
-                iAction("CLICK",         "XPATH", iIndexedXpath, null);
-                log.info("[STEP] Selected '" + iResponseLabel + "' on row " + (i + 1) + " of panel: " + iPanelLabel);
-            }
-        }
-
-        log.info("[STEP] All preliminary check panels responded to.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : When the agent submits the Preliminary Checks response
-    // Description   : Clicks Submit after all required radio buttons have been selected.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent submits the Preliminary Checks response")
-    public void theAgentSubmitsThePreliminaryChecksResponse()
-    {
-        log.info("[STEP] When the agent submits the Preliminary Checks response");
-
-        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iPrelimSubmitBtn"), null);
-        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iPrelimSubmitBtn"), null);
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iPrelimSubmitBtn"), null);
-        log.info("Preliminary Checks Submit clicked.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : Then the agent confirms the Preliminary Checks submission
-    // Description   : Clicks Yes on the confirmation dialog after Submit.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
-    // ***************************************************************************************************************************************************************************************
-    @Then("the agent confirms the Preliminary Checks submission")
-    public void theAgentConfirmsThePreliminaryChecksSubmission()
-    {
-        log.info("[STEP] Then the agent confirms the Preliminary Checks submission");
-
-        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iPrelimConfirmDialogYesBtn"), null);
-        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iPrelimConfirmDialogYesBtn"), null);
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iPrelimConfirmDialogYesBtn"), null);
-        log.info("Confirmation dialog - Yes clicked.");
-    }
-
-
-    // ***************************************************************************************************************************************************************************************
-    // Step          : And the Preliminary Checks submission should be confirmed successfully
-    // Description   : Asserts the submission completed - "Response required" is gone from the dashboard card.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 17-04-2026 | Updated: 18-09-2026 (Playwright - UiHelpers.isVisible)
-    // ***************************************************************************************************************************************************************************************
-    @And("the Preliminary Checks submission should be confirmed successfully")
-    public void thePreliminaryChecksSubmissionShouldBeConfirmedSuccessfully()
-    {
-        log.info("[STEP] And the Preliminary Checks submission should be confirmed successfully");
-        log.info("[STEP] Verifying 'Response required' is NOT displayed on the Preliminary Checks card");
-
-        String iResponseRequiredXpath =
-                "//mat-card[.//mat-card-title[normalize-space()='Preliminary Checks']]"
-                        + "//span[contains(@class,'dashboard-clarification-text')"
-                        + " and normalize-space()='Response required']";
-
-        boolean iResponseRequiredVisible = isVisible(iResponseRequiredXpath, 3);
-
-        Assertions.assertFalse(iResponseRequiredVisible, "'Response required' is still visible on the Preliminary Checks dashboard card");
-        log.info("Preliminary Checks submitted and confirmed successfully.");
-        Hooks.captureStep("Preliminary Checks - submission confirmed successfully");
-    }
-
-
-// ===================================================================================================================================
-//  PRIVATE - RECOVERY (logout + DB re-query + INET validate + re-login)
-// ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : recoverWithNewHerd
-    // Description   : Single recovery method called by ALL three failure modes.
-    //                 Steps:
-    //                   1. Logout current session
-    //                   2. Try consecutive DB offsets (startOffset to startOffset+MAX_OFFSET_TRIES)
-    //                      until an INET-validated herd is found for this check type.
-    //                      Prints the full DB result table to the console on every query.
-    //                   3. Login as the resolved agent (always - the session was terminated in step 1)
-    //                   4. Navigate to My Clients
-    //                   5. Update Hooks fields
-    // Returns       : true if a valid replacement was found and the session is ready, false if exhausted
-    // Parameters    : pCheckType - OVERCLAIM | DUAL_CLAIM | AGRI_ACTIVITY
-    //                 pAttempt   - current outer loop iteration (offset starts at pAttempt+1)
-    //                 pYear      - scheme year
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 20-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
-    // ***************************************************************************************************************************************************************************************
-    private boolean recoverWithNewHerd(String pCheckType, int pAttempt, String pYear)
-    {
-        String iCurrentUsername = getPrelimUsername(pCheckType);
-        int    iStartOffset     = pAttempt + 1;
-
-        // How many consecutive offsets to probe before giving up in a single recovery call.
-        // Covers the case where several consecutive herds have no INET agent.
-        final int MAX_OFFSET_TRIES = 10;
-
-        log.info("[PRELIM-RECOVER] Starting recovery | checkType=" + pCheckType + " | startOffset=" + iStartOffset);
-
-        // -- Step 1: Logout immediately ----------------------------------------------------------------------------
-        performLogout();
-
-        // -- Step 2: Try consecutive offsets until an INET-valid herd is found --------------------------------------
-        String iLvcDescTarget = getLvcDescForCheckType(pCheckType);
-        String iNextHerd      = null;
-        String iNextUsername  = null;
-
-        for (int iOff = iStartOffset; iOff < iStartOffset + MAX_OFFSET_TRIES; iOff++)
-        {
-            log.info("[PRELIM-RECOVER] Querying BISS_DATA | LVC_DESC='" + iLvcDescTarget + "' | offset=" + iOff);
-
-            database.DBRouter.runDB("DATA", "Preliminary checks herds", pYear, String.valueOf(iOff));
-
-            List<Map<String, Object>> iDbRows = database.DBRouter.getRows();
-
-            // Print the full result table so you can see exactly what the DB returned
-            printDbResultTable("PRELIMINARY CHECKS HERDS offset=" + iOff, iDbRows);
-
-            if (iDbRows == null || iDbRows.isEmpty())
-            {
-                log.warning("[PRELIM-RECOVER] BISS_DATA returned 0 rows at offset=" + iOff + " - no more Pending rows exist for year=" + pYear + ". Stopping.");
-                break;
-            }
-
-            for (Map<String, Object> iRow : iDbRows)
-            {
-                String iLvc  = Objects.toString(iRow.get("LVC_DESC"),    "").trim();
-                String iHerd = Objects.toString(iRow.get("LVL_HERD_NO"), "").trim();
-
-                if (!iLvc.equalsIgnoreCase(iLvcDescTarget) || iHerd.isEmpty()) continue;
-
-                log.info("[PRELIM-RECOVER] Checking BISS_INET for " + iLvcDescTarget + " herd=" + iHerd);
-
-                database.DBRouter.runDB("INET", "Get Login Id for herd", iHerd);
-                String iUsername = database.DBRouter.getValue("USERNAME");
-
-                log.info("[PRELIM-RECOVER] INET result - herd=" + iHerd + " | USERNAME=" + (iUsername == null ? "null" : "'" + iUsername + "'"));
-
-                if (iUsername != null && !iUsername.isBlank())
-                {
-                    iNextHerd     = iHerd;
-                    iNextUsername = iUsername.trim();
-                    log.info("[PRELIM-RECOVER] INET-validated replacement: " + iLvcDescTarget + " -> herd=" + iNextHerd + " | username=" + iNextUsername + " (offset=" + iOff + ")");
-                    break;
-                }
-                else
-                {
-                    log.warning("[PRELIM-RECOVER] No INET agent for " + iLvcDescTarget + " herd=" + iHerd + " at offset=" + iOff + " - trying offset=" + (iOff + 1));
-                }
-            }
-
-            if (iNextHerd != null) break;  // found a valid herd - stop probing offsets
-        }
-
-        if (iNextHerd == null)
-        {
-            log.warning("[PRELIM-RECOVER] Exhausted offsets " + iStartOffset + " to "
-                    + (iStartOffset + MAX_OFFSET_TRIES - 1) + " for " + pCheckType
-                    + " - no INET-validated herd found. Stopping recovery.");
-            return false;
-        }
-
-        // -- Step 3: Login (always - the session was terminated in step 1) -------------------------------------------
-        log.info("[PRELIM-RECOVER] Agent: " + iCurrentUsername + " -> " + iNextUsername);
-        performLogin(iNextUsername);
-
-        // -- Step 4: Navigate to My Clients --------------------------------------------------------------------------
-        navigateToMyClients();
-
-        // -- Step 5: Update Hooks fields -----------------------------------------------------------------------------
-        setPrelimHerd(pCheckType, iNextHerd, iNextUsername);
-        Hooks.RUNTIME_USERNAME = iNextUsername;
-
-        log.info("[PRELIM-RECOVER] Recovery complete | " + pCheckType + " -> herd=" + iNextHerd + " | username=" + iNextUsername);
-        return true;
-    }
-
-
-// ===================================================================================================================================
-//  PRIVATE - HOOKS FIELD ACCESSORS
-// ===================================================================================================================================
-
-    private String getPrelimHerd(String pCheckType)
-    {
-        switch (pCheckType.trim().toUpperCase())
-        {
-            case "OVERCLAIM":     return Hooks.OVERCLAIM_HERD;
-            case "DUAL_CLAIM":    return Hooks.DUAL_CLAIM_HERD;
-            case "AGRI_ACTIVITY": return Hooks.AGRI_ACTIVITY_HERD;
-            default: throw new IllegalArgumentException("Unknown check type: '" + pCheckType + "'. Expected: OVERCLAIM | DUAL_CLAIM | AGRI_ACTIVITY");
-        }
-    }
-
-    private String getPrelimUsername(String pCheckType)
-    {
-        switch (pCheckType.trim().toUpperCase())
-        {
-            case "OVERCLAIM":     return Hooks.OVERCLAIM_USERNAME;
-            case "DUAL_CLAIM":    return Hooks.DUAL_CLAIM_USERNAME;
-            case "AGRI_ACTIVITY": return Hooks.AGRI_ACTIVITY_USERNAME;
-            default: throw new IllegalArgumentException("Unknown: " + pCheckType);
-        }
-    }
-
-    private void setPrelimHerd(String pCheckType, String pHerd, String pUsername)
-    {
-        switch (pCheckType.trim().toUpperCase())
-        {
-            case "OVERCLAIM":
-                Hooks.OVERCLAIM_HERD      = pHerd;
-                Hooks.OVERCLAIM_USERNAME  = pUsername;
-                break;
-            case "DUAL_CLAIM":
-                Hooks.DUAL_CLAIM_HERD     = pHerd;
-                Hooks.DUAL_CLAIM_USERNAME = pUsername;
-                break;
-            case "AGRI_ACTIVITY":
-                Hooks.AGRI_ACTIVITY_HERD     = pHerd;
-                Hooks.AGRI_ACTIVITY_USERNAME = pUsername;
-                break;
-            default: throw new IllegalArgumentException("Unknown: " + pCheckType);
-        }
-    }
-
-    private String getLvcDescForCheckType(String pCheckType)
-    {
-        switch (pCheckType.trim().toUpperCase())
-        {
-            case "OVERCLAIM":     return "Overclaim";
-            case "DUAL_CLAIM":    return "Dual claim";
-            case "AGRI_ACTIVITY": return "Agricultural Activity";
-            default: throw new IllegalArgumentException("Unknown: " + pCheckType);
-        }
-    }
-
-
-// ===================================================================================================================================
-//  PRIVATE - NAVIGATION (mirrors TC_03 exactly)
-// ===================================================================================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : performLogout
-    // Description   : Exits the application and waits for the landing page, which confirms the session is gone.
-    //                 If the logout click fails (session already expired), the base URL is opened instead.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 20-04-2026 | Updated: 18-09-2026 (Playwright - UiHelpers.navigateTo)
-    // ***************************************************************************************************************************************************************************************
-    private void performLogout()
-    {
-        log.info("[RELOGIN] Logging out current session...");
-        try
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),   null);
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"),  null);
-
-            // Wait for the welcome/landing page login button to appear -
-            // this confirms the session is fully terminated and we are back at the start
-            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
-            log.info("[RELOGIN] Logout complete - landing page visible.");
-        }
-        catch (Exception e)
-        {
-            // If logout fails (e.g. the session already expired), navigate directly to
-            // the base URL to force a clean state rather than leaving a broken session
-            log.warning("[RELOGIN] Logout click failed (" + e.getMessage() + ") - navigating to base URL as fallback.");
+            log.info(pLogPrefix + " Username box not on screen - opening the base URL first.");
             UiHelpers.navigateTo(Hooks.iUrl);
-            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"), null);
         }
-    }
 
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : performLogin
-    // Description   : Logs in as the given agent: username, password, then either the PIN + TOTP screen
-    //                 or the OTP-only screen, and finally the Terms and Conditions dialog when it appears.
-    // Parameters    : pUsername (String) - agent username resolved from BISS_INET
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 20-04-2026 | Updated: 18-09-2026 (Playwright - fill / pressSequentially replace clear / sendKeys)
-    // ***************************************************************************************************************************************************************************************
-    private void performLogin(String pUsername)
-    {
-        log.info("[RELOGIN] Logging in as: " + pUsername);
-
-        iAction("CLICK",   "XPATH", ObjReader.getLocator("iWelcomeLoginBtn"),     null);
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iUsernametxtbox"),      pUsername);
         iAction("CLICK",   "XPATH", ObjReader.getLocator("iUsernameContinuebtn"), null);
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iPasswordtxtbox"),      "TD:Password");
         iAction("CLICK",   "XPATH", ObjReader.getLocator("iLoginbtn"),            null);
 
         // New-user Next screens can show straight after the password (seen 06-10-2026), not only after the PIN
-        commonFunctions.LoginScreens.skipNewUserScreens("[RELOGIN]");
+        commonFunctions.LoginScreens.skipNewUserScreens(pLogPrefix);
 
-        if (isVisible(ObjReader.getLocator("iPinForm"), 3))
+        // -- Account Expired -------------------------------------------------------------------------------------
+        String iExpiredXpath = "//*[contains(@class,'kc-feedback-text') and contains(normalize-space(),'Account Expired')]";
+        if (isVisible(iExpiredXpath, PROBE_SECONDS))
         {
-            log.info("[RELOGIN] PIN screen detected - filling slots 1-7.");
+            throw new IllegalStateException(pLogPrefix + " SSO account expired for " + pUsername
+                    + ". Use another login in the feature file or ask for the account to be renewed.");
+        }
 
-            for (int idx = 1; idx <= 7; idx++)
-            {
-                String iDynXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+        // -- PIN + TOTP, or OTP only -----------------------------------------------------------------------------
+        if (isVisible(ObjReader.getLocator("iPinForm"), PROBE_SECONDS))
+        {
+            log.info(pLogPrefix + " PIN screen detected.");
+            fillPinSlots(pLogPrefix);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iPinLoginBtn"), null);
+            log.info(pLogPrefix + " PIN login submitted.");
 
-                if (isVisible(iDynXpath, 1))
-                {
-                    Locator iInput    = xp(iDynXpath);
-                    boolean iDisabled = iInput.getAttribute("disabled") != null;
+            enterMobileNumberIfAsked(pLogPrefix);
 
-                    if (!iDisabled && iInput.isEnabled())
-                    {
-                        iInput.fill("");
-                        iInput.pressSequentially("1");
-                    }
-                }
-            }
+            acceptTermsIfShown(pLogPrefix, 2);
 
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iPinLoginBtn"),   null);
-            commonFunctions.LoginScreens.skipNewUserScreens("[RELOGIN]", true);
+            // Authenticator set-up screens - click Next until the code box (step 7) is shown
+            commonFunctions.LoginScreens.skipNewUserScreens(pLogPrefix, true);
+
             iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTOTPtextbox"),   "111111");
             iAction("CLICK",   "XPATH", ObjReader.getLocator("iTOTPsubmitBtn"), null);
-            log.info("[RELOGIN] PIN + TOTP submitted.");
+            log.info(pLogPrefix + " TOTP submitted.");
+
+            acceptTermsIfShown(pLogPrefix, PROBE_SECONDS);
         }
         else
         {
-            commonFunctions.LoginScreens.enterOneTimeCode("[RELOGIN]");
-            log.info("[RELOGIN] OTP-only login submitted.");
+            // Normal code screen, or the authenticator set-up screen (input#totp + saveTOTPBtn, no kc-login)
+            commonFunctions.LoginScreens.enterOneTimeCode(pLogPrefix);
+            log.info(pLogPrefix + " OTP login submitted.");
         }
 
-        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), 3))
+        EntsTestData.setLoggedInUser(pUsername);
+        log.info(pLogPrefix + " Login complete----------------------------------------------------------: " + pUsername);
+    }
+
+    // Types '1' into every enabled PIN slot (data-index 1 to 7) - same as TC_03.fillPinSlots
+    private static void fillPinSlots(String pLogPrefix)
+    {
+        for (int idx = 1; idx <= 7; idx++)
+        {
+            String iSlotXpath = ObjReader.getLocator("iPinInputIndex").replace("{idx}", String.valueOf(idx));
+
+            if (!isVisible(iSlotXpath, 1))
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " not present - skipping.");
+                continue;
+            }
+
+            Locator iInput = xp(iSlotXpath).first();
+            if (iInput.getAttribute("disabled") == null && iInput.isEnabled())
+            {
+                iInput.fill("");
+                iInput.pressSequentially("1");
+                log.info(pLogPrefix + " Entered '1' into PIN index: " + idx);
+            }
+            else
+            {
+                log.info(pLogPrefix + " PIN index " + idx + " is DISABLED - skipping.");
+            }
+        }
+    }
+
+    // Mobile number form shown by Keycloak after the PIN for some users (seen for individuals, TC_03_IND 25-09-2026)
+    private static final String MOBILE_NUMBER_INPUT_XPATH = "//form[@id='kc-totp-login-form']//input[@id='mobile_number']";
+    private static final String MOBILE_VALIDATE_BTN_XPATH = "//form[@id='kc-totp-login-form']//button[@id='kc-login']";
+
+    // Enters login.test.mobile (default 1111111111) and clicks Validate when the mobile number form is shown
+    private static void enterMobileNumberIfAsked(String pLogPrefix)
+    {
+        if (!isVisible(MOBILE_NUMBER_INPUT_XPATH, 2)) return;
+
+        String iMobile = ConfigManager.getOrDefault("login.test.mobile", "1111111111").trim();
+        iAction("TEXTBOX", "XPATH", MOBILE_NUMBER_INPUT_XPATH, iMobile);
+        iAction("CLICK",   "XPATH", MOBILE_VALIDATE_BTN_XPATH, null);
+        log.info(pLogPrefix + " Mobile number form shown - entered " + iMobile + " and clicked Validate.");
+    }
+
+    // Ticks and accepts Terms & Conditions when the screen is shown
+    private static void acceptTermsIfShown(String pLogPrefix, int pSeconds)
+    {
+        if (isVisible(ObjReader.getLocator("iAcceptTermsCheckbox"), pSeconds))
         {
             iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsCheckbox"), null);
             iAction("CLICK", "XPATH", ObjReader.getLocator("iAcceptTermsBtn"),      null);
-            log.info("[RELOGIN] Terms and Conditions accepted.");
+            log.info(pLogPrefix + " Terms & Conditions accepted.");
         }
-        log.info("[RELOGIN] Login complete for: " + pUsername);
+    }
+
+
+    // ===================================================================================================================================
+    //  LOGOUT
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : logout
+    // Description   : Exit -> Logout -> close the "sorry to see you go" popup if shown, then clear cookies and open the
+    //                 base URL so the next login starts on a clean Keycloak page.
+    //                 If the UI logout fails, the cookies are cleared and the base URL opened anyway (same as Selenium).
+    //                 Cookie clearing: Selenium deleteAllCookies() -> Playwright BrowserContext.clearCookies()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026 | Updated: 22-09-2026 (Playwright, one shared copy)
+    // ***************************************************************************************************************************************************************************************
+    static void logout()
+    {
+        log.info("[RELOGIN] Logging out current session...");
+        try
+        {
+            if (!isVisible(ObjReader.getLocator("iExitLink"), PROBE_SECONDS))
+            {
+                // Already logged out (e.g. the submit step logged out) - nothing to click
+                log.info("[RELOGIN] Exit link not on screen - already logged out, skipping the Exit / Logout clicks.");
+                UiHelpers.clearCookies();
+                UiHelpers.navigateTo(Hooks.iUrl);
+                EntsTestData.setLoggedInUser("");
+                return;
+            }
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iExitLink"),  null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutbtn"), null);
+
+            if (isVisible(ObjReader.getLocator("iLogoutPopup"), 1))
+            {
+                iAction("CLICK", "XPATH", ObjReader.getLocator("iLogoutPopup"), null);
+            }
+            log.info("[RELOGIN] Logout complete.");
+        }
+        catch (Exception e)
+        {
+            log.warning("[RELOGIN] UI logout failed (" + e.getMessage() + ") - clearing cookies and opening the base URL.");
+        }
+
+        UiHelpers.clearCookies();
+        UiHelpers.navigateTo(Hooks.iUrl);
+        EntsTestData.setLoggedInUser("");
     }
 
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : navigateToMyClients
-    // Description   : Searches for the BISS application on the portal home screen and opens My Clients.
+    // Function Name : closePersonalDetailsIfShown
+    // Description   : Closes the personal details dialog an individual can get after login (the Selenium TC_05_ENTS notes
+    //                 mention a "Close personal details" dialog). Waits up to pSeconds; does nothing when it is not shown.
+    //                 The XPath is taken from the Selenium notes, not from the DOM - send the DOM if it does not match.
+    // Parameters    : pSeconds (int) - how long to wait for the dialog
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 20-04-2026 | Updated: 18-09-2026 (Playwright - no change in logic)
+    // Date Created  : 30-09-2026
     // ***************************************************************************************************************************************************************************************
-    private void navigateToMyClients()
-    {
-        log.info("[RELOGIN] Navigating to My Clients...");
+    static final String PERSONAL_DETAILS_CLOSE_XPATH =
+            "//button[contains(@aria-label,'Close personal details')] | "
+                    + "//mat-dialog-container//button[contains(normalize-space(),'Close personal details')] | "
+                    + "//mat-dialog-container[.//*[contains(normalize-space(),'ersonal details')]]//button[normalize-space()='Close']";
 
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iAppSearchBar"), "");
-        iAction("TEXTBOX",       "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
-        //iAction("VERIFYELEMENT","XPATH", ObjReader.getLocator("iSearchAppLabel"), "");
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iBissLink"), "");
-        // NOTE (carried over from Selenium): the key name is passed instead of its locator, so this wait returns at once
-        iAction("WAITINVISIBLE", "XPATH", "iScreenBuffer", "Spinner");
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"),   null);
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iViewAllTab"),         "");
-        log.info("[RELOGIN] My Clients ready.");
+    static void closePersonalDetailsIfShown(int pSeconds)
+    {
+        if (!isVisible(PERSONAL_DETAILS_CLOSE_XPATH, pSeconds))
+        {
+            log.info("[LOGIN-INDIVIDUAL] No personal details dialog shown.");
+            return;
+        }
+        iAction("CLICK", "XPATH", "(" + PERSONAL_DETAILS_CLOSE_XPATH + ")[1]", null);
+        log.info("[LOGIN-INDIVIDUAL] Personal details dialog closed.");
     }
 
 
-// ===================================================================================================================================
-//  OVERCLAIM AND AGRICULTURAL ACTIVITY ERROR RESOLUTION
-// ===================================================================================================================================
+    // ===================================================================================================================================
+    //  TRANSFEREE ACCEPTANCE SCREENS
+    // ===================================================================================================================================
+
+    // ENTS page header of the open herd: "Farmer Name <name> | Herd Number <herd>" (08-10-2026, from a screenshot - the
+    // XPath takes the innermost element that holds both labels; replace it with the real element ids once the DOM is known)
+    static final String FARMER_HEADER_XPATH =
+            "(//*[contains(normalize-space(.),'Farmer Name') and contains(normalize-space(.),'Herd Number')])[last()]";
+    private static final Pattern FARMER_HEADER_PATTERN =
+            Pattern.compile("Farmer Name\\s*(.*?)\\s*\\|?\\s*Herd Number\\s*([A-Za-z0-9]+)", Pattern.DOTALL);
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the agent resolves any overclaim value exceeds EH errors if present
-    // Description   : After clicking Submit, rows with claimed area > eligible (ha) show a
-    //                 "Value exceeds EH" error inline in the cdk-column-claimedArea cell.
-    //
-    //                 Three scenarios handled:
-    //                   1. No suffix (single parcel e.g. "A1150100017"):
-    //                        -> 1 row in group -> enter the eligible value directly (claimed = eligible)
-    //                   2. Suffix present, split into 2+ ("A1150100017 A" + "A1150100017 B"):
-    //                        -> group all suffix rows by base parcel number
-    //                        -> distribute the shared eligible pool proportionally to each row's claimed value
-    //                        -> non-last rows: floor to 2dp (never rounds up over the pool)
-    //                        -> last row: pool - running total (absorbs the rounding remainder)
-    //                   3. Split into N parts (A/B/C/...): same proportional logic, scales to any N
-    //
-    //                 Row-scoped locators (.//td...) come from ObjectRepository and are resolved against each row
-    //                 with row.locator("xpath=..."), which is the Playwright equivalent of
-    //                 WebElement.findElements(By.xpath(".//...")).
-    //                 If no errors are present the step passes silently. The feature file calls Submit again afterwards.
+    // Function Name : verifyTransfereeHolder
+    // Description   : Checks that the individual who just logged in is the holder the transfer was sent to, by reading
+    //                 "Farmer Name" and "Herd Number" in the ENTS page header (Transfers page):
+    //                   - herd number differs          -> the login opens another herd
+    //                   - name differs (ents.transferee.name.check, default true)
+    //                                                  -> same herd, different holder: the transfer went to the holder
+    //                                                     typed in the transferee search, not to this login
+    //                 On a mismatch the transferee herd is marked BAD in the Test Data Vault (with the portal values) and
+    //                 the step fails with a clear message, instead of waiting 30 s for a Transfers In row that is not there.
+    //                 Seen 08-10-2026 (TC_09_ENTS Section 4): transfer to T1973669 / "Joseph Tully", login SEANGALL opened
+    //                 T1973669 / "John Charles Clancy" with "You currently have NO Transfer In applications for 2026".
+    //                 The name check passes when every word of the searched name is in the portal name (case and
+    //                 punctuation ignored), so "Mary Ryan" matches "Mary Ann Ryan".
+    //                 When the header cannot be read the check is skipped with a warning (the step goes on as before).
+    // Parameters    : pLogPrefix (String) - log prefix, e.g. "[TRANSFER]"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 21-04-2026 | Updated: 18-09-2026 (Playwright - setValueByJs replaces the JS clear + sendKeys block)
+    // Date Created  : 08-10-2026
     // ***************************************************************************************************************************************************************************************
-    @Then("the agent resolves any overclaim value exceeds EH errors if present")
-    public void theAgentResolvesAnyOverclaimValueExceedsEHErrorsIfPresent()
+    static void verifyTransfereeHolder(String pLogPrefix)
     {
-        log.info("[STEP] Then the agent resolves any overclaim value exceeds EH errors if present");
-
-        // -- All data rows - absolute XPath from ObjectRepository ---------------------------------------------------
-        String        iRowsXpath = ObjReader.getLocator("iPrelimOverclaimDataRows");
-        List<Locator> iAllRows   = rowsOf(iRowsXpath);
-
-        if (iAllRows.isEmpty())
+        EntsTestData.TransferPair iPair = EntsTestData.currentPair();
+        if (iPair == null || iPair.transferee == null)
         {
-            log.info("[OVERCLAIM-FIX] No data rows found - nothing to fix.");
+            log.info(pLogPrefix + " No current transfer pair - transferee holder check skipped.");
+            return;
+        }
+        String iExpectedHerd = iPair.transferee.herdNumber;
+        String iExpectedName = iPair.transferee.name == null ? "" : iPair.transferee.name;
+        String iLogin        = EntsTestData.loggedInUser();
+
+        if (!isVisible(FARMER_HEADER_XPATH, ConfigManager.getInt("ents.header.seconds", 10)))
+        {
+            log.warning(pLogPrefix + " Farmer Name / Herd Number header not found - transferee holder check skipped.");
             return;
         }
 
-        // -- Parallel lists - one entry per error row found ----------------------------------------------------------
-        List<Integer> iErrorRowIndexes   = new ArrayList<>();
-        List<String>  iBaseParcelNumbers = new ArrayList<>();
-        List<Double>  iEligibleValues    = new ArrayList<>();
-        List<Double>  iOriginalClaimed   = new ArrayList<>();
-
-        for (int i = 0; i < iAllRows.size(); i++)
+        String  iHeader = UiHelpers.byXpath(FARMER_HEADER_XPATH).first().innerText();
+        Matcher iMatch  = FARMER_HEADER_PATTERN.matcher(iHeader == null ? "" : iHeader);
+        if (!iMatch.find())
         {
-            Locator iRow = iAllRows.get(i);
-
-            // -- Only process rows that have a "Value exceeds EH" error ---------------------------------------------
-            if (inRow(iRow, "iPrelimValueExceedsEHError").count() == 0) continue;
-
-            // -- Read parcel number - strip the trailing single-letter split suffix ----------------------------------
-            // DOM: <td class="cdk-column-parcelNo"> A1150100017 <span> B </span>
-            Locator iParcelCells = inRow(iRow, "iPrelimParcelNoCell");
-            if (iParcelCells.count() == 0) continue;
-
-            String iFullParcel = iParcelCells.first().innerText().trim();
-            String iBaseParcel = iFullParcel.replaceAll("\\s+[A-Z]$", "").trim();
-
-            // -- Read eligible (ha) ----------------------------------------------------------------------------------
-            Locator iEligibleCells = inRow(iRow, "iPrelimEligibleCell");
-            if (iEligibleCells.count() == 0) continue;
-
-            double iEligible;
-            try
-            {
-                iEligible = Double.parseDouble(iEligibleCells.first().innerText().trim().replaceAll("[^0-9.]", ""));
-            }
-            catch (NumberFormatException e)
-            {
-                log.warning("[OVERCLAIM-FIX] Row " + (i + 1) + " - could not parse eligible value. Skipping.");
-                continue;
-            }
-
-            // -- Read the pre-filled claimed value from the input ----------------------------------------------------
-            Locator iInputs = inRow(iRow, "iPrelimClaimedInput");
-            if (iInputs.count() == 0) continue;
-
-            String iClaimedRaw = UiHelpers.inputValue(iInputs);
-            if (iClaimedRaw == null || iClaimedRaw.trim().isEmpty()) iClaimedRaw = "0";
-
-            double iClaimed;
-            try
-            {
-                iClaimed = Double.parseDouble(iClaimedRaw.trim().replaceAll("[^0-9.]", ""));
-            }
-            catch (NumberFormatException e)
-            {
-                log.warning("[OVERCLAIM-FIX] Row " + (i + 1) + " - could not parse claimed value '" + iClaimedRaw + "'. Skipping.");
-                continue;
-            }
-
-            iErrorRowIndexes.add(i);
-            iBaseParcelNumbers.add(iBaseParcel);
-            iEligibleValues.add(iEligible);
-            iOriginalClaimed.add(iClaimed);
-
-            log.info("[OVERCLAIM-FIX] Error row " + (i + 1) + " | parcel=" + iFullParcel + " | base=" + iBaseParcel + " | eligible=" + iEligible + " | claimed=" + iClaimed);
-        }
-
-        if (iErrorRowIndexes.isEmpty())
-        {
-            log.info("[OVERCLAIM-FIX] No 'Value exceeds EH' errors found - nothing to fix.");
+            log.warning(pLogPrefix + " Header text not understood ('" + oneLine(iHeader) + "') - transferee holder check skipped.");
             return;
         }
+        String iPortalName = iMatch.group(1).trim();
+        String iPortalHerd = iMatch.group(2).trim();
+        log.info(pLogPrefix + " Logged-in holder: " + iPortalHerd + " (" + iPortalName + ") | transfer sent to "
+                + iExpectedHerd + " (" + iExpectedName + ") | login " + iLogin);
 
-        // -- Group error rows by base parcel number ------------------------------------------------------------------
-        Map<String, List<Integer>> iGroupMap = new LinkedHashMap<>();
-        for (int g = 0; g < iErrorRowIndexes.size(); g++)
+        String iProblem = null;
+        if (!iPortalHerd.equalsIgnoreCase(iExpectedHerd))
         {
-            String iKey = iBaseParcelNumbers.get(g);
-            iGroupMap.computeIfAbsent(iKey, k -> new ArrayList<>()).add(g);
+            iProblem = "login " + iLogin + " opens herd " + iPortalHerd + " (" + iPortalName + "), not " + iExpectedHerd;
+        }
+        else if (ConfigManager.getBool("ents.transferee.name.check", true) && !sameHolder(iExpectedName, iPortalName))
+        {
+            iProblem = "login " + iLogin + " is holder '" + iPortalName + "' of " + iExpectedHerd + ", but the transfer was sent to '"
+                    + iExpectedName + "' (the herd has more than one holder)";
         }
 
-        // -- Compute the assigned value per row ----------------------------------------------------------------------
-        double[] iAssignedValues = new double[iErrorRowIndexes.size()];
-
-        for (Map.Entry<String, List<Integer>> iGroup : iGroupMap.entrySet())
+        if (iProblem != null)
         {
-            String        iParcel    = iGroup.getKey();
-            List<Integer> iGroupIdxs = iGroup.getValue();
-            double        iPool      = iEligibleValues.get(iGroupIdxs.get(0));
-
-            // -- CASE 1: Single parcel - no suffix, not split -------------------------------------------------------
-            if (iGroupIdxs.size() == 1)
-            {
-                iAssignedValues[iGroupIdxs.get(0)] = iPool;
-                log.info("[OVERCLAIM-FIX] Single parcel '" + iParcel + "' | not split | entering eligible=" + iPool);
-                continue;
-            }
-
-            // -- CASE 2 & 3: Split parcel - proportional distribution across N rows ---------------------------------
-            double iTotalClaimed = 0.0;
-            for (int g : iGroupIdxs) iTotalClaimed += iOriginalClaimed.get(g);
-
-            log.info("[OVERCLAIM-FIX] Split parcel '" + iParcel + "' | rows=" + iGroupIdxs.size() + " | pool=" + iPool + " | totalClaimed=" + iTotalClaimed);
-
-            // Edge case - all claimed values are 0, distribute the pool evenly
-            if (iTotalClaimed == 0.0)
-            {
-                double iEven = Math.floor((iPool / iGroupIdxs.size()) * 100.0) / 100.0;
-                for (int g : iGroupIdxs) iAssignedValues[g] = iEven;
-                log.warning("[OVERCLAIM-FIX] Split parcel '" + iParcel + "' - total claimed is 0, distributing evenly: " + iEven + " each.");
-                continue;
-            }
-
-            // Non-last rows: floor to 2dp - guarantees the partial sum never exceeds the pool
-            double iRunningTotal = 0.0;
-            for (int gi = 0; gi < iGroupIdxs.size() - 1; gi++)
-            {
-                int    g           = iGroupIdxs.get(gi);
-                double iProportion = iOriginalClaimed.get(g) / iTotalClaimed;
-                double iShare      = Math.floor(iProportion * iPool * 100.0) / 100.0;
-                iAssignedValues[g] = iShare;
-                iRunningTotal     += iShare;
-                log.info("[OVERCLAIM-FIX]   Row " + (iErrorRowIndexes.get(g) + 1) + " | proportion=" + String.format("%.4f", iProportion) + " | share=" + iShare);
-            }
-
-            // Last row absorbs the remainder - group total = pool exactly, regardless of N
-            int    iLastG     = iGroupIdxs.get(iGroupIdxs.size() - 1);
-            double iLastShare = Math.round((iPool - iRunningTotal) * 100.0) / 100.0;
-            iAssignedValues[iLastG] = iLastShare;
-            log.info("[OVERCLAIM-FIX]   Row " + (iErrorRowIndexes.get(iLastG) + 1) + " | last row remainder=" + iLastShare + " | group total=" + String.format("%.2f", iRunningTotal + iLastShare));
+            EntsTestData.markNotFound(iExpectedHerd, iProblem);
+            throw new IllegalStateException(pLogPrefix + " Wrong transferee login: " + iProblem
+                    + ". The herd is marked BAD in the Test Data Vault; run again for a new pair.");
         }
+    }
 
-        // -- Write the computed values into the DOM ------------------------------------------------------------------
-        // Re-read all rows so the write uses the current DOM after any Angular re-render
-        iAllRows = rowsOf(iRowsXpath);
-
-        for (int g = 0; g < iErrorRowIndexes.size(); g++)
+    // true when every word of the searched name is in the portal name (case and punctuation ignored)
+    private static boolean sameHolder(String pSearched, String pPortal)
+    {
+        Set<String> iPortalWords = new HashSet<>(Arrays.asList(words(pPortal)));
+        String[]    iSearched    = words(pSearched);
+        if (iSearched.length == 0) return true;
+        for (String iWord : iSearched)
         {
-            int     iRowIndex    = iErrorRowIndexes.get(g);
-            String  iValueString = String.format("%.2f", iAssignedValues[g]);
-            Locator iRow         = iAllRows.get(iRowIndex);
-            Locator iInput       = inRow(iRow, "iPrelimClaimedInput").first();
-
-            // Sets the value and fires input, change and blur so the Angular reactive form picks it up
-            // (Selenium needed a JS clear, sendKeys and two dispatchEvent calls for the same result)
-            UiHelpers.setValueByJs(iInput, iValueString);
-
-            log.info("[OVERCLAIM-FIX] Written " + iValueString + " -> row " + (iRowIndex + 1) + " (parcel=" + iBaseParcelNumbers.get(g) + ")");
+            if (!iPortalWords.contains(iWord)) return false;
         }
+        return true;
+    }
 
-        log.info("[OVERCLAIM-FIX] All overclaim errors resolved. Ready to re-submit.");
+    private static String[] words(String pName)
+    {
+        String iClean = pName == null ? "" : pName.toUpperCase(Locale.ROOT).replaceAll("[^A-Z ]", " ").trim();
+        return iClean.isEmpty() ? new String[0] : iClean.split("\\s+");
+    }
+
+    private static String oneLine(String pText)
+    {
+        return pText == null ? "" : pText.replaceAll("\\s+", " ").trim();
     }
 
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : Then the agent resolves any agricultural activity dropdown errors if present
-    // Description   : After clicking Submit on the Preliminary Checks page, rows in the
-    //                 No Agricultural Activity panel that have "Yes, change" selected show a
-    //                 mandatory mat-select dropdown in cdk-column-otherAgActivity.
-    //                 If the dropdown was not pre-filled, Angular marks it ng-invalid /
-    //                 aria-invalid="true" and blocks submission.
+    // Function Name : acceptWithTransferKey
+    // Description   : The transferee's acceptance screens, once the transferee herd (or the individual's own Transfers
+    //                 page) is open:
+    //                   ETF button shown : ETF -> transfer key -> View Transfer Application
+    //                   otherwise        : View Transfer Application (2) -> transfer key -> View Transfer Application
+    //                 then notes, Submit Application to DAFM, T&C, confirm. Same order as every Selenium acceptance step.
     //
-    //                 For every data row in biss-response-agactivity-table:
-    //                   1. Check whether the mat-select in cdk-column-otherAgActivity is empty / invalid
-    //                      (aria-invalid="true" or the mat-mdc-select-empty class)
-    //                   2. If invalid -> JavaScript click on the mat-select to open the CDK overlay panel
-    //                   3. Wait for the overlay to appear
-    //                   4. Click the FIRST mat-option in the panel
-    //                   5. If not invalid -> skip silently
-    //
-    //                 Safe to always include - with no invalid dropdowns it passes silently.
+    //                 08-10-2026 (TC_09_ENTS failed on the key box): the key button was not seen within the 3 s probe, so
+    //                 the View fallback clicked the LAST View of Transfers In Applications. That opened an older
+    //                 application of the transferee (transfer-txee-application-summary), which has no key box, and the
+    //                 key TEXTBOX timed out after 10 s. Now:
+    //                   - the key button gets ents.transfer.key.button.seconds (default 10) to show, as the Transfers
+    //                     page can still be loading when this step starts
+    //                   - after the View fallback the key box must show; if View opened an application instead, the
+    //                     step fails at once with the page address and the transferee login
+    // Parameters    : pTransferKey (String) - key captured by "the transfer key should be captured"
+    //                 pNotes       (String) - transferee notes, e.g. "Approved Test"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 22-04-2026 | Updated: 18-09-2026 (Playwright - jsClick / isVisible, no Thread.sleep)
+    // Date Created  : 30-09-2026 (one copy for TC_05, TC_07 and TC_08) | Updated: 08-10-2026 (key button wait, View check)
     // ***************************************************************************************************************************************************************************************
-    @Then("the agent resolves any agricultural activity dropdown errors if present")
-    public void theAgentResolvesAnyAgriculturalActivityDropdownErrorsIfPresent()
+    static void acceptWithTransferKey(String pTransferKey, String pNotes)
     {
-        log.info("[STEP] Then the agent resolves any agricultural activity dropdown errors if present");
-
-        // -- All data rows scoped to biss-response-agactivity-table -------------------------------------------------
-        // The absolute XPath from ObjectRepository is scoped to the agri activity component, so the Overclaim and
-        // Dual Claim tables are never touched
-        String        iRowsXpath = ObjReader.getLocator("iPrelimAgriActivityDataRows");
-        List<Locator> iAllRows   = rowsOf(iRowsXpath);
-
-        if (iAllRows.isEmpty())
+        if (pTransferKey == null || pTransferKey.isBlank())
         {
-            log.info("[AGRI-FIX] No Agricultural Activity rows found - nothing to fix.");
-            return;
+            throw new IllegalStateException("[TRANSFER] No transfer key captured - the transferor flow must run first.");
         }
 
-        String iFirstOptionXpath = ObjReader.getLocator("iPrelimCdkOverlayFirstOption");
-        int    iFixCount         = 0;
+        int iKeyButtonWait = ConfigManager.getInt("ents.transfer.key.button.seconds", 10);
 
-        for (int i = 0; i < iAllRows.size(); i++)
+        if (isVisible(ObjReader.getLocator("iETFBtn"), iKeyButtonWait))
         {
-            Locator iRow       = iAllRows.get(i);
-            Locator iDropdowns = inRow(iRow, "iPrelimAgriActivityDropdown");
-
-            if (iDropdowns.count() == 0)
-            {
-                log.info("[AGRI-FIX] Row " + (i + 1) + " - no dropdown present. Skipping.");
-                continue;
-            }
-
-            Locator iDropdown = iDropdowns.first();
-
-            // -- Check whether the dropdown is invalid / empty -------------------------------------------------------
-            // Angular marks it aria-invalid="true" when the required field has no selection.
-            // The mat-mdc-select-empty class is a belt-and-braces guard.
-            String iAriaInvalid = UiHelpers.getAttribute(iDropdown, "aria-invalid");
-            String iClasses     = UiHelpers.getAttribute(iDropdown, "class");
-
-            boolean iIsInvalid = "true".equalsIgnoreCase(iAriaInvalid)
-                    || (iClasses != null && iClasses.contains("mat-mdc-select-empty"));
-
-            if (!iIsInvalid)
-            {
-                log.info("[AGRI-FIX] Row " + (i + 1) + " - dropdown already has a value. Skipping.");
-                continue;
-            }
-
-            log.info("[AGRI-FIX] Row " + (i + 1) + " - dropdown is empty/invalid. Selecting first option.");
-
-            // -- Open the CDK overlay panel --------------------------------------------------------------------------
-            // JavaScript click - an Angular mat-select trigger can be intercepted by an overlay
-            UiHelpers.jsClick(iDropdown);
-
-            // -- Wait for the CDK overlay panel to appear ------------------------------------------------------------
-            // The panel is appended to the body as a CDK overlay - not inside the table row
-            if (!isVisible(iFirstOptionXpath, 5))
-            {
-                log.warning("[AGRI-FIX] Row " + (i + 1) + " - CDK overlay did not appear after clicking the dropdown. Skipping.");
-                continue;
-            }
-
-            // -- Click the first mat-option from the overlay panel ---------------------------------------------------
-            String iOptionText = xp(iFirstOptionXpath).innerText().trim();
-            iAction("CLICK", "XPATH", iFirstOptionXpath, null);
-
-            iFixCount++;
-            log.info("[AGRI-FIX] Row " + (i + 1) + " - selected first option: '" + iOptionText + "'");
-
-            // Re-read the rows after the Angular re-render so the next iteration uses the current DOM
-            iAllRows = rowsOf(iRowsXpath);
-        }
-
-        if (iFixCount > 0)
-        {
-            log.info("[AGRI-FIX] Fixed " + iFixCount + " agricultural activity dropdown(s). Ready to re-submit.");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iETFBtn"), null);
+            log.info("[TRANSFER] ETF button clicked.");
         }
         else
         {
-            log.info("[AGRI-FIX] No invalid dropdowns found - submission can proceed.");
+            log.warning("[TRANSFER] 'Access an application using Transfer Key' not shown within " + iKeyButtonWait
+                    + " s - trying View in Transfers In Applications.");
+            iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
+            iAction("CLICK",       "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn2"), null);
+
+            if (!isVisible(ObjReader.getLocator("iTransferKeyInputField"), PROBE_SECONDS))
+            {
+                String iUrl = CommonFunctions.getPage().url();
+                throw new IllegalStateException("[TRANSFER] The transfer key box did not open for key " + pTransferKey
+                        + " (transferee login " + EntsTestData.loggedInUser() + "). The 'Access an application using Transfer Key'"
+                        + " button was not shown within " + iKeyButtonWait + " s, and View in Transfers In Applications opened"
+                        + " this page instead: " + iUrl);
+            }
         }
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), pTransferKey);
+        log.info("[TRANSFER] Transfer key entered: " + pTransferKey);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"),      pNotes);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"),   null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+        log.info("[TRANSFER] Submitted to DAFM with notes: " + pNotes);
     }
 
 
-// ===================================================================================================================================
-//  PRIVATE - UTILITIES
-// ===================================================================================================================================
+    // ===================================================================================================================================
+    //  TRANSFER OUT LIST - search one herd and open it
+    // ===================================================================================================================================
+
+    // Cells of a Transfer Out row (Angular mat-table column classes, checked against the DOM on 22-09-2026)
+    static final String VIEW_LINK_XPATH    = "//td[contains(@class,'mat-column-transfers')]//a[normalize-space()='View']";
+    static final String NAME_CELL_XPATH    = "//td[contains(@class,'mat-column-name')]";
+    static final String EXPIRED_CELL_XPATH = "//td[contains(@class,'mat-column-expired')]";
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : xp
-    // Description   : Builds a Playwright Locator from an XPath string, pinned to the FIRST match so a locator that
-    //                 matches several elements behaves like Selenium findElement.
-    // Parameters    : pXpath (String) - XPath expression
-    // Returns       : Locator
+    // Function Name : transferOutAllRowsXpath
+    // Description   : XPath of EVERY Transfer Out row of one herd, expired or not: rows whose Herd No. cell is exactly
+    //                 the herd and that have a View link.
+    //                 One herd can have several rows, one per holder. Seen 22-09-2026 for D3990193: "Thomas Morris"
+    //                 (Expired icon shown) and "Jean Doolaghty" (not expired). Both rows hold the same herd number.
+    // Parameters    : pHerd (String) - herd number
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 18-09-2026
+    // Date Created  : 22-09-2026
     // ***************************************************************************************************************************************************************************************
-    private static Locator xp(String pXpath)
+    static String transferOutAllRowsXpath(String pHerd)
     {
-        return UiHelpers.byXpath(pXpath).first();
+        return "//tr[." + VIEW_LINK_XPATH + "]"
+                + "[.//td[contains(@class,'mat-column-herdNo')][normalize-space()='" + pHerd + "']]";
     }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : countOf
-    // Description   : How many elements match right now - replacement for driver.findElements(...).size().
-    //                 Does not wait, exactly like Selenium findElements.
-    // Parameters    : pXpath (String) - XPath expression
-    // Returns       : int - number of matches
+    // Function Name : transferOutRowXpath
+    // Description   : XPath of the NOT-EXPIRED Transfer Out row(s) of one herd. The row to open, name to read and View
+    //                 link to click always come from here.
+    //                 A row is expired when its Expired cell holds the red icon
+    //                   <mat-icon aria-label="red check mark for expired"> do_not_disturb_on </mat-icon>
+    //                 and not expired when that cell is empty.
+    //                 Clicking "the first View link" is not safe either: until the search result arrives the list still
+    //                 shows unfiltered rows, including TRN rows (seen 22-09-2026: a click opened TRN 26D0957T).
+    // Parameters    : pHerd (String) - herd number
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 18-09-2026
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
     // ***************************************************************************************************************************************************************************************
-    private static int countOf(String pXpath)
+    static String transferOutRowXpath(String pHerd)
     {
-        return UiHelpers.byXpath(pXpath).count();
+        return transferOutAllRowsXpath(pHerd) + "[not(." + EXPIRED_CELL_XPATH + "//mat-icon)]";
     }
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : rowsOf
-    // Description   : Snapshot of every matching row - replacement for driver.findElements(By.xpath(...)).
-    //                 Each entry can be scoped further with inRow(...).
-    // Parameters    : pXpath (String) - XPath expression for the rows
-    // Returns       : List<Locator> - one Locator per row (empty when nothing matches)
+    // Function Name : searchTransferOut
+    // Description   : Types the herd in the Transfer Out search box, clicks Search and waits until a row for THAT herd
+    //                 is shown (up to ents.search.seconds). Returns false when it never appears.
+    //                 Then goes through every row of the herd and logs Name + Expired for each, so the log shows which
+    //                 row will be used. Expired rows are not rejected here - see activeTransferOutRows.
+    // Parameters    : pHerd (String) - herd number
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 18-09-2026
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (logs every row)
     // ***************************************************************************************************************************************************************************************
-    private static List<Locator> rowsOf(String pXpath)
+    static boolean searchTransferOut(String pHerd)
     {
-        return UiHelpers.byXpath(pXpath).all();
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : inRow
-    // Description   : Resolves a row-scoped Object Repository XPath (".//td[...]") against one row -
-    //                 the Playwright equivalent of WebElement.findElements(By.xpath(".//...")).
-    // Parameters    : pRow        (Locator) - the row
-    //                 pLocatorKey (String)  - ObjectRepository key holding a relative XPath
-    // Returns       : Locator - all matches inside that row
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static Locator inRow(Locator pRow, String pLocatorKey)
-    {
-        return pRow.locator("xpath=" + ObjReader.getLocator(pLocatorKey));
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : isVisible
-    // Description   : Replacement for the Selenium WebDriverWait + visibilityOfElementLocated helper.
-    //                 Waits up to pSeconds for the FIRST match to become visible; returns false on timeout.
-    // Parameters    : pXpath   (String) - XPath expression
-    //                 pSeconds (int)    - how long to wait
-    // Returns       : boolean - true when visible within the time limit
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static boolean isVisible(String pXpath, int pSeconds)
-    {
-        return UiHelpers.isVisible(xp(pXpath), pSeconds);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : pause
-    // Description   : Fixed wait - replacement for Thread.sleep(ms), same duration.
-    // Parameters    : pMilliseconds (long)
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 18-09-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void pause(long pMilliseconds)
-    {
-        CommonFunctions.getPage().waitForTimeout(pMilliseconds);
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : printDbResultTable
-    // Description   : Prints the full DB result set to the console as a formatted table.
-    //                 Called after every BISS_DATA query inside recoverWithNewHerd so you can
-    //                 see exactly what was returned (or that nothing was returned) for each offset.
-    // Parameters    : pQueryLabel - label to identify which query this result belongs to
-    //                 pRows       - the result rows from DBRouter.getRows()
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date          : 20-04-2026
-    // ***************************************************************************************************************************************************************************************
-    private void printDbResultTable(String pQueryLabel, List<Map<String, Object>> pRows)
-    {
-        if (pRows == null || pRows.isEmpty())
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+        if (!isVisible(transferOutAllRowsXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 8)))
         {
-            log.info("[DB-RESULT] " + pQueryLabel + " - 0 rows returned");
+            return false;
+        }
+
+        List<Locator> iRows = xp(transferOutAllRowsXpath(pHerd)).all();
+        for (int i = 0; i < iRows.size(); i++)
+        {
+            Locator iRow     = iRows.get(i);
+            boolean iExpired = iRow.locator("xpath=." + EXPIRED_CELL_XPATH + "//mat-icon").count() > 0;
+            String  iName    = "";
+            try
+            {
+                iName = iRow.locator("xpath=." + NAME_CELL_XPATH).first().innerText().trim().replaceAll("\\s+", " ");
+            }
+            catch (Exception iEx)
+            {
+                iName = "?";
+            }
+            log.info("[TRANSFER] " + pHerd + " row " + (i + 1) + "/" + iRows.size() + ": Name='" + iName + "' | "
+                    + (iExpired ? "EXPIRED - skipped" : "not expired"));
+        }
+        return true;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : activeTransferOutRows
+    // Description   : Number of NOT-expired rows of the herd currently on screen (call after searchTransferOut).
+    //                 0 means every row of the herd is expired.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static int activeTransferOutRows(String pHerd)
+    {
+        return countOf(transferOutRowXpath(pHerd));
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transferOutName
+    // Description   : Name cell of the first NOT-expired row of the herd, or "" when there is none
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String transferOutName(String pHerd)
+    {
+        String iCell = transferOutRowXpath(pHerd) + NAME_CELL_XPATH;
+        try
+        {
+            if (countOf(iCell) > 0) return xp(iCell).first().innerText().trim().replaceAll("\\s+", " ");
+        }
+        catch (Exception iEx)
+        {
+            log.warning("[TRANSFER] Could not read the portal name of " + pHerd + ": " + iEx.getMessage());
+        }
+        return "";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : clickTransferOutView
+    // Description   : Clicks View in the first NOT-expired row of the herd (the list must already show it)
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void clickTransferOutView(String pHerd)
+    {
+        if (activeTransferOutRows(pHerd) == 0)
+        {
+            throw new IllegalStateException("[TRANSFER] Every Transfer Out row of herd " + pHerd + " is marked expired - nothing to open.");
+        }
+        iAction("CLICK", "XPATH", "(" + transferOutRowXpath(pHerd) + VIEW_LINK_XPATH + ")[1]", null);
+        log.info("[TRANSFER] Opened herd " + pHerd + " ('" + transferOutName(pHerd) + "' row) from Transfer Out.");
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openTransferOutHerd
+    // Description   : searchTransferOut + clicks View in the first NOT-expired row of that herd. Fails with the herd
+    //                 number and agent in the message when the herd is not in the list or every row is expired.
+    // Parameters    : pHerd (String) - herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (skips expired rows)
+    // ***************************************************************************************************************************************************************************************
+    static void openTransferOutHerd(String pHerd)
+    {
+        if (!searchTransferOut(pHerd))
+        {
+            throw new IllegalStateException("[TRANSFER] Herd " + pHerd + " is not in the Transfer Out list of " + EntsTestData.loggedInUser() + " (waited " + ConfigManager.getInt("ents.search.seconds", 8) + " s).");
+        }
+        clickTransferOutView(pHerd);
+    }
+
+
+    // ===================================================================================================================================
+    //  NAVIGATION
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : openBissMyClientsTransfers
+    // Description   : From the portal home after a login: BISS application -> Home -> My Clients -> Transfers tab.
+    //                 Same clicks as the Selenium "logs in as transferee agent" / "re-logs in as the transferor agent" steps.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void openBissMyClientsTransfers()
+    {
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAppSearchBar"), null);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppSearchBar"), "Basic Income Support for Sustainability");
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iBissLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK",   "XPATH", TRANSFERS_TAB_XPATH, null);
+    }
+
+    // ===================================================================================================================================
+    //  TRANSFEREE SEARCH DIALOG
+    // ===================================================================================================================================
+
+    // Heading shown when the transferee search returns more than one row, e.g. "2 matches found. Please select one:"
+    static final String TRANSFEREE_MATCHES_HEADING_XPATH = "//h3[contains(normalize-space(),'matches found')]";
+
+    // Result rows of the "matches found" table (first table after the heading)
+    static final String TRANSFEREE_MATCH_ROWS_XPATH = TRANSFEREE_MATCHES_HEADING_XPATH + "/following::table[1]//tbody/tr";
+
+    // Date cell of a row = the td holding a date. Its text is "14/09/2015 - " when open, "13/03/2015 - 13/09/2015" when ended.
+    // normalize-space(substring-after(.,'-')) is empty only when nothing follows the dash, i.e. there is no End Date.
+    static final String OPEN_ROW_FILTER  = "[td[contains(.,'/')][normalize-space(substring-after(.,'-'))='']]";
+    static final String ENDED_ROW_FILTER = "[td[contains(.,'/')][normalize-space(substring-after(.,'-'))!='']]";
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : transfereeOpenMatchSelectXpath
+    // Description   : XPath of the Select button on the transferee row of pHerd that has no End Date.
+    //                 Example for D2681103:
+    //                 //h3[contains(normalize-space(),'matches found')]/following::table[1]//tbody/tr
+    //                   [.//span[normalize-space()='D2681103']][td[contains(.,'/')][normalize-space(substring-after(.,'-'))='']]
+    //                   //button[normalize-space()='Select']
+    // Parameters    : pHerd (String) - transferee herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 24-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String transfereeOpenMatchSelectXpath(String pHerd)
+    {
+        return TRANSFEREE_MATCH_ROWS_XPATH
+                + "[.//span[normalize-space()='" + pHerd + "']]"
+                + OPEN_ROW_FILTER
+                + "//button[normalize-space()='Select']";
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : selectOpenTransfereeMatch
+    // Description   : Call right after the transferee dialog Search button (iTransferDialogSearchBtn).
+    //                   - No "matches found" heading (single match): does nothing, the flow goes on as before.
+    //                   - "N matches found. Please select one:": clicks Select on the row of pHerd with NO End Date.
+    //                   - Every row of pHerd has an End Date: fails the step with the row count, because selecting an
+    //                     ended holder would create the transfer against the wrong customer.
+    //                   - More than one open row: selects the first one and logs a warning.
+    // Parameters    : pHerd (String) - transferee herd number
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 24-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static void selectOpenTransfereeMatch(String pHerd)
+    {
+        if (!isVisible(TRANSFEREE_MATCHES_HEADING_XPATH, PROBE_SECONDS))
+        {
+            log.info("[TRANSFER] Transferee search: single match for " + pHerd + " - nothing to select.");
             return;
         }
 
-        StringBuilder iSb = new StringBuilder();
-        iSb.append("\n[DB-RESULT] ").append(pQueryLabel)
-                .append(" - ").append(pRows.size()).append(" row(s):\n");
+        String iHeading = xp(TRANSFEREE_MATCHES_HEADING_XPATH).first().innerText().trim();
+        String iHerdRows = TRANSFEREE_MATCH_ROWS_XPATH + "[.//span[normalize-space()='" + pHerd + "']]";
+        int iAllRows    = countOf(iHerdRows);
+        int iEndedRows  = countOf(iHerdRows + ENDED_ROW_FILTER);
+        String iSelectXpath = transfereeOpenMatchSelectXpath(pHerd);
+        int iOpenRows   = countOf(iSelectXpath);
 
-        // Build the column list from the first row keys
-        Map<String, Object> iFirstRow = pRows.get(0);
-        String[] iCols = iFirstRow.keySet().toArray(new String[0]);
+        log.info("[TRANSFER] Transferee search: '" + iHeading + "' | herd " + pHerd + " rows=" + iAllRows
+                + " open=" + iOpenRows + " ended=" + iEndedRows);
 
-        // Compute the display width per column (capped at 40 chars to keep the table readable)
-        int[] iWidths = new int[iCols.length];
-        for (int c = 0; c < iCols.length; c++)
+        if (iOpenRows == 0)
         {
-            iWidths[c] = iCols[c].length();
-            for (Map<String, Object> iRow : pRows)
-            {
-                String iVal = Objects.toString(iRow.get(iCols[c]), "null");
-                if (iVal.length() > iWidths[c]) iWidths[c] = Math.min(iVal.length(), 40);
-            }
+            throw new RuntimeException("[TRANSFER] Transferee " + pHerd + ": '" + iHeading + "' but no row without an End Date ("
+                    + iAllRows + " row(s) for this herd, " + iEndedRows + " ended). XPath: " + iSelectXpath);
+        }
+        if (iOpenRows > 1)
+        {
+            log.warning("[TRANSFER] Transferee " + pHerd + " has " + iOpenRows + " rows without an End Date - selecting the first.");
         }
 
-        // Build the separator and header lines
-        StringBuilder iSep = new StringBuilder("  +-");
-        StringBuilder iHdr = new StringBuilder("  | ");
-        for (int c = 0; c < iCols.length; c++)
-        {
-            iSep.append("-".repeat(iWidths[c])).append("-+-");
-            iHdr.append(padRight(iCols[c], iWidths[c])).append(" | ");
-        }
-
-        iSb.append(iSep).append("\n")
-                .append(iHdr).append("\n")
-                .append(iSep).append("\n");
-
-        // Build the data rows
-        for (Map<String, Object> iRow : pRows)
-        {
-            StringBuilder iLine = new StringBuilder("  | ");
-            for (int c = 0; c < iCols.length; c++)
-            {
-                String iVal = Objects.toString(iRow.get(iCols[c]), "null");
-                if (iVal.length() > 40) iVal = iVal.substring(0, 37) + "...";
-                iLine.append(padRight(iVal, iWidths[c])).append(" | ");
-            }
-            iSb.append(iLine).append("\n");
-        }
-
-        iSb.append(iSep);
-        log.info(iSb.toString());
+        iAction("CLICK", "XPATH", "(" + iSelectXpath + ")[1]", null);
+        log.info("[TRANSFER] Transferee " + pHerd + ": Select clicked on the row without an End Date.");
     }
 
-    private String padRight(String s, int n)
+    // Red message in the Transferee Search dialog when herd + name match nobody (the name must match the portal exactly)
+    static final String TRANSFEREE_NO_MATCH_XPATH = "//*[contains(normalize-space(text()),'No transferee matches were found')]";
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : searchTransferee
+    // Description   : Fills the open Transferee Search dialog (herd + name), clicks its Search button and reads the result:
+    //                   - "No transferee matches were found": returns false and leaves the dialog open, so the caller can
+    //                     type another herd and search again in the same dialog
+    //                   - "N matches found. Please select one:": selects the row without an End Date
+    //                     (selectOpenTransfereeMatch) and returns true
+    //                   - neither within PROBE_SECONDS: a single match was taken by the dialog, returns true
+    //                 One probe covers both messages, so the single-match case waits no longer than before.
+    //                 The dialog itself must already be open (iTransferTypeSearchBtn clicked by the caller).
+    // Parameters    : pHerd (String) - transferee herd | pName (String) - transferee name as typed in the dialog
+    // Returns       : boolean - true = a transferee was selected, false = no match
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 02-10-2026
+    // ***************************************************************************************************************************************************************************************
+    static boolean searchTransferee(String pHerd, String pName)
     {
-        if (s == null) s = "";
-        if (s.length() >= n) return s.substring(0, n);
-        return s + " ".repeat(n - s.length());
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeHerdField"), pHerd);
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfereeNameField"), pName);
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransferDialogSearchBtn"), null);
+        log.info("Transferee searched: " + pName + " (" + pHerd + ")");
+
+        boolean iAnyMessage = isVisible(TRANSFEREE_NO_MATCH_XPATH + " | " + TRANSFEREE_MATCHES_HEADING_XPATH, PROBE_SECONDS);
+
+        if (iAnyMessage && countOf(TRANSFEREE_NO_MATCH_XPATH) > 0)
+        {
+            log.warning("[TRANSFER] Transferee search: 'No transferee matches were found' for " + pHerd + " / '" + pName + "'.");
+            return false;
+        }
+
+        if (iAnyMessage && countOf(TRANSFEREE_MATCHES_HEADING_XPATH) > 0)
+        {
+            selectOpenTransfereeMatch(pHerd);
+        }
+        else
+        {
+            log.info("[TRANSFER] Transferee search: single match for " + pHerd + " - nothing to select.");
+        }
+        return true;
     }
 }
