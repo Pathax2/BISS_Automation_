@@ -1,248 +1,125 @@
-Feature: BISS Agent completes an end-to-end application journey for a PARTNERSHIP herd
+// ===================================================================================================================================
+// File          : LoginScreens.java
+// Package       : commonFunctions
+// Description   : Keycloak screens that can appear between two login steps, shared by every BISS and ENTS login
+//                 (TC_03, TC_18, TC_01_Login, EntsSession.loginAs).
+//
+//                 skipNewUserScreens - the new-user introduction screens ("Next" button, id=next, up to 7 screens).
+//                   They were handled only after the PIN screen. On 06-10-2026 they appeared straight after the password
+//                   Login click, before the OTP box, and the login failed waiting for the OTP box. Every login now calls
+//                   this right after the password Login click (and the re-logins also after the PIN Login click).
+//
+//                 No extra wait on a normal login: the method waits for the FIRST of the screens that can follow
+//                 (Next, PIN, OTP / TOTP, mobile number, Terms and Conditions, a Keycloak message such as Account
+//                 Expired) and returns at once when it is not the Next screen.
+//
+//                 Settings (application.properties):
+//                   login.screen.wait.seconds  - how long to wait for the next login screen (default 15)
+//                   login.newuser.next.max     - most Next clicks before giving up (default 10)
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 06-10-2026
+// ===================================================================================================================================
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # TC_03_PART - Partnership version of TC_03 (agent) and TC_03_IND (individual). Created: 08-10-2026
-  #
-  # Purpose:
-  #   The same single end-to-end BISS journey as TC_03, run for a PARTNERSHIP herd (herd number contains FP,
-  #   e.g. IFP10100) by the agent who manages it.
-  #   - Login and portal navigation
-  #   - Farmer dashboard access and side navigation tabs
-  #   - Start application, Active Farmer, Scheme Selection
-  #   - Land Details validations (invalid / archived / already claimed parcel, add parcel, plot, map parcel,
-  #     edit / delete / undo parcel, delete plot, mandatory information)
-  #   - GAEC 7, ACRES (if shown), Eco, Review and Submit
-  #   - Correspondence document upload
-  #
-  # Test data (no herd or login is typed in this file):
-  #   The test case ID contains _PART, so Hooks takes the herd from DATA "List of not started partnership herds"
-  #   (vault pool BISS_PARTNERSHIP, filled by TC_00_DATA) and the agent from INET "Get Login Id for herd" -
-  #   exactly the TC_03 mechanism with the partnership query. A replacement herd (blacklisted, expired agent,
-  #   not in My Clients) is also a partnership herd (Hooks.agentHerdQueryLabel).
-  #
-  # Step definitions: every step is a TC_03 / TC_06 step (the agent wording). No partnership-only step yet.
-  #   Partnership screens that TC_03 does not have (for example choosing which partner herd a parcel belongs to)
-  #   are added after the first dry run.
-  #
-  # Author: Aniket Pathare | aniket.pathare@government.ie
-  # --------------------------------------------------------------------------------------------------------------------
+package commonFunctions;
 
-  Background:
-    Given the agent user is on the login page
-    When the agent logs into the application with valid credentials and OTP
-    And the agent opens the "Basic Income Support for Sustainability" application
-    Then the agent should land on the BISS Home page
-    And the agent navigates to the "Home" and "My Clients" Left Menu Link
+import com.microsoft.playwright.Locator;
+import utilities.ConfigManager;
+import utilities.ObjReader;
 
-  @regression @e2e @biss @partnership
-  Scenario: AT-E2E-PART-01 - Agent completes the end-to-end BISS application flow for a partnership herd
+public final class LoginScreens
+{
+    // Keycloak message box (Account Expired, Invalid username or password, ...)
+    private static final String FEEDBACK_XPATH = "//*[contains(@class,'kc-feedback-text')]";
 
-    # -----------------------------------------
-    # Farmer selection and dashboard validation
-    # -----------------------------------------
-    When the agent opens a farmer dashboard using herd data
-    Then the farmer dashboard should be displayed
+    // Mobile number form shown after the PIN for some users (same XPath as TC_03 / EntsSession)
+    private static final String MOBILE_NUMBER_XPATH = "//form[@id='kc-totp-login-form']//input[@id='mobile_number']";
 
-    # -----------------------------------------
-    # Side navigation validation
-    # -----------------------------------------
-    When the agent navigates through the farmer side navigation tabs
-      | Applications / Payments           |
-      | Farm Details                      |
-      | Entitlements / Usage              |
-      | Transfers                         |
-      | NR-CISYF                          |
-      | My Correspondence                 |
-      | Farmer Dashboard                  |
-    Then each requested side navigation tab should open successfully
+    private LoginScreens() { }
 
-    # -----------------------------------------
-    # Application start
-    # -----------------------------------------
-    When the agent deletes any existing draft if present
-    And the agent starts a new BISS application
-    Then the Active Farmer step should be displayed
 
-    # -----------------------------------------
-    # Active Farmer step
-    # -----------------------------------------
-    When the agent selects "Making Hay/Silage/Haylage" in the Active Farmer step
-    And the agent proceeds to the next application step
-    Then the Scheme Selection step should be displayed
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : skipNewUserScreens
+    // Description   : Waits for the next login screen and, while it is a new-user introduction screen, clicks Next.
+    //                 Returns as soon as a PIN, OTP / TOTP, mobile number, Terms and Conditions or Keycloak message
+    //                 screen is shown, so a login without the new-user screens loses no time.
+    //                 When none of these screens shows within login.screen.wait.seconds, it logs a warning and returns;
+    //                 the caller's next action then fails with its own message.
+    // Parameters    : pLogPrefix (String) - log prefix, e.g. "[LOGIN]"
+    // Returns       : int - how many times Next was clicked (0 on a normal login)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 06-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static int skipNewUserScreens(String pLogPrefix)
+    {
+        int    iWait     = ConfigManager.getInt("login.screen.wait.seconds", 5);
+        int    iMax      = ConfigManager.getInt("login.newuser.next.max", 5);
+        String iNext     = ObjReader.getLocator("iNextBtnNewUser");
+        String iAnyNext  = String.join(" | ",
+                iNext,
+                ObjReader.getLocator("iPinForm"),
+                ObjReader.getLocator("iOPTtxtbox"),
+                ObjReader.getLocator("iTOTPtextbox"),
+                ObjReader.getLocator("iAcceptTermsCheckbox"),
+                MOBILE_NUMBER_XPATH,
+                FEEDBACK_XPATH);
 
-    # -----------------------------------------
-    # Scheme Selection step
-    # -----------------------------------------
-    When the agent selects the "Organics" scheme
-    And the agent proceeds to the next application step
-    And the agent accepts the scheme selection acknowledgement if displayed
-    Then the Land Details step should be displayed
+        int iClicks = 0;
+        while (true)
+        {
+            if (!UiHelpers.isVisible(UiHelpers.byXpath(iAnyNext), iWait))
+            {
+                CommonFunctions.log.warning(pLogPrefix + " No login screen (Next, PIN, OTP, Terms, message) shown within "
+                        + iWait + " s" + (iClicks == 0 ? "." : " after " + iClicks + " Next click(s)."));
+                return iClicks;
+            }
 
-    # -----------------------------------------
-    # Land Details - invalid parcel validation
-    # -----------------------------------------
-    When the agent attempts to add parcel "Invalid789"
-    Then the invalid parcel warning message should be displayed
-    And the add parcel dialog should remain available for correction or cancellation
+            if (!shownNow(iNext)) break;
 
-    # -----------------------------------------
-    # Land Details - archived parcel validation
-    # -----------------------------------------
-    When the agent attempts to add archived parcel "H19112055"
-    Then the archived parcel warning should be displayed if applicable
+            if (iClicks >= iMax)
+            {
+                throw new IllegalStateException(pLogPrefix + " The new-user Next screen is still shown after " + iMax
+                        + " clicks (login.newuser.next.max).");
+            }
 
-    # -----------------------------------------
-    # Land Details - add valid parcel
-    # -----------------------------------------
-    When the agent adds parcel "A1190600016" with claimed area "7"
-    And the agent sets parcel ownership status to "Owned"
-    And the agent sets parcel use to "Apples"
-    And the agent sets parcel organic status to "Conventional"
-    Then the parcel should be added successfully to Land Details
+            CommonFunctions.iAction("CLICK", "XPATH", iNext, null);
+            iClicks++;
+            CommonFunctions.log.info(pLogPrefix + " New-user screen - Next clicked (" + iClicks + ")");
+            waitUntilGone(iNext);
+        }
 
-    # -----------------------------------------
-    # Land Details - claimed parcel validation
-    # -----------------------------------------
-    When the agent attempts to add parcel "A1190600016" again
-    Then the already claimed parcel warning should be displayed if applicable
+        if (iClicks > 0)
+        {
+            CommonFunctions.log.info(pLogPrefix + " New-user screens done - Next clicked " + iClicks + " time(s).");
+        }
+        return iClicks;
+    }
 
-    # -----------------------------------------
-    # Land Details - add plot
-    # -----------------------------------------
-    When the agent adds a plot with the following details
-      | county            | Donegal            |
-      | townland          | Aghadachor - E22301 |
-      | plotReference     | T12345679          |
-      | ownershipStatus   | Owned              |
-      | organicStatus     | Conventional       |
-      | claimedArea       | 15                 |
-      | plotUse           | Blackcurrants      |
-      | mapChangeOption   | Submit Paper Map By Post |
-    Then the plot should be added successfully to Land Details
+    // true when the first match is visible right now (no waiting)
+    private static boolean shownNow(String pXpath)
+    {
+        try
+        {
+            return UiHelpers.byXpath(pXpath).first().isVisible();
+        }
+        catch (RuntimeException iGone)
+        {
+            return false;
+        }
+    }
 
-    # -----------------------------------------
-    # Land Details - add parcel from GIS map
-    # -----------------------------------------
-    When the agent adds a parcel from the GIS map with the following details
-      | county            | Clare              |
-      | townland          | Addergoole - C11501 |
-      | claimedArea       | 4                  |
-      | ownershipStatus   | Owned              |
-      | parcelUse         | Beetroot               |
-      | organicStatus     | Conventional       |
-    Then the GIS-selected parcel should be added successfully
-
-    # -----------------------------------------
-    # Land Details - add parcel to edit/delete
-    # -----------------------------------------
-    When the agent adds parcel "J1650300004" with claimed area "3"
-    And the agent sets parcel ownership status to "Owned"
-    And the agent sets parcel use to "Clover"
-    And the agent sets parcel organic status to "Conventional"
-    Then parcel "J1650300004" should be available in Land Details
-
-    # -----------------------------------------
-    # Land Details - edit parcel using side drawer
-    # -----------------------------------------
-    When the agent opens parcel "J1650300004" in the side drawer
-    And the agent raises an EH change request with reason "Test Reason"
-    And the agent changes parcel use to "Coriander"
-    And the agent saves the parcel changes
-    Then the parcel update should be saved successfully
-
-    # -----------------------------------------
-    # Land Details - delete and undo parcel
-    # -----------------------------------------
-    When the agent deletes parcel "J1650300004"
-    Then parcel "J1650300004" should be marked for deletion
-    When the agent undoes deletion for parcel "J1650300004"
-    Then parcel "J1650300004" should be restored in Land Details
-
-    # -----------------------------------------
-    # Land Details - add plot to delete later
-    # -----------------------------------------
-    When the agent adds a plot with the following details
-      | county            | Donegal              |
-      | townland          | Aghadowey - E18601   |
-      | plotReference     | T87654322            |
-      | ownershipStatus   | Owned                |
-      | organicStatus     | Conventional         |
-      | claimedArea       | 10                   |
-      | plotUse           | Apples               |
-      | mapChangeOption   | Submit Paper Map By Post |
-    Then plot "T87654322" should be available in Land Details
-
-    # -----------------------------------------
-    # Land Details - delete plot
-    # -----------------------------------------
-    When the agent deletes parcel or plot "T87654322"
-    And the agent confirms the deletion
-    #Then plot "T87654321" should be marked for deletion
-
-    # -----------------------------------------
-    # Land Details - complete mandatory information
-    # -----------------------------------------
-    When the agent completes all mandatory information in Land Details
-    And the agent proceeds to the next application step
-    Then the next application step should open successfully
-
-    #----------------------------------------------------------
-    # ISLAND PAGE
-    #-------------------------------------------------------------
-    And the agent reaches on Island Stepper
-
-    # -----------------------------------------
-    # GAEC 7 step
-    # -----------------------------------------
-    When the agent opens the "GAEC 7" step
-    And the agent proceeds from GAEC 7
-    And the agent handles any GAEC 7 continue action if present
-    Then the application should move beyond the GAEC 7 step
-
-    # -----------------------------------------
-    # ACRES step
-    # -----------------------------------------
-    And the agent handles the ACRES step if present
-    #Below Steps explain what is happening
-    #When the agent opens the "ACRES" step
-    #And the agent selects "Yes, rescore" on panel 1
-    #And the agent continues panel 1
-    #Then the ACRES step should be completed successfully
-
-    # -----------------------------------------
-    # Eco step
-    # -----------------------------------------
-    When the agent opens the "Eco" step
-    And the agent selects eco AP options "" and ""
-    Then the Eco step should be completed successfully
-
-    # -----------------------------------------
-    # Eco opt-out validation
-    # -----------------------------------------
-    #When the agent returns to the "Scheme Selection" step
-    #And the agent opens the "Eco" scheme card
-    #And the agent proceeds to the next application step
-    #And the agent accepts the acknowledgement if displayed
-    #Then the application should continue successfully after eco validation
-
-    # -----------------------------------------
-    # Review and Submit
-    # -----------------------------------------
-    When the agent opens the "Review & Submit" step
-    And the agent completes all review page next actions
-    And the agent accepts the Terms and Conditions
-    And the agent submits the application
-    And the agent confirms the application submission
-    Then the application should be submitted successfully
-
-    # -----------------------------------------
-    # Correspondence and upload document
-    # -----------------------------------------
-    When the agent navigates through the farmer side navigation tabs
-      | My Correspondence                 |
-    Then each requested side navigation tab should open successfully
-    Then the agent clicks on the " Upload a document" stepper button
-      #When Agent expand Upload Documents Accordion
-    And the agent selects "Commonage Evidence" from the Document type dropdown
-    And the agent uploads a document in Correspondence
-    Then the document should be uploaded successfully in Correspondence
+    // After a Next click the same button is on the next screen too: wait briefly for the page to change so the
+    // loop does not see the old button again. A page that keeps the button in place simply ends the wait.
+    private static void waitUntilGone(String pXpath)
+    {
+        Locator iButton = UiHelpers.byXpath(pXpath).first();
+        try
+        {
+            UiHelpers.waitHidden(iButton, 1);
+        }
+        catch (RuntimeException iStillShown)
+        {
+            // same element kept between screens - the loop checks it again
+        }
+    }
+}
