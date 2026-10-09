@@ -1,38 +1,52 @@
--- 1. Find the transfer detail tables ("TRN" = transfer, as in TSEN_TRN_STATUS_CODES)
-SELECT table_name FROM all_tables
-WHERE  table_name LIKE 'TDEN%TRN%'
-OR     table_name LIKE 'TDEN_INET%'
-OR     table_name LIKE '%TRANSFER%'
-ORDER  BY table_name;
-
--- 2. Every ETF partner: linked herds with more than 10 ents, and how many have no in-flight 2026 transfer
-WITH apps AS (
-  SELECT iap_from_herd herd,
-         MAX(CASE WHEN iap_status_code IN (3, 4, 5) THEN 1 ELSE 0 END) busy
-  FROM   tden_inet_application
-  WHERE  iap_scheme_year = 2026
-  AND    iap_group_code  = 2
-  GROUP  BY iap_from_herd
-),
-ents AS (
-  SELECT ohs_herd herd
-  FROM   tden_owner_history, vwen_ent_sets
-  WHERE  ohs_scheme_year = ent_scheme_year
-  AND    ohs_own_id      = ent_own_id
-  AND    ohs_hist_no     = ent_hist_no
-  AND    ent_scheme_year = 2026
-  GROUP  BY ohs_herd
-  HAVING SUM(ent_num_ents) > 10
+-- =====================================================================================================
+-- 1) TC_11_ENTS transferor pool - "ENTS ETF partner herds" + NEW: hel_txee_ents_allowed > 10
+--    Partner login: agr15512   Scheme year: 2026   (change both below if needed)
+-- =====================================================================================================
+SELECT *
+FROM (
+    SELECT DISTINCT
+           ve.herd_id                         herd_number,
+           (SELECT MAX(initcap(TRIM(cd.payee_name))) KEEP (DENSE_RANK LAST ORDER BY cd.start_date NULLS FIRST)
+            FROM   vwco_ems_client_details cd
+            WHERE  cd.herd_number = ve.herd_id
+            AND    NVL(cd.death_indicator, 'N') = 'N') herd_name,
+           ve.herd_ols_login                  individual_login,
+           l.hel_etf_no                       etf_no,
+           l.hel_txor_ents_allowed            txor_allowed,
+           l.hel_txee_ents_allowed            txee_allowed,
+           u.username                         etf_username
+    FROM   vwco_ents_herd_abls_rpt ve
+    JOIN   tden_herd_etf_link l          ON l.hel_herd_no = ve.herd_id
+    JOIN   vw_sso_roles_for_user_ents u  ON u.businessid  = l.hel_etf_no
+    WHERE  ve.cust_type = 'Individual'
+    AND    ve.herd_ols_login IS NOT NULL
+    AND    REGEXP_LIKE(ve.herd_id, '^[A-Z]')
+    AND    EXISTS (SELECT 1 FROM vwco_ems_client_details dn
+                   WHERE dn.herd_number = ve.herd_id AND NVL(dn.death_indicator, 'N') = 'N')
+    AND    l.hel_scheme_year       = 2026
+    AND    l.hel_grantor_type      = 1
+    AND    l.hel_txor_ents_allowed > 10
+    AND    l.hel_txee_ents_allowed > 10                     -- NEW
+    AND    LOWER(u.username)       = LOWER('agr15512')
 )
-SELECT LOWER(u.username) etf_login,
-       COUNT(DISTINCT l.hel_herd_no) herds,
-       COUNT(DISTINCT CASE WHEN NVL(a.busy, 0) = 0 THEN l.hel_herd_no END) free_herds
-FROM   tden_herd_etf_link l
-JOIN   vw_sso_roles_for_user_ents u ON u.businessid = l.hel_etf_no
-JOIN   ents e      ON e.herd = l.hel_herd_no
-LEFT   JOIN apps a ON a.herd = l.hel_herd_no
-WHERE  l.hel_scheme_year       = 2026
+WHERE herd_name IS NOT NULL
+AND   REGEXP_LIKE(herd_name, '^[[:alpha:]-]+ [[:alpha:]-]+$')   -- two-word names, same as the framework
+ORDER BY herd_number;
+
+-- =====================================================================================================
+-- 2) How many herds: before vs after the new rule
+-- =====================================================================================================
+SELECT COUNT(DISTINCT ve.herd_id) AS herds_now,
+       COUNT(DISTINCT CASE WHEN l.hel_txee_ents_allowed > 10 THEN ve.herd_id END) AS herds_with_new_rule
+FROM   vwco_ents_herd_abls_rpt ve
+JOIN   tden_herd_etf_link l          ON l.hel_herd_no = ve.herd_id
+JOIN   vw_sso_roles_for_user_ents u  ON u.businessid  = l.hel_etf_no
+WHERE  ve.cust_type = 'Individual'
+AND    ve.herd_ols_login IS NOT NULL
+AND    REGEXP_LIKE(ve.herd_id, '^[A-Z]')
+AND    EXISTS (SELECT 1 FROM vwco_ems_client_details dn
+               WHERE dn.herd_number = ve.herd_id AND NVL(dn.death_indicator, 'N') = 'N')
+AND    l.hel_scheme_year       = 2026
 AND    l.hel_grantor_type      = 1
 AND    l.hel_txor_ents_allowed > 10
-GROUP  BY LOWER(u.username)
-ORDER  BY free_herds DESC;
+AND    LOWER(u.username)       = LOWER('agr15512');
