@@ -1,13 +1,114 @@
-cd C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright
+& {
+    Set-Location "C:\Users\Aniket.Pathare\Desktop\DAFM_Automation\BISS_Automation_Playwright"
 
-git init -b main
-git config user.name  "Aniket Pathare"
-git config user.email "<the email on your GitLab profile>"
+    # ---------- 1. Write the .gitignore ----------
+@'
+# ===================================================================================================================================
+# Biss_Automation_Playwright - Git ignore rules (09-10-2026)
+# ===================================================================================================================================
 
-git remote add origin https://rhosgitlab1.agriculture.gov.ie/automation/biss-automation-playwright.git
-git fetch origin
-git reset origin/main
-git checkout -b feature/playwright-migration
+# Maven output
+target/
 
-git add .
-git status
+# Generated reports, evidence and Playwright traces (traces hold typed passwords and cookies)
+Test_Report/
+results/
+test-results/
+*.zip
+
+# IDE
+.idea/
+*.iml
+.vscode/
+out/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Local secrets - never commit
+.env
+*.env
+*.pem
+*.key
+secrets.properties
+credentials.properties
+application-local.properties
+
+# Keep the Maven wrapper jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Database credentials - share db.properties.example instead
+src/test/resources/db.properties
+db.properties
+
+# Test data with passwords - keep on the shared drive
+src/test/resources/Test_Data/TestData.xlsx
+TestData.xlsx
+~$*.xlsx
+
+# Test Data Vault, used-herds file and archives - farmer names and herd numbers
+runtime-data/
+
+# Logs and backups
+*.log
+*.log.gz
+logs/
+*.bak
+'@ | Set-Content -Path .gitignore -Encoding ascii
+    Write-Host "1. .gitignore written" -ForegroundColor Cyan
+
+    # ---------- 2. Get GitLab's latest main ----------
+    git fetch origin
+    if ($LASTEXITCODE -ne 0) { Write-Host "STOP: could not reach GitLab (fetch failed)." -ForegroundColor Red; return }
+
+    # ---------- 3. Undo local commits, keep all files on disk ----------
+    git reset --soft origin/main
+    if ($LASTEXITCODE -ne 0) { Write-Host "STOP: reset failed." -ForegroundColor Red; return }
+
+    # ---------- 4. Take secret and generated files out of Git (files stay on disk) ----------
+    git rm -r --cached --quiet --ignore-unmatch runtime-data Test_Report .idea target
+    git rm --cached --quiet --ignore-unmatch src/test/resources/db.properties src/test/resources/Test_Data/TestData.xlsx
+    git checkout origin/main -- README.md
+    git add -A
+
+    # ---------- 5. Branch name ----------
+    git branch -M feature/playwright-migration
+    $branch = (git branch --show-current).Trim()
+    if ($branch -ne "feature/playwright-migration") { Write-Host "STOP: on branch '$branch', expected feature/playwright-migration." -ForegroundColor Red; return }
+    Write-Host "5. On branch $branch" -ForegroundColor Cyan
+
+    # ---------- 6. Safety check: nothing secret in the commit ----------
+    $staged = git diff --cached --name-only
+    $bad = $staged | Select-String -Pattern '^(runtime-data|Test_Report|target|\.idea)/|(^|/)db\.properties$|TestData\.xlsx$|\.zip$|\.log$'
+    if ($bad) {
+        Write-Host "STOP: these files must not be committed:" -ForegroundColor Red
+        $bad | ForEach-Object { Write-Host "   $_" -ForegroundColor Red }
+        return
+    }
+
+    # ---------- 7. Size check ----------
+    $files = $staged | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-Item -LiteralPath $_ }
+    $mb = [math]::Round((($files | Measure-Object Length -Sum).Sum) / 1MB, 1)
+    Write-Host "6. Safety check passed: $($staged.Count) file(s), $mb MB" -ForegroundColor Green
+    $files | Where-Object { $_.Length -gt 5MB } | ForEach-Object { Write-Host ("   Large file: {0} ({1} MB)" -f $_.FullName, [math]::Round($_.Length / 1MB, 1)) -ForegroundColor Yellow }
+    if ($mb -gt 100) { Write-Host "STOP: more than 100 MB - send Claude a screenshot." -ForegroundColor Red; return }
+
+    # ---------- 8. Commit ----------
+    git commit -m "Playwright framework - for review"
+    if ($LASTEXITCODE -ne 0) { Write-Host "STOP: commit failed (or nothing to commit)." -ForegroundColor Red; return }
+
+    # ---------- 9. Push (only after you say YES) ----------
+    Write-Host ""
+    Write-Host "Ready to push $($staged.Count) file(s) to origin/feature/playwright-migration (NOT main)." -ForegroundColor Cyan
+    $answer = Read-Host "Type YES to push"
+    if ($answer -ne "YES") { Write-Host "Not pushed. Your commit is saved locally." -ForegroundColor Yellow; return }
+
+    git push -u origin feature/playwright-migration
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "DONE. In GitLab: refresh the project, click 'Create merge request', pick a reviewer." -ForegroundColor Green
+    } else {
+        Write-Host "Push failed - send Claude a screenshot." -ForegroundColor Red
+    }
+}
