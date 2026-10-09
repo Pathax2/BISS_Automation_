@@ -1,152 +1,52 @@
-// ===================================================================================================================================
-// File          : Jenkinsfile
-// Project       : DAFM AUTOMATION_Playwright (GitLab automation/dafm-automation_playwright)
-// Description   : Runs the BISS / ENTS Playwright BDD framework on the DAFM OpenShift Jenkins (multibranch pipeline).
-//                 Built from the DAFM Playwright template (podTemplate on the 'openshift' cloud, Playwright Java image,
-//                 Artifactory settings in pipeline/settings.xml, Maven proxy arguments). Changes versus the template:
-//                   - parameters: test case IDs, application environment, timeout
-//                   - timeout in minutes is a parameter (the template's timeout(1) stops after 1 minute)
-//                   - db.properties and TestData.xlsx come from the OpenShift secret 'biss-playwright-secrets' (mounted
-//                     read-only), never from Git
-//                   - run-tests.sh returns the real Maven exit code; failed tests mark the build UNSTABLE, a broken run FAILURE
-//                   - JUnit XML published; HTML report, Word evidence and logs archived (Playwright traces are NOT archived -
-//                     they hold typed passwords and cookies)
-//                   - GITLAB_OBJECT_KIND read safely (env. prefix) so a manual "Build with Parameters" does not fail
-//
-// Prerequisites (one-off, platform team):
-//   1. The Jenkins GitLab organization folder scans the 'automation' GitLab group (or this project).
-//   2. OpenShift secret in the Jenkins namespace, keys = file names:
-//        oc create secret generic biss-playwright-secrets --from-file=db.properties --from-file=TestData.xlsx
-//   3. The image tag below exists in the internal registry. The pom uses Playwright 1.61.0; the pipeline passes
-//      -Dplaywright.version to match the image so the bundled browsers are used (no download).
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 09-10-2026
-// ===================================================================================================================================
+-- =====================================================================================================
+-- 1) TC_11_ENTS transferor pool - "ENTS ETF partner herds" + NEW: hel_txee_ents_allowed > 10
+--    Partner login: agr15512   Scheme year: 2026   (change both below if needed)
+-- =====================================================================================================
+SELECT *
+FROM (
+    SELECT DISTINCT
+           ve.herd_id                         herd_number,
+           (SELECT MAX(initcap(TRIM(cd.payee_name))) KEEP (DENSE_RANK LAST ORDER BY cd.start_date NULLS FIRST)
+            FROM   vwco_ems_client_details cd
+            WHERE  cd.herd_number = ve.herd_id
+            AND    NVL(cd.death_indicator, 'N') = 'N') herd_name,
+           ve.herd_ols_login                  individual_login,
+           l.hel_etf_no                       etf_no,
+           l.hel_txor_ents_allowed            txor_allowed,
+           l.hel_txee_ents_allowed            txee_allowed,
+           u.username                         etf_username
+    FROM   vwco_ents_herd_abls_rpt ve
+    JOIN   tden_herd_etf_link l          ON l.hel_herd_no = ve.herd_id
+    JOIN   vw_sso_roles_for_user_ents u  ON u.businessid  = l.hel_etf_no
+    WHERE  ve.cust_type = 'Individual'
+    AND    ve.herd_ols_login IS NOT NULL
+    AND    REGEXP_LIKE(ve.herd_id, '^[A-Z]')
+    AND    EXISTS (SELECT 1 FROM vwco_ems_client_details dn
+                   WHERE dn.herd_number = ve.herd_id AND NVL(dn.death_indicator, 'N') = 'N')
+    AND    l.hel_scheme_year       = 2026
+    AND    l.hel_grantor_type      = 1
+    AND    l.hel_txor_ents_allowed > 10
+    AND    l.hel_txee_ents_allowed > 10                     -- NEW
+    AND    LOWER(u.username)       = LOWER('agr15512')
+)
+WHERE herd_name IS NOT NULL
+AND   REGEXP_LIKE(herd_name, '^[[:alpha:]-]+ [[:alpha:]-]+$')   -- two-word names, same as the framework
+ORDER BY herd_number;
 
-//Project Specific
-// no spaces allowed in app name
-def APP = "BISS-Playwright"
-def BUILD_REF = "${APP}-${BUILD_ID}"
-
-//Environment Specific
-def JENKINS_AGENT_IMAGE = "registry.redhat.io/ocp-tools-4/jenkins-agent-base-rhel9:v4.18.0"
-def JENKINS_HOME = "/home/jenkins"
-
-// Keep PLAYWRIGHT_VERSION equal to the image tag (java-v<version>-noble)
-def PLAYWRIGHT_VERSION = "1.60.0"
-def PLAYWRIGHT_IMAGE = "registry.apps.services1.agriculture.gov.ie/openshift/playwright:java-v${PLAYWRIGHT_VERSION}-noble"
-def MAVEN_ARGS = "-Dmaven.repo.local=${JENKINS_HOME}/.m2/repository -DproxySet=true -DproxyHost=vsdbahlprxy1 -DproxyPort=8080 -s ./pipeline/settings.xml"
-
-// db.properties and TestData.xlsx are mounted here from the OpenShift secret
-def SECRETS_SECRET_NAME = "biss-playwright-secrets"
-def SECRETS_DIR = "${JENKINS_HOME}/biss-secrets"
-
-properties([
-    buildDiscarder(logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '5', daysToKeepStr: '', numToKeepStr: '10')),
-    parameters([
-        string(name: 'TESTCASE_IDS', defaultValue: 'TC_00_DATA,TC_01_Login',
-               description: 'Comma-separated TestCase_IDs from ExecutionControl.xlsx. Keep TC_00_DATA first so the Test Data Vault is filled.'),
-        string(name: 'APP_ENVIRONMENT', defaultValue: '',
-               description: 'Blank = the Environment column of ExecutionControl.xlsx. Otherwise the value passed as -Denvironment (e.g. QA).'),
-        string(name: 'TIMEOUT_MINUTES', defaultValue: '180',
-               description: 'Stop the whole build after this many minutes.')
-    ]),
-    disableConcurrentBuilds(),
-])
-
-podTemplate(
-    cloud: 'openshift',
-    label: BUILD_REF,
-    serviceAccount: 'jenkins',
-    containers: [
-
-        containerTemplate(
-                name: "playwright-java", workingDir: JENKINS_HOME,
-                envVars: [
-                    envVar(key: 'https_proxy', value: "http://vsdbahlprxy1:8080"),
-                    // Internal hosts (application, Keycloak, Oracle, Artifactory) must not go through the proxy
-                    envVar(key: 'no_proxy', value: "localhost,127.0.0.1,.agriculture.gov.ie,.svc,.cluster.local"),
-                    // Use the browsers bundled in the image; never download at run time
-                    envVar(key: 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD', value: "1"),
-                    envVar(key: 'BISS_SECRETS_DIR', value: SECRETS_DIR),
-                    secretEnvVar(key: 'username', secretName: 'mvn-repo-secret', secretKey: 'username'),
-                    secretEnvVar(key: 'password', secretName: 'mvn-repo-secret', secretKey: 'password')
-                ],
-                image: PLAYWRIGHT_IMAGE, ttyEnabled: true, command: 'cat'),
-        containerTemplate(
-                name: "jnlp", workingDir: JENKINS_HOME,
-                image: JENKINS_AGENT_IMAGE)
-    ],
-    volumes: [
-        secretVolume(secretName: SECRETS_SECRET_NAME, mountPath: SECRETS_DIR)
-    ]) {
-
-    def timeoutMinutes = (params.TIMEOUT_MINUTES ?: '180').toString().trim().isInteger() ? params.TIMEOUT_MINUTES.toString().trim().toInteger() : 180
-
-    timeout(time: timeoutMinutes, unit: 'MINUTES') {
-        node(BUILD_REF) {
-
-            // Same rule as the template: do not run the tests on every push / merge request event, only on demand
-            def objectKind = env.GITLAB_OBJECT_KIND ?: ""
-            if (objectKind && ["push", "tag_push", "merge_request"].contains(objectKind)) {
-                echo "Ran due to a GitLab ${objectKind} event - tests are started manually with Build with Parameters. Aborting."
-                currentBuild.result = 'SUCCESS'
-                return
-            }
-
-            try {
-
-                container("jnlp") {
-                    stage('Clone source') {
-                        checkout scm
-                    }
-                }
-
-                container("playwright-java") {
-                    stage('Run tests') {
-                        env.MAVEN_ARGS = MAVEN_ARGS
-                        env.PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
-                        env.TESTCASE_IDS = (params.TESTCASE_IDS ?: '').trim()
-                        env.APP_ENVIRONMENT = (params.APP_ENVIRONMENT ?: '').trim()
-
-                        echo "Test cases : ${env.TESTCASE_IDS}"
-                        echo "Environment: ${env.APP_ENVIRONMENT ?: '(ExecutionControl.xlsx column)'}"
-
-                        def exitCode = sh(script: 'bash run-tests.sh', returnStatus: true)
-                        echo "Exit code from tests is: ${exitCode}"
-
-                        if (exitCode == 2) {
-                            currentBuild.result = 'FAILURE'
-                            error("Setup problem (see the run-tests.sh messages above) - the tests did not start.")
-                        } else if (exitCode != 0) {
-                            // Tests ran and some failed: UNSTABLE when a results file exists, FAILURE otherwise
-                            currentBuild.result = fileExists('target/surefire-reports') ? 'UNSTABLE' : 'FAILURE'
-                        }
-                    }
-                }
-            }
-            catch (e) {
-                echo "Pipeline Failed: ${e}"
-                if (!currentBuild.result || currentBuild.result == 'SUCCESS') {
-                    currentBuild.result = 'FAILURE'
-                }
-            }
-            finally {
-                stage('Publish results') {
-                    junit(testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true)
-
-                    // HTML report, Word evidence and logs. Test_Report/traces is left out on purpose (passwords, cookies).
-                    archiveArtifacts(artifacts: 'Test_Report/html/**, Test_Report/docs/**, target/logs/**',
-                                     allowEmptyArchive: true, fingerprint: false)
-                }
-
-                def currentResult = currentBuild.result ?: 'SUCCESS'
-                def previousResult = currentBuild.previousBuild?.result
-                if (previousResult != null && previousResult != currentResult) {
-                    echo "Result changed: ${previousResult} -> ${currentResult}"
-                }
-            }
-        }
-    }
-}
+-- =====================================================================================================
+-- 2) How many herds: before vs after the new rule
+-- =====================================================================================================
+SELECT COUNT(DISTINCT ve.herd_id) AS herds_now,
+       COUNT(DISTINCT CASE WHEN l.hel_txee_ents_allowed > 10 THEN ve.herd_id END) AS herds_with_new_rule
+FROM   vwco_ents_herd_abls_rpt ve
+JOIN   tden_herd_etf_link l          ON l.hel_herd_no = ve.herd_id
+JOIN   vw_sso_roles_for_user_ents u  ON u.businessid  = l.hel_etf_no
+WHERE  ve.cust_type = 'Individual'
+AND    ve.herd_ols_login IS NOT NULL
+AND    REGEXP_LIKE(ve.herd_id, '^[A-Z]')
+AND    EXISTS (SELECT 1 FROM vwco_ems_client_details dn
+               WHERE dn.herd_number = ve.herd_id AND NVL(dn.death_indicator, 'N') = 'N')
+AND    l.hel_scheme_year       = 2026
+AND    l.hel_grantor_type      = 1
+AND    l.hel_txor_ents_allowed > 10
+AND    LOWER(u.username)       = LOWER('agr15512');
