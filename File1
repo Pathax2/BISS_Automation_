@@ -1,52 +1,38 @@
--- =====================================================================================================
--- 1) TC_11_ENTS transferor pool - "ENTS ETF partner herds" + NEW: hel_txee_ents_allowed > 10
---    Partner login: agr15512   Scheme year: 2026   (change both below if needed)
--- =====================================================================================================
-SELECT *
-FROM (
-    SELECT DISTINCT
-           ve.herd_id                         herd_number,
-           (SELECT MAX(initcap(TRIM(cd.payee_name))) KEEP (DENSE_RANK LAST ORDER BY cd.start_date NULLS FIRST)
-            FROM   vwco_ems_client_details cd
-            WHERE  cd.herd_number = ve.herd_id
-            AND    NVL(cd.death_indicator, 'N') = 'N') herd_name,
-           ve.herd_ols_login                  individual_login,
-           l.hel_etf_no                       etf_no,
-           l.hel_txor_ents_allowed            txor_allowed,
-           l.hel_txee_ents_allowed            txee_allowed,
-           u.username                         etf_username
-    FROM   vwco_ents_herd_abls_rpt ve
-    JOIN   tden_herd_etf_link l          ON l.hel_herd_no = ve.herd_id
-    JOIN   vw_sso_roles_for_user_ents u  ON u.businessid  = l.hel_etf_no
-    WHERE  ve.cust_type = 'Individual'
-    AND    ve.herd_ols_login IS NOT NULL
-    AND    REGEXP_LIKE(ve.herd_id, '^[A-Z]')
-    AND    EXISTS (SELECT 1 FROM vwco_ems_client_details dn
-                   WHERE dn.herd_number = ve.herd_id AND NVL(dn.death_indicator, 'N') = 'N')
-    AND    l.hel_scheme_year       = 2026
-    AND    l.hel_grantor_type      = 1
-    AND    l.hel_txor_ents_allowed > 10
-    AND    l.hel_txee_ents_allowed > 10                     -- NEW
-    AND    LOWER(u.username)       = LOWER('agr15512')
+WITH h AS (
+  SELECT 'GOOD' tag, 'G2650532' herd FROM dual UNION ALL
+  SELECT 'BAD',      'Q1700791'      FROM dual UNION ALL
+  SELECT 'BAD',      'Q1670329'      FROM dual
 )
-WHERE herd_name IS NOT NULL
-AND   REGEXP_LIKE(herd_name, '^[[:alpha:]-]+ [[:alpha:]-]+$')   -- two-word names, same as the framework
-ORDER BY herd_number;
-
--- =====================================================================================================
--- 2) How many herds: before vs after the new rule
--- =====================================================================================================
-SELECT COUNT(DISTINCT ve.herd_id) AS herds_now,
-       COUNT(DISTINCT CASE WHEN l.hel_txee_ents_allowed > 10 THEN ve.herd_id END) AS herds_with_new_rule
-FROM   vwco_ents_herd_abls_rpt ve
-JOIN   tden_herd_etf_link l          ON l.hel_herd_no = ve.herd_id
-JOIN   vw_sso_roles_for_user_ents u  ON u.businessid  = l.hel_etf_no
-WHERE  ve.cust_type = 'Individual'
-AND    ve.herd_ols_login IS NOT NULL
-AND    REGEXP_LIKE(ve.herd_id, '^[A-Z]')
-AND    EXISTS (SELECT 1 FROM vwco_ems_client_details dn
-               WHERE dn.herd_number = ve.herd_id AND NVL(dn.death_indicator, 'N') = 'N')
-AND    l.hel_scheme_year       = 2026
-AND    l.hel_grantor_type      = 1
-AND    l.hel_txor_ents_allowed > 10
-AND    LOWER(u.username)       = LOWER('agr15512');
+SELECT h.tag, h.herd,
+       -- ETF link (2026)
+       (SELECT COUNT(*)                      FROM tden_herd_etf_link l WHERE l.hel_herd_no = h.herd AND l.hel_scheme_year = 2026) links_26,
+       (SELECT COUNT(DISTINCT l.hel_etf_no)  FROM tden_herd_etf_link l WHERE l.hel_herd_no = h.herd AND l.hel_scheme_year = 2026) etfs_26,
+       (SELECT MIN(l.hel_grantor_type)       FROM tden_herd_etf_link l WHERE l.hel_herd_no = h.herd AND l.hel_scheme_year = 2026) grantor_min,
+       (SELECT MAX(l.hel_grantor_type)       FROM tden_herd_etf_link l WHERE l.hel_herd_no = h.herd AND l.hel_scheme_year = 2026) grantor_max,
+       (SELECT MIN(l.hel_txor_ents_allowed)  FROM tden_herd_etf_link l WHERE l.hel_herd_no = h.herd AND l.hel_scheme_year = 2026) txor_min,
+       (SELECT MAX(l.hel_txor_ents_allowed)  FROM tden_herd_etf_link l WHERE l.hel_herd_no = h.herd AND l.hel_scheme_year = 2026) txor_max,
+       (SELECT MIN(l.hel_txee_ents_allowed)  FROM tden_herd_etf_link l WHERE l.hel_herd_no = h.herd AND l.hel_scheme_year = 2026) txee_min,
+       (SELECT MAX(l.hel_txee_ents_allowed)  FROM tden_herd_etf_link l WHERE l.hel_herd_no = h.herd AND l.hel_scheme_year = 2026) txee_max,
+       -- Entitlements (2026)
+       (SELECT SUM(e.ent_num_ents) FROM tden_owner_history o JOIN vwen_ent_sets e
+               ON e.ent_scheme_year = o.ohs_scheme_year AND e.ent_own_id = o.ohs_own_id AND e.ent_hist_no = o.ohs_hist_no
+        WHERE o.ohs_herd = h.herd AND e.ent_scheme_year = 2026) ents_26,
+       (SELECT COUNT(*) FROM tden_owner_history o JOIN vwen_ent_sets e
+               ON e.ent_scheme_year = o.ohs_scheme_year AND e.ent_own_id = o.ohs_own_id AND e.ent_hist_no = o.ohs_hist_no
+        WHERE o.ohs_herd = h.herd AND e.ent_scheme_year = 2026 AND e.ent_num_ents > 0) sets_26,
+       (SELECT COUNT(*) FROM tden_owner_history o JOIN vwen_ent_sets e
+               ON e.ent_scheme_year = o.ohs_scheme_year AND e.ent_own_id = o.ohs_own_id AND e.ent_hist_no = o.ohs_hist_no
+        WHERE o.ohs_herd = h.herd AND e.ent_scheme_year = 2026 AND e.ent_lease_end IS NOT NULL) leased_sets,
+       (SELECT COUNT(DISTINCT o.ohs_hist_no) FROM tden_owner_history o WHERE o.ohs_herd = h.herd AND o.ohs_scheme_year = 2026) hist_26,
+       -- Transfer applications OUT of the herd (2026), by status
+       (SELECT COUNT(*) FROM tden_inet_application a WHERE a.iap_from_herd = h.herd AND a.iap_scheme_year = 2026 AND a.iap_group_code = 2 AND a.iap_status_code = 2) tr_draft,
+       (SELECT COUNT(*) FROM tden_inet_application a WHERE a.iap_from_herd = h.herd AND a.iap_scheme_year = 2026 AND a.iap_group_code = 2 AND a.iap_status_code = 3) tr_submitted,
+       (SELECT COUNT(*) FROM tden_inet_application a WHERE a.iap_from_herd = h.herd AND a.iap_scheme_year = 2026 AND a.iap_group_code = 2 AND a.iap_status_code IN (4, 5)) tr_open,
+       (SELECT COUNT(*) FROM tden_inet_application a WHERE a.iap_from_herd = h.herd AND a.iap_scheme_year = 2026 AND a.iap_group_code = 2 AND a.iap_status_code = 8) tr_complete,
+       (SELECT COUNT(*) FROM tden_inet_application a WHERE a.iap_from_herd = h.herd AND a.iap_scheme_year = 2026 AND a.iap_group_code <> 2) other_apps_26,
+       -- Holder and login
+       (SELECT COUNT(*) FROM vwco_ems_client_details c WHERE c.herd_number = h.herd) holders,
+       (SELECT COUNT(*) FROM vwco_ems_client_details c WHERE c.herd_number = h.herd AND NVL(c.death_indicator, 'N') = 'N') alive_holders,
+       (SELECT MAX(r.cust_type)                  FROM vwco_ents_herd_abls_rpt r WHERE r.herd_id = h.herd) cust_type,
+       (SELECT COUNT(DISTINCT r.herd_ols_login)  FROM vwco_ents_herd_abls_rpt r WHERE r.herd_id = h.herd) logins
+FROM   h;
