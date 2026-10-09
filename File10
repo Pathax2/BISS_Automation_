@@ -1,70 +1,63 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<settings xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 http://maven.apache.org/xsd/settings-1.2.0.xsd" xmlns="http://maven.apache.org/SETTINGS/1.2.0"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <servers>
-    <server>
-		<username>${env.username}</username>
-		<password>${env.password}</password>
-        <id>central</id>
-    </server>
-    <server>
-		<username>${env.username}</username>
-		<password>${env.password}</password>
-        <id>snapshots</id>
-    </server>
-    <server>
-		<username>${env.username}</username>
-		<password>${env.password}</password>
-        <id>libs</id>
-    </server>
-</servers>
-  <mirrors>
-    <mirror>
-      <mirrorOf>*</mirrorOf>
-      <name>libs</name>
-      <url>https://repo.ntier.agriculture.gov.ie:443/artifactory/libs</url>
-      <id>libs</id>
-    </mirror>
-  </mirrors>
-  <profiles>
-    <profile>
-      <repositories>
-        <repository>
-          <snapshots>
-            <enabled>false</enabled>
-          </snapshots>
-          <id>central</id>
-          <name>libs</name>
-          <url>https://repo.ntier.agriculture.gov.ie:443/artifactory/libs</url>
-        </repository>
-        <repository>
-          <snapshots />
-          <id>snapshots</id>
-          <name>libs</name>
-          <url>https://repo.ntier.agriculture.gov.ie:443/artifactory/libs</url>
-        </repository>
-      </repositories>
-      <pluginRepositories>
-        <pluginRepository>
-          <snapshots>
-            <enabled>false</enabled>
-          </snapshots>
-          <id>central</id>
-          <name>plugins-release</name>
-          <url>https://repo.ntier.agriculture.gov.ie:443/artifactory/plugins-release</url>
-        </pluginRepository>
-        <pluginRepository>
-          <snapshots />
-          <id>snapshots</id>
-          <name>plugins-release</name>
-          <url>https://repo.ntier.agriculture.gov.ie:443/artifactory/plugins-release</url>
-        </pluginRepository>
-      </pluginRepositories>
-      <id>artifactory</id>
-    </profile>
-  </profiles>
-  <activeProfiles>
-    <activeProfile>artifactory</activeProfile>
-  </activeProfiles>
-</settings>
+#!/usr/bin/env bash
+# ===================================================================================================================================
+# File          : run-tests.sh
+# Description   : Called by the Jenkinsfile inside the Playwright Java container.
+#                   1. copies db.properties and TestData.xlsx from the mounted OpenShift secret (BISS_SECRETS_DIR)
+#                   2. runs the framework once with the docker profile (headless bundled Chromium, no Excel write-back)
+#                 Exit codes: 0 = all passed, 1 = Maven/test failure, 2 = setup problem (missing secret file)
+#
+# Inputs (environment variables set by the Jenkinsfile):
+#   MAVEN_ARGS         Artifactory settings, proxy and local repository
+#   PLAYWRIGHT_VERSION must equal the image tag, so the browsers in the image are used
+#   TESTCASE_IDS       e.g. TC_00_DATA,TC_01_Login (blank = Execution=Y rows of ExecutionControl.xlsx)
+#   APP_ENVIRONMENT    blank = Environment column of ExecutionControl.xlsx
+#   BISS_SECRETS_DIR   folder of the mounted secret
+#
+# Author        : Aniket Pathare | aniket.pathare@government.ie
+# Date Created  : 09-10-2026
+# ===================================================================================================================================
 
+set -u
+
+SECRETS_DIR="${BISS_SECRETS_DIR:-/home/jenkins/biss-secrets}"
+RESOURCES="src/test/resources"
+
+echo "=== BISS Playwright run ==="
+echo "Test cases : ${TESTCASE_IDS:-<Execution=Y rows>}"
+echo "Environment: ${APP_ENVIRONMENT:-<ExecutionControl.xlsx column>}"
+echo "Playwright : ${PLAYWRIGHT_VERSION:-<pom default>}"
+java -version 2>&1 | head -1
+mvn -v 2>&1 | head -1
+
+# --- 1. Secret files ---------------------------------------------------------------------------------------------------------------
+if [ ! -f "${SECRETS_DIR}/db.properties" ]; then
+    echo "ERROR: ${SECRETS_DIR}/db.properties not found - is the OpenShift secret 'biss-playwright-secrets' created and mounted?"
+    exit 2
+fi
+if [ ! -f "${SECRETS_DIR}/TestData.xlsx" ]; then
+    echo "ERROR: ${SECRETS_DIR}/TestData.xlsx not found - add it to the OpenShift secret 'biss-playwright-secrets'."
+    exit 2
+fi
+mkdir -p "${RESOURCES}/Test_Data"
+cp "${SECRETS_DIR}/db.properties" "${RESOURCES}/db.properties"
+cp "${SECRETS_DIR}/TestData.xlsx" "${RESOURCES}/Test_Data/TestData.xlsx"
+echo "Secret files copied (db.properties, TestData.xlsx)."
+
+# --- 2. Run -----------------------------------------------------------------------------------------------------------------------
+ARGS=( -B -ntp -Pdocker )
+[ -n "${PLAYWRIGHT_VERSION:-}" ] && ARGS+=( "-Dplaywright.version=${PLAYWRIGHT_VERSION}" )
+[ -n "${TESTCASE_IDS:-}" ]       && ARGS+=( "-Dtestcase.ids=${TESTCASE_IDS}" )
+[ -n "${APP_ENVIRONMENT:-}" ]    && ARGS+=( "-Denvironment=${APP_ENVIRONMENT}" )
+ARGS+=( "-Dbamboo.buildNumber=${BUILD_NUMBER:-LOCAL}" "-Dbamboo.buildPlanKey=${JOB_NAME:-BISS-PW}" )
+
+# MAVEN_ARGS is split on purpose (several -D options and -s <file>)
+# shellcheck disable=SC2086
+mvn ${MAVEN_ARGS:-} "${ARGS[@]}" test
+RC=$?
+
+# Remove the copied secret files from the workspace
+rm -f "${RESOURCES}/db.properties" "${RESOURCES}/Test_Data/TestData.xlsx"
+
+echo "Maven exit code: ${RC}"
+[ "${RC}" -eq 0 ] && exit 0
+exit 1
