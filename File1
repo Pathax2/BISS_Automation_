@@ -1,10 +1,36 @@
-   SELECT iap_from_herd, iap_scheme_year, iap_status_code, iap_group_code,
-          iap_date_received, iap_app_ref, iap_audit_date
-   FROM   tden_inet_application
-   WHERE  iap_from_herd IN ('Q1700791', 'Q1670329')
-   AND    iap_scheme_year = 2026
-   ORDER  BY iap_from_herd, iap_audit_date;
+   SELECT * FROM tsen_app_group_codes;
+   SELECT * FROM tsen_inet_app_status_codes;
 
-
-   SELECT table_name FROM all_tables
-   WHERE  table_name LIKE '%STATUS%' OR table_name LIKE '%GROUP%';
+   SELECT COUNT(*) all_pool_herds,
+          SUM(CASE WHEN app_cnt = 0 THEN 1 ELSE 0 END) herds_without_2026_app
+   FROM (
+     SELECT h.herd_id,
+            (SELECT COUNT(*) FROM tden_inet_application a
+             WHERE  a.iap_from_herd   = h.herd_id
+             AND    a.iap_scheme_year = 2026
+             AND    a.iap_group_code  = 2) app_cnt
+     FROM (
+       SELECT DISTINCT ve.herd_id
+       FROM   vwco_ents_herd_abls_rpt ve
+       WHERE  ve.cust_type = 'Individual'
+       AND    ve.herd_ols_login IS NOT NULL
+       AND    REGEXP_LIKE(ve.herd_id, '^[A-Z]')
+       AND    EXISTS (SELECT 1
+                      FROM   tden_herd_etf_link l, vw_sso_roles_for_user_ents u
+                      WHERE  l.hel_herd_no           = ve.herd_id
+                      AND    l.hel_scheme_year       = 2026
+                      AND    l.hel_grantor_type      = 1
+                      AND    l.hel_txor_ents_allowed > 10
+                      AND    u.businessid            = l.hel_etf_no
+                      AND    LOWER(u.username)       = 'agr15512')
+       AND    EXISTS (SELECT 1
+                      FROM   tden_owner_history, vwen_ent_sets
+                      WHERE  ohs_scheme_year = ent_scheme_year
+                      AND    ohs_own_id      = ent_own_id
+                      AND    ohs_hist_no     = ent_hist_no
+                      AND    ohs_herd        = ve.herd_id
+                      AND    ent_scheme_year = 2026
+                      GROUP BY ohs_herd
+                      HAVING SUM(ent_num_ents) > 10)
+     ) h
+   );
