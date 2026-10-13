@@ -148,6 +148,16 @@ clients.list.timeout.seconds=45
 # Each failed one is marked BAD in the vault and another herd of the same agent (or individual pool) is searched.
 ents.transferee.retries=3
 
+# 12-10-2026: Transferee Search result wait (EntsSession.searchTransferee).
+# The Search click waits for the first response from the ENTS service (URL containing ents.service.url.part), then:
+# dialog closed = single match, "matches found" table = pick the open row, red message = no match.
+# ents.transferee.search.seconds - most it waits for one of these before the step fails
+# ents.transferee.settle.ms      - when no service response was seen, how long an old red message (left by the
+#                                  previous search in the same dialog) is ignored before it is believed
+ents.transferee.search.seconds=15
+ents.transferee.settle.ms=2500
+ents.service.url.part=ents-agfood-service
+
 # -----------------------------------------------------------------------------------------------------------------------------------
 # Retry Configuration
 # -----------------------------------------------------------------------------------------------------------------------------------
@@ -242,6 +252,9 @@ db.username=
 # db.password - set via Bamboo plan variable or BISS_DB_PASSWORD, never store here
 db.connection.pool.size=5
 db.query.timeout.seconds=30
+# 08-10-2026: longest time one query may run before it fails with its label (0 = no limit). Before this a slow query
+# hung the run with the browser waiting on the login page. Queries over 20 s are logged as "Slow query".
+db.query.max.seconds=300
 
 # -----------------------------------------------------------------------------------------------------------------------------------
 # Logging
@@ -264,9 +277,16 @@ ents.cust.type=Individual
 # Individual Login query (07-10-2026): only herds holding MORE than this many entitlements in ents.scheme.year, the
 # same rule as the Agent Login query (ent_num_ents > 10). -1 = no entitlement filter (the query before 07-10-2026).
 ents.individual.min.ents=10
+# ETF partner herds query (09-10-2026): the herd must hold MORE than this many entitlements in ents.scheme.year, so an
+# ETF partner acting as transferor (agr15512 - TC_11/12/20) has entitlements to transfer. -1 = no check.
+ents.etf.min.ents=10
+# ETF partners that are only TRANSFEREES (their herds need no entitlements) - no entitlement check for them
+ents.etf.min.ents.exempt=agr15678
 # Individual Login query (08-10-2026): leave out herds with more than one online login or more than one live holder
 # name - on those the login and the name can belong to different people (TC_09_ENTS: T1973669 "Joseph Tully" / SEANGALL)
-ents.individual.single.holder=true
+# Off by default (08-10-2026): the T1973669 case is fixed by the newest-holder rule, the portal checks catch the rest,
+# and the extra counting slows the query down. Set true to test it - watch for "Slow query" in the log.
+ents.individual.single.holder=false
 # When a picked transferor is not in the agent's Transfer Out list, try this many pairs before failing
 ents.pair.retries=15
 # How long to wait for the Transfer Out search result before treating the herd as not found
@@ -276,6 +296,9 @@ ents.transfer.key.button.seconds=10
 # Transferee acceptance: the logged-in holder (page header Farmer Name / Herd Number) must be the herd and name the
 # transfer was sent to. false = check the herd number only
 ents.transferee.name.check=true
+# Individual transferor ({transferor.login}): when the login opens another herd (e.g. a Registered Farm Partnership),
+# try this many transferors before the create step fails
+ents.transferor.retries=3
 # Only herds whose DB name is exactly two words, e.g. "Martin Starr" (skips Jnr/Snr, middle names, companies)
 ents.name.two.words=true
 # Use the Name shown in the Transfer Out list instead of the DB name for the transferee search
@@ -344,6 +367,15 @@ nrcisyf.pool.size=200
 nrcisyf.herds=
 
 # -----------------------------------------------------------------------------------------------------------------------------------
+# Fixed-data test cases - 15-10-2026
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Test cases listed here run with the agent and herd written in their feature file ("Given the run uses agent ... and herd ..."):
+# no DB bootstrap, no vault, no TestData write-back, no replacement herd, and DBRouter refuses every query while they run.
+# Meant for an environment whose data the db.properties connections do not hold (e.g. a pre-live / CENTEST URL).
+# The URL still comes from the Config sheet row named in the Environment column of ExecutionControl.xlsx. Comma-separated.
+fixed.data.testcases=TC_BISS_E2E_PreLive
+
+# -----------------------------------------------------------------------------------------------------------------------------------
 # Staff (internal portal) - stepdefinitions.BISS.STAFF.StaffSteps + utilities.StaffTestData - 05-10-2026
 # -----------------------------------------------------------------------------------------------------------------------------------
 # Staff test cases (IDs containing _STAFF) skip the BISS herd + agent DB lookup; their data comes from StaffTestData
@@ -378,3 +410,22 @@ login.test.otp=111111
 # now        = deleted before the run goes on (before 08-10-2026; took minutes on Windows after a long test case)
 # off        = left in %TEMP%; BrowserProcessCleaner removes old biss-pw-profile-* folders before the next launch
 browser.profile.delete=background
+
+# 12-10-2026: each herd handed out by an ENTS pool gets its current holder name and address from the database
+# (EntsTestData.withCurrentName). Vault names can be out of date after a SIT refresh. false = use the stored name.
+ents.name.refresh=true
+
+# -----------------------------------------------------------------------------------------------------------------------------------
+# Dashboard report (13-10-2026, reporting.DashboardReport) - written to Test_Report/html at the end of every run
+#   BISS_Execution_Report_<ts>.html    team edition: Overview, Data, Fragility, Test cases + Word / screenshot links
+#   BISS_Stakeholder_Report_<ts>.html  stakeholder edition: herd numbers masked, no evidence files, no step logs
+#   BISS_Stakeholder_Report_<ts>.pdf   the stakeholder edition as PDF
+#   BISS_Execution_Metrics_<ts>.json   raw numbers | BISS_Herd_Ledger_<ts>.csv herd ledger for Excel
+# report.pdf.full=true also saves the team edition as PDF. report.legacy.html=true also writes the old report.
+# report.pdf.scale shrinks the page to fit A4 landscape (0.3 - 1.0).
+# -----------------------------------------------------------------------------------------------------------------------------------
+report.dashboard.enabled=true
+report.pdf.enabled=true
+report.pdf.full=false
+report.pdf.scale=0.72
+report.legacy.html=false
