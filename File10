@@ -52,6 +52,10 @@
 // Updated       : 08-10-2026 - Logins: the one-time code goes through commonFunctions.LoginScreens.enterOneTimeCode (also
 //                              handles the authenticator set-up screen, which has saveTOTPBtn instead of kc-login); the
 //                              PIN-branch Next loop now uses LoginScreens.skipNewUserScreens.
+// Updated       : 15-10-2026 - Fixed-data journeys (TC_BISS_E2E_PreLive): new step "the run uses agent {string} and herd {string}"
+//                              sets Hooks.RUNTIME_USERNAME / RUNTIME_HERD from the feature file (literal or TD:); the herd
+//                              retry in "opens a farmer dashboard using herd data" fails with a clear message for such
+//                              test cases instead of fetching a replacement herd from the database.
 // Updated       : 08-10-2026 - Herd retry: a replacement herd comes from Hooks.agentHerdQueryLabel(), so TC_03_PART keeps
 //                              getting partnership herds (TC_03 still uses "List of herds with no errors at all").
 // ===================================================================================================================================
@@ -138,6 +142,67 @@ public class TC_03 {
     // ===================================================================================================================================
     //  BACKGROUND - Login and Portal Entry
     // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Given the run uses agent {string} and herd {string}
+    // Description   : Fixed-data test cases (Hooks.isFixedDataTestCase, e.g. TC_BISS_E2E_PreLive) - the first Background step.
+    //                 Sets the agent login and the herd for the whole journey from the feature file instead of the
+    //                 database. Each value is a literal ("aga1234", "D1234567") or a TD: reference ("TD:FixedHerd"),
+    //                 resolved like every iAction value: environment variable TD_FIXEDHERD, then -Dtd.FixedHerd, then
+    //                 the FixedHerd column of the TestData row. The password stays TD:Password in the TestData row.
+    //                 Keep TD: references in the committed file - on a copy of production a herd number is a real farmer.
+    // Parameters    : pAgent (String) - agent login or TD: reference | pHerd (String) - herd number or TD: reference
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 15-10-2026
+    // ***************************************************************************************************************************************************************************************
+    @Given("the run uses agent {string} and herd {string}")
+    public void theRunUsesAgentAndHerd(String pAgent, String pHerd)
+    {
+        log.info("[STEP] Given the run uses agent " + pAgent + " and herd " + pHerd);
+
+        String iAgent = fixedValue(pAgent, "agent");
+        String iHerd  = fixedValue(pHerd,  "herd").toUpperCase(java.util.Locale.ROOT);
+
+        if (!iHerd.matches("[A-Z][0-9]{6}[0-9X]|[A-Z]{3}[0-9]{5}"))
+        {
+            log.warning("[FIXED-DATA] Herd '" + iHerd + "' does not look like a herd number (e.g. D1234567) - using it anyway.");
+        }
+
+        Hooks.RUNTIME_USERNAME = iAgent;
+        Hooks.RUNTIME_HERD     = iHerd;
+        System.setProperty("TD:Username",   iAgent);
+        System.setProperty("TD:HerdNumber", iHerd);
+        reporting.ExecutionMetrics.herdInUse("BISS herd", iHerd, iAgent, "BISS application (fixed data - feature file)");
+
+        log.info("[FIXED-DATA] " + Hooks.iTestCaseID + " on " + Hooks.iEnvironment + " | agent=" + iAgent + " | herd=" + iHerd
+                + (Hooks.isFixedDataTestCase() ? "" : " | NOTE: this test case is not in fixed.data.testcases, so the database is still used for retries"));
+    }
+
+    // A literal or TD: value from the feature file, never blank
+    private static String fixedValue(String pValue, String pWhat)
+    {
+        String iValue    = pValue == null ? "" : pValue.trim();
+        String iResolved = "";
+        try
+        {
+            iResolved = iValue.isEmpty() ? "" : CommonFunctions.resolveValue(iValue);
+        }
+        catch (RuntimeException iNoColumn)
+        {
+            // TD:Column with no such column in the TestData row and no -Dtd. / TD_ override - reported below
+            log.warning("[FIXED-DATA] " + iValue + " could not be resolved: " + iNoColumn.getMessage());
+        }
+        iResolved = iResolved == null ? "" : iResolved.trim();
+        if (iResolved.isEmpty())
+        {
+            throw new IllegalArgumentException("[FIXED-DATA] No " + pWhat + " given: '" + iValue + "'"
+                    + (iValue.startsWith("TD:") ? " is empty - set it in the TestData row, -Dtd." + iValue.substring(3).trim()
+                    + "=... or the environment variable TD_" + iValue.substring(3).trim().toUpperCase(java.util.Locale.ROOT) : "")
+                    + ". Put the " + pWhat + " in the step \"Given the run uses agent ... and herd ...\".");
+        }
+        return iResolved;
+    }
+
 
     // ***************************************************************************************************************************************************************************************
     // Step          : Given the agent user is on the login page
@@ -554,6 +619,15 @@ public class TC_03 {
                     iFound = true;
                     break;
                 }
+            }
+
+            // -- Fixed-data test case: the herd is the one in the feature file - no replacement from the database ---
+            if (Hooks.isFixedDataTestCase())
+            {
+                throw new RuntimeException("[FIXED-DATA] Herd " + iCurrentHerd + (iRowCount > 0 ? " is marked 'Herd expired'" : " is not in My Clients")
+                        + " of agent " + Hooks.RUNTIME_USERNAME + " on " + Hooks.iEnvironment + ". " + Hooks.iTestCaseID
+                        + " takes its herd from the feature file: change the herd (or the agent) in the step"
+                        + " \"Given the run uses agent ... and herd ...\".");
             }
 
             // -- Layer 3 failed - 0 rows returned -----------------------------------------------------------------
@@ -1483,7 +1557,8 @@ public class TC_03 {
     // Step          : When the agent adds a parcel from the GIS map with the following details
     // Description   : Opens the map interface, selects county and townland, fills parcel fields
     //                 DataTable keys: county, townland, claimedArea, ownershipStatus, parcelUse, organicStatus
-    // ***************************************************************************************************************************************************************************************@When("the agent/individual adds a parcel from the GIS map with the following details")
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent/individual adds a parcel from the GIS map with the following details")
     public void theAgentAddsAParcelFromTheGISMapWithTheFollowingDetails(DataTable pDataTable)
     {
         log.info("[STEP] When the agent adds a parcel from the GIS map with the following details");
