@@ -1,45 +1,56 @@
-Feature: BISS Agent completes an end-to-end farmer application journey
+Feature: BISS Agent completes an end-to-end farmer application journey with fixed data (no database)
 
   # --------------------------------------------------------------------------------------------------------------------
+  # TC_BISS_E2E_PreLive - the TC_03 journey for an environment the framework databases do not cover. Created: 15-10-2026
+  #
   # Purpose:
-  #   Single end-to-end regression journey covering the major business flow in the BISS Application Portal.
-  #/  #
+  #   Single end-to-end regression journey covering the major business flow in the BISS Application Portal:
   #   - Login and portal navigation
-  #   - Farmer dashboard access
-  #   - Side navigation tab validation
-  #   - Start application
-  #   - Active Farmer step
-  #   - Scheme Selection step
-  #   - Land Details validations:
-  #       * invalid parcel
-  #       * archived parcel
-  #       * add parcel
-  #       * add plot
-  #       * add parcel from map
-  #       * edit/delete/undo parcel
-  #       * delete plot
-  #       * mandatory information completion
-  #   - GAEC 7 handling
-  #   - ACRES warnings flow
-  #   - Eco selections
-  #   - Review and Submit
+  #   - Farmer dashboard access and side navigation tabs
+  #   - Start application, Active Farmer, Scheme Selection
+  #   - Land Details validations (invalid / archived / already claimed parcel, add parcel, plot, map parcel,
+  #     edit / delete / undo parcel, delete plot, mandatory information)
+  #   - GAEC 7, ACRES (if shown), Eco, Review and Submit
   #   - Correspondence document upload
   #
-  # Notes:
-  #   1. This feature is intentionally designed as one controlled business journey.
-  #   2. Test data such as herd rows, parcel IDs, plot references, and eco values should come from your framework.
-  #   3. Step wording is kept consistent so step definitions can be designed cleanly in the new framework.
+  # Where the data comes from (no SQL, no vault):
+  #   URL        : Config sheet of TestData.xlsx, the row whose Env matches the Environment column of this test case in
+  #                ExecutionControl.xlsx (e.g. PRELIVE). Do not pass -Dapp.url - it would override it.
+  #   Agent      : the first Background step below. "TD:Username" = the Username column of this test case's TestData row.
+  #                Or type the login directly, e.g. "aga1234".
+  #   Password   : TD:Password - the Password column of this test case's TestData row (never in this file).
+  #   Herd       : the first Background step below. "TD:FixedHerd" = the FixedHerd column of the TestData row,
+  #                -Dtd.FixedHerd=D1234567 on the mvn command line, or the environment variable TD_FIXEDHERD.
+  #                Or type the herd directly, e.g. "D1234567", for a local run.
+  #   Parcels,   : written in the steps below. The environment is a copy of production, so they should exist; if one
+  #   plots        does not (or is already claimed), the person running the test changes it here.
+  #
+  # Before you run it:
+  #   1. Each run uses up the herd: after "submits the application" that herd has a submitted application for the
+  #      scheme year, and "deletes any existing draft" removes its draft. Use a herd agreed for testing, a new one each run.
+  #   2. The herd must be in the agent's My Clients list - otherwise the dashboard step fails and tells you so.
+  #   3. Do NOT commit a real herd number in this file: the environment holds real farmers' data. Keep "TD:FixedHerd"
+  #      in Git and give the herd through the TestData row or -Dtd.FixedHerd.
+  #
+  # Framework behaviour (fixed.data.testcases in application.properties lists this test case):
+  #   no DB bootstrap, no vault, no TestData write-back; an expired agent or a herd not in My Clients fails with a
+  #   clear message instead of picking a replacement; DBRouter refuses every query while this test case runs.
+  #
+  # Step definitions: TC_03 / TC_06 steps, plus "the run uses agent {string} and herd {string}" (TC_03.java).
+  #
+  # Author: Aniket Pathare | aniket.pathare@government.ie
   # --------------------------------------------------------------------------------------------------------------------
 
   Background:
-    Given the agent user is on the login page
+    Given the run uses agent "TD:Username" and herd "TD:FixedHerd"
+    And the agent user is on the login page
     When the agent logs into the application with valid credentials and OTP
     And the agent opens the "Basic Income Support for Sustainability" application
     Then the agent should land on the BISS Home page
     And the agent navigates to the "Home" and "My Clients" Left Menu Link
 
-  @regression @e2e @biss
-  Scenario: AT-E2E-01 - Agent completes the end-to-end BISS farmer application flow
+  @regression @e2e @biss @fixeddata
+  Scenario: AT-E2E-01-PRELIVE - Agent completes the end-to-end BISS farmer application flow with fixed data
 
     # -----------------------------------------
     # Farmer selection and dashboard validation
@@ -114,13 +125,13 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # Land Details - add plot
     # -----------------------------------------
     When the agent adds a plot with the following details
-      | county            | Donegal            |
-      | townland          | Aghadachor - E22301 |
-      | plotReference     | T12345679          |
-      | ownershipStatus   | Owned              |
-      | organicStatus     | Conventional       |
-      | claimedArea       | 15                 |
-      | plotUse           | Blackcurrants      |
+      | county            | Donegal                  |
+      | townland          | Aghadachor - E22301      |
+      | plotReference     | T12345679                |
+      | ownershipStatus   | Owned                    |
+      | organicStatus     | Conventional             |
+      | claimedArea       | 15                       |
+      | plotUse           | Blackcurrants            |
       | mapChangeOption   | Submit Paper Map By Post |
     Then the plot should be added successfully to Land Details
 
@@ -128,12 +139,12 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # Land Details - add parcel from GIS map
     # -----------------------------------------
     When the agent adds a parcel from the GIS map with the following details
-      | county            | Clare              |
-      | townland          | Addergoole - C11501 |
-      | claimedArea       | 4                  |
-      | ownershipStatus   | Owned              |
-      | parcelUse         | Beetroot               |
-      | organicStatus     | Conventional       |
+      | county            | Clare                    |
+      | townland          | Addergoole - C11501      |
+      | claimedArea       | 4                        |
+      | ownershipStatus   | Owned                    |
+      | parcelUse         | Beetroot                 |
+      | organicStatus     | Conventional             |
     Then the GIS-selected parcel should be added successfully
 
     # -----------------------------------------
@@ -166,13 +177,13 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # Land Details - add plot to delete later
     # -----------------------------------------
     When the agent adds a plot with the following details
-      | county            | Donegal              |
-      | townland          | Aghadowey - E18601   |
-      | plotReference     | T87654322            |
-      | ownershipStatus   | Owned                |
-      | organicStatus     | Conventional         |
-      | claimedArea       | 10                   |
-      | plotUse           | Apples               |
+      | county            | Donegal                  |
+      | townland          | Aghadowey - E18601       |
+      | plotReference     | T87654322                |
+      | ownershipStatus   | Owned                    |
+      | organicStatus     | Conventional             |
+      | claimedArea       | 10                       |
+      | plotUse           | Apples                   |
       | mapChangeOption   | Submit Paper Map By Post |
     Then plot "T87654322" should be available in Land Details
 
@@ -181,7 +192,6 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     # -----------------------------------------
     When the agent deletes parcel or plot "T87654322"
     And the agent confirms the deletion
-    #Then plot "T87654321" should be marked for deletion
 
     # -----------------------------------------
     # Land Details - complete mandatory information
@@ -190,9 +200,9 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     And the agent proceeds to the next application step
     Then the next application step should open successfully
 
-    #----------------------------------------------------------
-    # ISLAND PAGE
-    #-------------------------------------------------------------
+    # -----------------------------------------
+    # Island page
+    # -----------------------------------------
     And the agent reaches on Island Stepper
 
     # -----------------------------------------
@@ -204,14 +214,9 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     Then the application should move beyond the GAEC 7 step
 
     # -----------------------------------------
-    # ACRES step
+    # ACRES step (rescore panel handled when it is shown)
     # -----------------------------------------
     And the agent handles the ACRES step if present
-    #Below Steps explain what is happening
-    #When the agent opens the "ACRES" step
-    #And the agent selects "Yes, rescore" on panel 1
-    #And the agent continues panel 1
-    #Then the ACRES step should be completed successfully
 
     # -----------------------------------------
     # Eco step
@@ -219,15 +224,6 @@ Feature: BISS Agent completes an end-to-end farmer application journey
     When the agent opens the "Eco" step
     And the agent selects eco AP options "" and ""
     Then the Eco step should be completed successfully
-
-    # -----------------------------------------
-    # Eco opt-out validation
-    # -----------------------------------------
-    #When the agent returns to the "Scheme Selection" step
-    #And the agent opens the "Eco" scheme card
-    #And the agent proceeds to the next application step
-    #And the agent accepts the acknowledgement if displayed
-    #Then the application should continue successfully after eco validation
 
     # -----------------------------------------
     # Review and Submit
@@ -246,7 +242,6 @@ Feature: BISS Agent completes an end-to-end farmer application journey
       | My Correspondence                 |
     Then each requested side navigation tab should open successfully
     Then the agent clicks on the " Upload a document" stepper button
-      #When Agent expand Upload Documents Accordion
     And the agent selects "Commonage Evidence" from the Document type dropdown
     And the agent uploads a document in Correspondence
     Then the document should be uploaded successfully in Correspondence
