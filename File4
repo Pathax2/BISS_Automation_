@@ -1,133 +1,239 @@
 // ===================================================================================================================================
-// File          : TC_05_ENTS.java
-// Package       : stepdefinitions.ENTS
-// Description   : Step definitions for TC_05_ENTS - Transfer Application E2E (Agent to Individual).
+// File          : ConfigManager.java
+// Package       : utilities
+// Description   : Centralised configuration manager for the BISS automation framework.
+//                 Loads a base application.properties file and overlays an environment-specific
+//                 profile file (application-dev.properties, application-docker.properties, etc.).
 //
-//                 Only the steps unique to an Agent-to-Individual transfer live here. The difference from the
-//                 agent-to-agent flow (TC_03_ENTS / TC_04_ENTS):
-//                   - the transferee logs in with their OWN individual login (e.g. "PAUDYFROG"), not an agent login
-//                   - a personal details dialog can be shown after the individual logs in
-//                   - the individual opens "Transfers" from the farmer side navigation (no My Clients tab switch)
-//                   - the individual sees the transfer on their own Transfers page, so there is no herd search
+// Profile resolution order (highest wins):
+//   1. JVM -D system properties                 (-Dexplicit.wait.seconds=40)
+//   2. OS environment variables with BISS_ prefix (BISS_EXPLICIT_WAIT_SECONDS=40)   <- NEW for Docker
+//   3. application-<env>.properties
+//   4. application.properties (base defaults)
 //
-//                 Steps in this file (2):
-//                   1. the agent logs out and re-logs in as the individual transferee {string}
-//                   2. the individual completes the transferee acceptance flow (DataTable)
+// Environment variable naming rule : prefix BISS_, upper-case, dots and dashes become underscores
+//   explicit.wait.seconds  ->  BISS_EXPLICIT_WAIT_SECONDS
+//   app.url                ->  BISS_APP_URL
 //
-//                 Every other step of TC_05_ENTS.feature / TC_06_ENTS.feature is already defined:
-//                   login / portal navigation / side navigation -> stepdefinitions.TC_03
-//                   tab switching                               -> stepdefinitions.TC_06
-//                   login as a named user                       -> stepdefinitions.ENTS.TC_08_ENTS
-//                   create / upload / send / key / submit       -> stepdefinitions.ENTS.TC_01_ENTS
-//                   transferor re-login between sections        -> stepdefinitions.ENTS.TC_03_ENTS
+// Active profile : -Denv=<profile>  or  BISS_ENV=<profile>  (default "dev")
+// Config folder  : -Dconfig.path=<folder> or BISS_CONFIG_PATH (default src/test/resources/config/)
 //
-//                 Playwright edition (30-09-2026):
-//                   - Same step texts, same ObjectRepository keys, same flow.
-//                   - The copied login block (username, PIN loop, new-user Next screens, T&C, TOTP, Account Expired)
-//                     is replaced by the shared EntsSession.loginAs / EntsSession.logout. loginAs also fills the
-//                     mobile number form when Keycloak asks for it.
-//                   - Account Expired: Selenium called Hooks.markAgentExpired for the BISS runtime agent (a different
-//                     user) and logged in again as the same expired individual. loginAs now fails the step with the
-//                     login in the message.
-//                   - The personal details dialog is closed when shown (EntsSession.closePersonalDetailsIfShown). The
-//                     Selenium notes mentioned it but the code never closed it.
-//                   - The key comes from TC_01_ENTS.iCapturedTransferKey and is checked before it is typed.
-//                   - Thread.sleep, WebDriverWait, findElement and the private isVisible are gone (Playwright waits).
-//                   - The unused private handlePostLoginOTP() and the local performLogout() copy are gone.
-//                   - Runtime data: the individual login is the token {transferee.login}, picked together with the
-//                     transferee herd from the Individual Login query (utilities.EntsTestData.nextAgentToIndividualPair).
-//                     A plain login such as "PAUDYFROG" still works, to pin a user for debugging.
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data), 08-10-2026 (transferee holder check)
+// Author        : Aniket Pathare | aniket.pathare@goverment.ie
+// Date Created  : 10-03-2026
+// Updated       : 15-09-2026 - Environment variable layer and configurable folder for container execution
 // ===================================================================================================================================
 
-package stepdefinitions.ENTS;
+package utilities;
 
-import io.cucumber.datatable.DataTable;
-import io.cucumber.java.en.*;
-import org.junit.jupiter.api.Assertions;
-import utilities.ConfigManager;
-import utilities.EntsTestData;
-
-import java.util.Map;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.util.Locale;
+import java.util.Properties;
 import java.util.logging.Logger;
 
-public class TC_05_ENTS
+public class ConfigManager
 {
-    private static final Logger log = Logger.getLogger(TC_05_ENTS.class.getName());
+    private static final Logger log = Logger.getLogger(ConfigManager.class.getName());
 
+    private static final String iEnvPrefix = "BISS_";
 
-    // ===================================================================================================================================
-    //  INDIVIDUAL LOGIN - log out of the agent session, log in as the individual
-    // ===================================================================================================================================
+    private static final String iConfigBasePath = resolveBootstrapValue("config.path", "src/test/resources/config/");
+    private static final String iBaseFileName   = "application.properties";
 
-    // ***************************************************************************************************************************************************************************************
-    // Step          : the agent logs out and re-logs in as the individual transferee {string}
-    // Description   : Logs out of the current session and logs in as the individual transferee:
-    //                   username -> Continue -> password (TD:Password) -> Login -> PIN / mobile number / TOTP / T&C,
-    //                   or OTP only (EntsSession.loginAs, same sequence as the Selenium copy).
-    //                 Then closes the personal details dialog when it is shown (waits up to ents.personal.details.seconds,
-    //                 default 5).
-    // Parameters    : pUsername (String) - individual login, e.g. "PAUDYFROG", or {transferee.login}
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, shared login)
-    // ***************************************************************************************************************************************************************************************
-    @When("the agent logs out and re-logs in as the individual transferee {string}")
-    public void theAgentLogsOutAndReLogsInAsTheIndividualTransferee(String pUsername)
+    private static final Properties iProperties = new Properties();
+
+    private static final String iActiveProfile = resolveBootstrapValue("env", "dev").trim().toLowerCase(Locale.ROOT);
+
+    static
     {
-        String iUsername = EntsTestData.resolve(pUsername);
-        log.info("[STEP] When the agent logs out and re-logs in as the individual transferee: " + iUsername);
-
-        Assertions.assertFalse(iUsername == null || iUsername.isEmpty(),
-                "No individual login to use. Give a login in the feature file or use {transferee.login} after the create step.");
-
-        EntsSession.logout();
-        EntsSession.loginAs(iUsername, "[LOGIN-INDIVIDUAL]");
-        EntsSession.closePersonalDetailsIfShown(ConfigManager.getInt("ents.personal.details.seconds", 5));
-
-        log.info("Logged in as the individual transferee: " + iUsername);
+        loadBaseProperties();
+        loadProfileProperties();
+        log.info("[ConfigManager] Loaded | Profile='" + iActiveProfile + "' | Folder='" + iConfigBasePath
+                + "' | Total keys=" + iProperties.size());
     }
 
-
-    // ===================================================================================================================================
-    //  INDIVIDUAL TRANSFEREE ACCEPTANCE
-    // ===================================================================================================================================
+    private ConfigManager() {}
 
     // ***************************************************************************************************************************************************************************************
-    // Step          : the individual completes the transferee acceptance flow (DataTable)
-    // Description   : The individual is on their own Transfers page (side navigation step), so there is no herd search.
-    //                 The screens themselves are EntsSession.acceptWithTransferKey (ETF button or View, key, notes,
-    //                 Submit Application to DAFM, T&C, confirm), shared with TC_07 and TC_08.
-    //
-    //                 DataTable keys:
-    //                   transfereeHerd (String) - herd number, or {transferee.herd} (log only - no search on this page)
-    //                   notes          (String) - transferee notes, e.g. "Approved Test"
-    //
-    //                 Depends on the key captured by TC_01_ENTS "the transfer key should be captured".
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    //                 08-10-2026: before the acceptance screens, EntsSession.verifyTransfereeHolder checks that the
-    //                 logged-in holder (page header) is the herd and name the transfer was sent to.
-    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright + runtime ENTS data), 08-10-2026 (holder check)
+    // Function Name : toEnvName
+    // Description   : Converts a property key into its BISS_ environment variable name.
+    // Parameters    : pKey (String) - property key e.g. explicit.wait.seconds
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 15-09-2026
     // ***************************************************************************************************************************************************************************************
-    @And("the individual completes the transferee acceptance flow")
-    public void theIndividualCompletesTheTransfereeAcceptanceFlow(DataTable pDataTable)
+    public static String toEnvName(String pKey)
     {
-        log.info("[STEP] And the individual completes the transferee acceptance flow");
+        return iEnvPrefix + pKey.trim().toUpperCase(Locale.ROOT).replace('.', '_').replace('-', '_');
+    }
 
-        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+    private static String resolveBootstrapValue(String pKey, String pDefault)
+    {
+        String iValue = System.getProperty(pKey);
+        if (iValue != null && !iValue.trim().isEmpty()) { return iValue.trim(); }
 
-        String iTransfereeHerd = iData.getOrDefault("transfereeHerd", "").trim();
-        String iNotes          = iData.get("notes").trim();
-        String iTransferKey    = TC_01_ENTS.iCapturedTransferKey;
+        iValue = System.getenv(toEnvName(pKey));
+        if (iValue != null && !iValue.trim().isEmpty()) { return iValue.trim(); }
 
-        Assertions.assertFalse(iTransferKey == null || iTransferKey.isEmpty(), "Transfer key must have been captured in the Transferor flow before the individual can accept.");
+        return pDefault;
+    }
 
-        // 08-10-2026: the login must be the holder the transfer was sent to (TC_09_ENTS: same herd, other holder)
-        EntsSession.verifyTransfereeHolder("[TRANSFER]");
+    private static void loadBaseProperties()
+    {
+        String iPath = iConfigBasePath + iBaseFileName;
 
-        EntsSession.acceptWithTransferKey(iTransferKey, iNotes);
+        try (InputStream iStream = new FileInputStream(iPath))
+        {
+            iProperties.load(iStream);
+            log.info("[ConfigManager] Base config loaded from : " + iPath);
+        }
+        catch (Exception iException)
+        {
+            throw new RuntimeException("[ConfigManager] Failed to load base config from : '"
+                    + iPath + "' | Reason : " + iException.getMessage(), iException);
+        }
+    }
 
-        log.info("Individual transferee acceptance completed for herd: " + iTransfereeHerd + " | login=" + EntsTestData.loggedInUser());
+    private static void loadProfileProperties()
+    {
+        String iPath = iConfigBasePath + "application-" + iActiveProfile + ".properties";
+
+        try (InputStream iStream = new FileInputStream(iPath))
+        {
+            Properties iProfileProps = new Properties();
+            iProfileProps.load(iStream);
+            iProperties.putAll(iProfileProps);
+            log.info("[ConfigManager] Profile config loaded from : " + iPath + " | Keys overridden=" + iProfileProps.size());
+        }
+        catch (Exception iException)
+        {
+            log.warning("[ConfigManager] Profile config not found for env='" + iActiveProfile
+                    + "'. Using base defaults only. Path attempted: " + iPath);
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : get
+    // Description   : Returns a String config value. -D system property wins, then BISS_ environment variable,
+    //                 then the profile file, then the base file.
+    // Parameters    : pKey (String) - property key
+    // Author        : Aniket Pathare | aniket.pathare@goverment.ie
+    // Date Created  : 10-03-2026 | Updated: 15-09-2026 (environment variable layer)
+    // ***************************************************************************************************************************************************************************************
+    public static String get(String pKey)
+    {
+        if (pKey == null || pKey.trim().isEmpty())
+        {
+            throw new RuntimeException("[ConfigManager] Key cannot be null or blank.");
+        }
+
+        String iJvmValue = System.getProperty(pKey.trim());
+        if (iJvmValue != null && !iJvmValue.trim().isEmpty())
+        {
+            return iJvmValue.trim();
+        }
+
+        String iEnvValue = System.getenv(toEnvName(pKey));
+        if (iEnvValue != null && !iEnvValue.trim().isEmpty())
+        {
+            return iEnvValue.trim();
+        }
+
+        String iValue = iProperties.getProperty(pKey.trim());
+
+        if (iValue == null || iValue.trim().isEmpty())
+        {
+            throw new RuntimeException("[ConfigManager] Key not found in config : '" + pKey
+                    + "' | Active profile : '" + iActiveProfile + "'");
+        }
+
+        return iValue.trim();
+    }
+
+    public static String getOrDefault(String pKey, String pDefault)
+    {
+        try
+        {
+            return get(pKey);
+        }
+        catch (Exception iException)
+        {
+            return pDefault;
+        }
+    }
+
+    public static int getInt(String pKey, int pDefault)
+    {
+        try
+        {
+            return Integer.parseInt(get(pKey));
+        }
+        catch (Exception iException)
+        {
+            return pDefault;
+        }
+    }
+
+    public static boolean getBool(String pKey, boolean pDefault)
+    {
+        try
+        {
+            return Boolean.parseBoolean(get(pKey));
+        }
+        catch (Exception iException)
+        {
+            return pDefault;
+        }
+    }
+
+    public static long getLong(String pKey, long pDefault)
+    {
+        try
+        {
+            return Long.parseLong(get(pKey));
+        }
+        catch (Exception iException)
+        {
+            return pDefault;
+        }
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : isFixedDataTestCase
+    // Description   : True when pTestCaseId is listed in fixed.data.testcases (comma-separated, case-insensitive; default
+    //                 TC_BISS_E2E_PreLive). Such a test case takes its herd and agent from the feature file and never uses
+    //                 the database (Hooks skips the bootstrap, DBRouter refuses every query). Kept here, not in DBRouter, so
+    //                 asking the question does not load the database layer - a fixed-data run needs no db.properties.
+    // Parameters    : pTestCaseId (String) - TestCase_ID from ExecutionControl.xlsx
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 15-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static boolean isFixedDataTestCase(String pTestCaseId)
+    {
+        String iId = pTestCaseId == null ? "" : pTestCaseId.trim();
+        if (iId.isEmpty()) return false;
+        for (String iListed : getOrDefault("fixed.data.testcases", "TC_BISS_E2E_PreLive").split(","))
+        {
+            if (iListed.trim().equalsIgnoreCase(iId)) return true;
+        }
+        return false;
+    }
+
+    public static String getActiveProfile()
+    {
+        return iActiveProfile;
+    }
+
+    public static void printAll()
+    {
+        log.info("[ConfigManager] ===== Active Configuration (Profile: " + iActiveProfile + ") =====");
+        iProperties.stringPropertyNames().stream().sorted().forEach(iKey ->
+        {
+            String iLower = iKey.toLowerCase(Locale.ROOT);
+            String iValue = iLower.contains("password") || iLower.contains("secret") || iLower.contains("token")
+                    ? "****MASKED****"
+                    : getOrDefault(iKey, "");
+
+            log.info("[ConfigManager]   " + iKey + " = " + iValue);
+        });
     }
 }
