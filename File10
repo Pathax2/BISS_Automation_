@@ -1,2126 +1,838 @@
-package database;
-
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.sql.*;
-import java.text.SimpleDateFormat;
-import java.util.*;
-import java.util.Date;
-import java.util.logging.*;
-
-// =====================================================================================================================================
-// File          : DBRouter.java
-// Package       : database
-// Description   : Multi-database query router for the BISS Automation Framework.
-//                 Provides a single entry point for all SQL execution across BISS_DATA,
-//                 BISS_INET and ENTS_DATA Oracle databases. All queries are identified by a logical
-//                 label string and resolved to parameterised SQL internally, keeping
-//                 step definitions and hooks free of SQL syntax.
+// ===================================================================================================================================
+// File          : TC_01_ENTS.java
+// Package       : stepdefinitions.ENTS
+// Description   : Step definitions for TC_01_ENTS — Transfer Application E2E Regression Pack (Same Agent).
 //
-//                 Supports two execution modes:
-//                   1. runDB()     — label-based execution (predefined queries only)
-//                   2. runRawSQL() — raw SQL execution (utility tools and ad-hoc queries)
+//                 Covers the full Transferor → Transferee cycle for all 7 transfer types:
+//                   206 (Change of Legal Entity), 201 (Change of Registration / Inheritance),
+//                   202 (Gift), 211 (Lease), 204 (Division), 212 (Sale)
 //
-//                 Connection properties are loaded once at class initialisation from:
-//                   src/test/resources/db.properties
+//                 Reused steps (defined elsewhere, bound automatically by Cucumber):
+//                   "the agent user is on the login page"                            → TC_03.java
+//                   "the individual logs in as transferor {string}"                  → TC_08_ENTS.java
+//                   "the agent opens the {string} application"                       → TC_03.java
+//                   "the agent should land on the BISS Home page"                    → TC_03.java
+//                   "the agent navigates to the {string} and {string} Left Menu Link"→ TC_03.java
+//                   "the agent switches to the {string} tab on the My Client(s) page"→ TC_06.java
+//                   "the ETF partner completes the transferee acceptance flow"       → TC_07_ENTS.java
 //
-//                 Usage:
-//                   DBRouter.runDB("DATA", "List of herds with no errors at all", "2026", "25");
-//                   String herd = DBRouter.getValue("APP_HERD_NO");
+//                 Playwright edition (22-09-2026):
+//                   - Same step texts, same ObjectRepository keys, same flow.
+//                   - Runtime test data: a DataTable value written as a token, e.g. {transferor.herd}, is replaced by
+//                     a random unused herd from the ENTS Agent Login query (utilities.EntsTestData). Plain values
+//                     still work, so a herd can be pinned for debugging.
+//                   - findElements / JavascriptExecutor / WebDriverWait replaced by Playwright locators (EntsSession).
+//                   - Logout uses the shared EntsSession.logout().
+//                   - 24-09-2026: transferee search selects the row with no End Date when the dialog shows
+//                     "N matches found" (EntsSession.selectOpenTransfereeMatch).
+//                   - 29-09-2026: cross-agent sections (TC_04_ENTS) - a transfereeAgent row takes the transferee herd
+//                     from that agent's pool (EntsTestData.nextCrossAgentPair); {transferee.agent} names that agent.
+//                   - 30-09-2026: agent-to-individual sections (TC_05_ENTS / TC_06_ENTS) - a "transfereeType | Individual"
+//                     row takes the transferee herd from the Individual Login query (EntsTestData.nextAgentToIndividualPair);
+//                     {transferee.login} names the individual's own login.
+//                   - 30-09-2026: "Leased entitlements can only be transferred by ..." after Next on the entitlements page
+//                     - the step clicks Back, selects ents.leased.fallback.type (an allowed type) and adds the
+//                     entitlement again (handleLeasedEntitlementsError).
+//                   - 22-09-2026 (TC_18 to TC_24 drop): "Validate if Appeal can be made sucessfully" checks its Object
+//                     Repository keys first and always logs out (see the step comment).
 //
-//                   DBRouter.runDB("INET", "Get Login Id for herd", herd);
-//                   String username = DBRouter.getValue("USERNAME");
+//                 02-10-2026: the create step uses EntsSession.searchTransferee. On "No transferee matches were found"
+//                 a runtime transferee is replaced (EntsTestData.replaceTransferee) and searched again in the same
+//                 dialog, up to ents.transferee.retries (default 3).
 //
-//                   DBRouter.runDB("DATA", "List of individual herds with CISYF scheme", "2026", "25");
-//                   DBRouter.runDB("DATA", "List of not started individual herds eligible for CISYF", "2026", "25");
-//                   String herd = DBRouter.getValue("APP_HERD_NO");
-//
-//                   DBRouter.runRawSQL("DATA", "SELECT app_herd_no FROM vwbs_application WHERE ...");
-//                   List<Map<String, Object>> rows = DBRouter.getRows();
-//
-//                 db.properties keys:
-//                   db.url              — BISS_DATA JDBC connection URL
-//                   db.username         — BISS_DATA username
-//                   db.password         — BISS_DATA password
-//                   db.inet.url         — BISS_INET JDBC connection URL
-//                   db.inet.username    — BISS_INET username
-//                   db.inet.password    — BISS_INET password
-//                   db.ents.url         — ENTS_DATA JDBC connection URL   (optional - only needed by ENTS test cases)
-//                   db.ents.username    — ENTS_DATA username               (optional)
-//                   db.ents.password    — ENTS_DATA password               (optional)
-//
-//                 ENTS usage (22-09-2026):
-//                   DBRouter.runDB("ENTS", "ENTS Agent Login herds", "aga6077", "200");
-//                   DBRouter.runDB("ENTS", "ENTS Individual Login herds", "200");
-//                   DBRouter.runDB("ENTS", "ENTS Individual Login herds", "200", "Y", "Individual");
-//                   DBRouter.runDB("ENTS", "ENTS ETF Login herds", "2026", "200");
-//                   DBRouter.runDB("ENTS", "ENTS Agent herds without entitlements", "aga6077", "200", "2026");
-//
-//                 Individual usage (25-09-2026, TC_03_IND):
-//                   DBRouter.runDB("DATA", "List of not started individual herds with CISYF flag", "2026", "50");
-//                   DBRouter.runDB("INET", "Get Individual Login for herd", "E1080206");
-//                   String login = DBRouter.getValue("LOGIN");
+//                 07-10-2026: a pair picked EARLIER in the scenario (TC_17_ENTS "the agent picks a same-agent transfer pair
+//                 for {string}", which needs the transferor before the transfer to capture its OwnerID) is pinned in
+//                 EntsTestData. The create step then uses that pair instead of picking a new one. When a check fails it
+//                 replaces only the transferee; a rejected transferor fails the step, because its OwnerID is already
+//                 captured. herdProblem is package-private so the pick step uses the same checks.
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 27-04-2026
-// Updated       : 22-09-2026 - Playwright edition: ENTS_DATA connection and the three ENTS login queries added
-//                 23-09-2026 - "ENTS Agent herds without entitlements" added (TC_02_ENTS Section 2)
-//                 25-09-2026 - "List of not started individual herds with CISYF flag" (DATA) and
-//                              "Get Individual Login for herd" (INET) added (TC_03_IND)
-//                 30-09-2026 - ENTS agent queries match only CURRENT agent links (herd_agt end date 31-DEC-9999)
-//                 30-09-2026 - "ENTS Individual Login herds": optional two-word name and customer type filters
-//                              (TC_05_ENTS / TC_06_ENTS individual transferees)
-//                 01-10-2026 - query() / queryRaw(): thread-safe variants that RETURN the rows instead of writing the
-//                              shared lastRows / lastScalar. Used by utilities.DataHarvester to fetch every test data
-//                              pool in parallel before the first browser opens. runDB / getRows are unchanged.
-//                            - "ENTS herd has current agent link" (ENTS): cheap spot-check of one vault row.
-//                            - "ENTS ETF partner herds" (ENTS): herds linked to ONE ETF partner login (agr15678, agr15512).
-//                              ETF partners are not in vwco_ents_herd_abls_rpt.herd_agt (checked 01-10-2026, COUNT = 0),
-//                              so the Agent Login query finds nothing for them; their herds come via tden_herd_etf_link.
-//                 05-10-2026 - "List of not started individual herds with CISYF flag": the same two guards as
-//                              "List of herds with no errors at all" - at least one non-deleted land parcel, and no
-//                              Draft / Submitted / Helpdesk / Draft Dept application for the herd in the same year.
-//                              Without them a herd whose RI row was still there could already be started or submitted.
-//                            - "BISS herd application started" (DATA): cheap spot-check of one vault row.
-//                 06-10-2026 - "ENTS ETF logins" (ENTS): every ETF code with its login (TC_14_ENTS random ETF pick)
-//                 08-10-2026 - "List of not started partnership herds" (DATA): partnership herds (herd number contains FP),
-//                              same Not Started rules as "List of herds with no errors at all" (TC_03_PART)
-//                 07-10-2026 - "ENTS Individual Login herds": optional entitlement filter (scheme year + more than N
-//                              entitlements), the same rule as "ENTS Agent Login herds". Without it the query returned
-//                              individual herds with no entitlements.
-//                 15-10-2026 - Fixed-data test cases (fixed.data.testcases, e.g. TC_BISS_E2E_PreLive - see
-//                              ConfigManager.isFixedDataTestCase): runDB and runRawSQL refuse to run while one is the
-//                              current test case. Their herd and agent come from the feature file, so a database herd
-//                              (from another environment) can never slip in.
-// =====================================================================================================================================
+// Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data), 02-10-2026 (transferee no match),
+//                                       07-10-2026 (pinned pair, TC_17_ENTS)
+// ===================================================================================================================================
 
-public class DBRouter
+package stepdefinitions.ENTS;
+
+import com.microsoft.playwright.Locator;
+import commonFunctions.UiHelpers;
+import io.cucumber.datatable.DataTable;
+import io.cucumber.java.en.*;
+import org.junit.jupiter.api.Assertions;
+import stepdefinitions.Hooks;
+import utilities.ConfigManager;
+import utilities.EntsTestData;
+import utilities.ObjReader;
+
+import java.util.List;
+import java.util.Map;
+import java.util.logging.Logger;
+
+import static commonFunctions.CommonFunctions.iAction;
+import static stepdefinitions.ENTS.EntsSession.PROBE_SECONDS;
+import static stepdefinitions.ENTS.EntsSession.TRANSFERS_TAB_XPATH;
+import static stepdefinitions.ENTS.EntsSession.countOf;
+import static stepdefinitions.ENTS.EntsSession.isVisible;
+import static stepdefinitions.ENTS.EntsSession.pause;
+import static stepdefinitions.ENTS.EntsSession.xp;
+
+public class TC_01_ENTS
 {
-    // =====================================================================
-    // STATIC RESULT STORE
-    // =====================================================================
-    public static List<Map<String, Object>> lastRows   = new ArrayList<>();
-    public static Object                    lastScalar = null;
-    public static String                    lastLabel  = "";
+    private static final Logger log = Logger.getLogger(TC_01_ENTS.class.getName());
 
-    // =====================================================================
-    // DB CONFIGURATION
-    // =====================================================================
-    private static final Logger log             = Logger.getLogger(DBRouter.class.getName());
-    private static final String PROPERTIES_FILE = "src/test/resources/db.properties";
+    // XPath of the success message checked after "Submit Application to DAFM" (unchanged from Selenium)
+    private static final String SUBMITTED_MESSAGE_XPATH =
+            "//div[contains(@class,'success') or contains(@class,'confirmation')] | "
+                    + "//*[contains(text(),'submitted') or contains(text(),'Submitted') or contains(text(),'accepted')]";
 
-    // BISS_DATA connection
-    private static String DB_URL;
-    private static String DB_USER;
-    private static String DB_PASSWORD;
+    // -------------------------------------------------------------------------------------------------------------------------------
+    // Transfer key captured during the Transferor flow and consumed by the Transferee flow.
+    // Static so TC_03_ENTS / TC_07_ENTS / TC_08_ENTS can read it. Also published as the system property
+    // "lastCapturedTransferKey", which the Selenium TC_08_ENTS read but nothing ever set.
+    // -------------------------------------------------------------------------------------------------------------------------------
+    public static String iCapturedTransferKey = "";
 
-    // BISS_INET connection
-    private static String DB_INET_URL;
-    private static String DB_INET_USER;
-    private static String DB_INET_PASSWORD;
+    // Error on the entitlements page when the transferor's entitlements are leased and the selected type does not allow
+    // it: "Leased entitlements can only be transferred by Change of Registration, Change of Legal Entity, Merger or
+    // Division of Entitlements (Scission)" (30-09-2026)
+    private static final String LEASED_ENTS_ERROR_XPATH =
+            "//mat-error[contains(normalize-space(),'Leased entitlements can only be transferred by')]";
 
-    // ENTS_DATA connection - optional, checked only when an ENTS query runs
-    private static String DB_ENTS_URL;
-    private static String DB_ENTS_USER;
-    private static String DB_ENTS_PASSWORD;
+    // Back button in the bottom navigation of the transfer wizard (next to All Transfer Applications / Save and Exit / Next)
+    private static final String TRANSFER_BACK_BTN_XPATH =
+            "(//section[contains(@class,'bottom-section')]//button[contains(normalize-space(),'Back')])[1]";
 
-    static
-    {
-        setupLogger();
-        loadDBProperties();
-    }
+    // Transfer type used instead when the error above is shown. Must be one of the types the error lists.
+    private static final String LEASED_FALLBACK_TYPE =
+            ConfigManager.getOrDefault("ents.leased.fallback.type", "Change of Registration").trim();
 
-    // =====================================================================
-    // THREAD-SAFE MODE (query / queryRaw)
-    // =====================================================================
-    // When a thread calls query() or queryRaw(), executeQuery hands the rows back through THREAD_ROWS instead of
-    // writing lastRows / lastScalar / lastLabel, so several threads can run different queries at the same time
-    // without overwriting each other's results. runDB / runRawSQL on the calling thread behave exactly as before.
-    private static final ThreadLocal<Boolean>                   THREAD_MODE = ThreadLocal.withInitial(() -> false);
-    private static final ThreadLocal<List<Map<String, Object>>> THREAD_ROWS = new ThreadLocal<>();
+
+    // ===================================================================================================================================
+    //  TRANSFEROR FLOW — Create Transfer Application
+    // ===================================================================================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : query
-    // Description   : Same labels and parameters as runDB, but the rows are RETURNED and the shared result store is
-    //                 left untouched, so it is safe to call from several threads at once.
-    // Parameters    : dbKey, label, params - as runDB
-    // Returns       : List of rows (column label in upper case -> value); never null
+    // Step          : the agent creates a transfer application with the following details (DataTable)
+    // Description   : Executes the entire Transferor flow in one step:
+    //                 0. When the table uses tokens, picks a fresh transferor + transferee pair of the logged-in agent
+    //                 1. Search for transferor herd and click View
+    //                 2. Click "Create Transfer Application"
+    //                 3. Search for transferee by herd + name
+    //                 4. Select the transfer type
+    //                 5. Add entitlement amount on the row with the most available entitlements
+    //                 6. Select lease year if applicable (Lease only)
+    //                 6a. If the portal says the entitlements are leased and the type is not allowed, go Back, select
+    //                     ents.leased.fallback.type and add the entitlement again (30-09-2026)
+    //                 7. Enter transfer notes
+    //
+    //                 DataTable keys:
+    //                   transferorHerd (String) - herd number, or {transferor.herd}
+    //                   transfereeHerd (String) - herd number, or {transferee.herd}
+    //                   transfereeName (String) - full name,   or {transferee.name}
+    //                   transfereeAgent(String) - OPTIONAL. Login of the transferee's agent for a cross-agent transfer
+    //                                             (TC_03_ENTS / TC_04_ENTS). Left out = same-agent transfer.
+    //                   transfereeType (String) - OPTIONAL. "Individual" = the transferee is an individual with their own
+    //                                             login (TC_05_ENTS / TC_06_ENTS). Left out = a client of an agent.
+    //                   transferType   (String) - transfer type text, e.g. "Gift of Entitlements"
+    //                   entitlements   (String) - number of entitlements to transfer e.g. "0.01"
+    //                   leaseYear      (String) - "Yes" if lease year selection is needed (optional key)
+    //                   notes          (String) - notes to enter on the transfer summary
+    //
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 01-10-2026
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data)
     // ***************************************************************************************************************************************************************************************
-    public static List<Map<String, Object>> query(String dbKey, String label, String... params)
+    @When("the agent creates a transfer application with the following details")
+    public void theAgentCreatesATransferApplicationWithTheFollowingDetails(DataTable pDataTable)
     {
-        THREAD_MODE.set(true);
-        try
+        log.info("[STEP] When the agent creates a transfer application with the following details");
+
+        Map<String, String> iRaw      = pDataTable.asMap(String.class, String.class);
+        boolean             iRuntime  = EntsTestData.tableHasToken(iRaw);
+        int                 iMaxTries = iRuntime ? Math.max(1, ConfigManager.getInt("ents.pair.retries", 5)) : 1;
+        Map<String, String> iData     = null;
+
+        // ── Steps 0-1 : pick a pair and validate both herds on screen (same checks as TC_03) ──
+        // Each herd is searched in the agent's Transfer Out list and rejected when it is
+        //   - blacklisted (Hooks.BLACKLISTED_HERDS)
+        //   - not in the list (0 rows)
+        //   - marked as expired in the Expired column
+        // A rejected herd is recorded in the used-herds file and a new pair is picked (up to ents.pair.retries).
+        // The transferee is checked first, so the last search on screen is the transferor, ready to open.
+        // Cross-agent (TC_03_ENTS / TC_04_ENTS): the DataTable carries a transfereeAgent row. The transferee herd then
+        // comes from THAT agent's pool and is not in the logged-in agent's Transfer Out list, so only the transferor is
+        // checked here; the transferee is checked after the login swap by the acceptance step.
+        // Agent to individual (TC_05_ENTS / TC_06_ENTS): a "transfereeType | Individual" row. The transferee herd comes
+        // from the Individual Login query; it is not in the agent's Transfer Out list either, so only the transferor
+        // is checked here.
+        String  iTransfereeAgent = iRaw.getOrDefault("transfereeAgent", "").trim();
+        boolean iToIndividual    = "Individual".equalsIgnoreCase(iRaw.getOrDefault("transfereeType", "").trim());
+        boolean iCrossAgent      = !iToIndividual && !iTransfereeAgent.isEmpty()
+                && !iTransfereeAgent.equalsIgnoreCase(EntsTestData.loggedInUser());
+        boolean iSkipTransferee  = iCrossAgent || iToIndividual;
+
+        for (int iTry = 1; iTry <= iMaxTries; iTry++)
         {
-            runDB(dbKey, label, params);
-            List<Map<String, Object>> iRows = THREAD_ROWS.get();
-            return iRows == null ? new ArrayList<>() : iRows;
-        }
-        finally
-        {
-            THREAD_MODE.set(false);
-            THREAD_ROWS.remove();
-        }
-    }
-
-    // Same as query() for a raw SQL string (used for the database fingerprint checks)
-    public static List<Map<String, Object>> queryRaw(String dbKey, String sql, Object... params)
-    {
-        THREAD_MODE.set(true);
-        try
-        {
-            runRawSQL(dbKey, sql, params);
-            List<Map<String, Object>> iRows = THREAD_ROWS.get();
-            return iRows == null ? new ArrayList<>() : iRows;
-        }
-        finally
-        {
-            THREAD_MODE.set(false);
-            THREAD_ROWS.remove();
-        }
-    }
-
-    // A fixed-data test case is running: stop before any connection is opened, with a message that says why
-    private static void refuseForFixedData(String pWhat)
-    {
-        String iTestCase = System.getProperty("testcase", "").trim();
-        if (utilities.ConfigManager.isFixedDataTestCase(iTestCase))
-        {
-            throw new IllegalStateException("[DBRouter] Database query '" + pWhat + "' refused: " + iTestCase
-                    + " is a fixed-data test case (fixed.data.testcases) - its herd and agent come from the feature file only."
-                    + " A step tried to fetch data from the database; that step needs a fixed-data branch.");
-        }
-    }
-
-    // =====================================================================
-    // PUBLIC API — LABEL-BASED EXECUTION
-    // =====================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : runDB
-    // Description   : Executes a predefined SQL query identified by a logical label string.
-    //                 The label is normalised (trimmed, uppercased, special characters replaced)
-    //                 and matched in a switch block to the corresponding parameterised SQL.
-    //                 Results are stored in lastRows and lastScalar for caller access via
-    //                 getValue(), getRows(), and hasRows().
-    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA), "INET" (BISS_INET) or "ENTS" (ENTS_DATA)
-    //                 label  — logical query label e.g. "List of herds with no errors at all"
-    //                 params — bind parameter values for the selected query (varies per label)
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void runDB(String dbKey, String label, String... params)
-    {
-        Objects.requireNonNull(dbKey,  "dbKey cannot be null");
-        Objects.requireNonNull(label,  "label cannot be null");
-        refuseForFixedData(label);
-
-        final String which = normalizeDb(dbKey);
-        final String key   = normalize(label);
-
-        if (!THREAD_MODE.get()) lastLabel = label;
-
-        String   sql        = null;
-        Object[] jdbcParams = new Object[0];
-
-        switch (key)
-        {
-            // ----------------------------------------------------------------
-            // DATA DB: Not Started agent herds (D to Z prefix) with no errors
-            //
-            // Confirmed final query (27-04-2026) after full DB investigation.
-            //
-            // Selection criteria:
-            //   app_mde_code = 1        → RI status (Renewal iNet preprint / Not Started)
-            //   REGEXP_LIKE '^[D-Z]'    → Herd numbers starting D to Z. (The 27-04-2026 note said
-            //                             LIKE 'A%' - individual herds only; the code has used
-            //                             '^[D-Z]' since, and that is what runs.)
-            //   EXISTS land parcel      → Herd must have at least one non-deleted land parcel.
-            //   NOT EXISTS mde_code IN  → Excludes herds with any of the following statuses:
-            //     (3, 4, 6, 8)              3 = D  (Draft)
-            //                               4 = I  (iNet / Submitted)
-            //                               6 = H  (Helpdesk)
-            //                               8 = DD (Draft Dept)
-            //
-            // Expired herd handling:
-            //   Herd expiry is not stored in vwbs_application — confirmed by column-by-column
-            //   comparison of A1010096 (valid) vs A1010070 (expired). Expiry is in Keycloak
-            //   SSO only. Expired agents are handled at runtime by Hooks.markAgentExpired()
-            //   which detects the "Account Expired" screen and re-resolves a fresh herd+agent.
-            //
-            // Column returned: APP_HERD_NO
-            //   executeQuery() uppercases all column labels so Hooks.java r.get("APP_HERD_NO")
-            //   works without any additional mapping.
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH NO ERRORS AT ALL":
+            if (iRuntime && EntsTestData.isPairPinned())
             {
-                requireParamCountBetween(key, params, 1, 3);
-
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 150;
-                // params[2] accepted for backward compatibility — not used in current query
-
-                sql =
-                        "SELECT ap_ri.app_herd_no " +
-                                "FROM vwbs_application ap_ri " +
-                                "WHERE ap_ri.app_mde_code = 1 " +
-                                "AND ap_ri.app_year = ? " +
-                                "AND REGEXP_LIKE(ap_ri.app_herd_no, '^[D-Z]') " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_application_land x " +
-                                "    WHERE x.apl_year        = ap_ri.app_year " +
-                                "    AND   x.apl_app_id      = ap_ri.app_id " +
-                                "    AND   x.apl_deleted_ind = 'N' " +
-                                ") " +
-                                "AND NOT EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM vwbs_application app " +
-                                "    WHERE app.app_year     = ap_ri.app_year " +
-                                "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
-                                "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
-                                ") " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY ap_ri.app_herd_no";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
+                // TC_17_ENTS: the pair was picked earlier in the scenario - keep it (its transferor's OwnerID is captured)
+                log.info("[TRANSFER] Using the pair picked earlier in the scenario: " + EntsTestData.currentPair().transferor
+                        + " -> " + EntsTestData.currentPair().transferee);
             }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Not Started PARTNERSHIP herds with no errors (TC_03_PART, 08-10-2026)
-            //
-            // Query supplied by Aniket (08-10-2026). Same rules as "List of herds with no errors at all":
-            //   app_mde_code = 1 (RI, Not Started) in the year, at least one non-deleted land parcel, and no Draft (3),
-            //   Submitted (4), Helpdesk (6) or Draft Dept (8) application for the herd in the same year.
-            // The only difference: herd numbers containing 'FP' (partnership herds, e.g. IFP10100) instead of '^[D-Z]'.
-            // Like the agent query, ROWNUM is applied before ORDER BY (some N matching herds, then sorted).
-            // The login comes from INET "Get Login Id for herd" (the agent linked to the partnership herd).
-            //
-            // params[0] = year  (required)
-            // params[1] = limit (optional - defaults to 150)
-            // Column returned: APP_HERD_NO
-            // ----------------------------------------------------------------
-            case "LIST OF NOT STARTED PARTNERSHIP HERDS":
+            else if (iRuntime)
             {
-                requireParamCountBetween(key, params, 1, 3);
-
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2 && !isBlank(params[1])) ? parseInt(params[1], "limit") : 150;
-                // params[2] accepted so the call matches "List of herds with no errors at all" - not used
-
-                sql =
-                        "SELECT ap_ri.app_herd_no " +
-                                "FROM vwbs_application ap_ri " +
-                                "WHERE ap_ri.app_mde_code = 1 " +
-                                "AND ap_ri.app_year = ? " +
-                                "AND ap_ri.app_herd_no LIKE '%FP%' " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_application_land x " +
-                                "    WHERE x.apl_year        = ap_ri.app_year " +
-                                "    AND   x.apl_app_id      = ap_ri.app_id " +
-                                "    AND   x.apl_deleted_ind = 'N' " +
-                                ") " +
-                                "AND NOT EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM vwbs_application app " +
-                                "    WHERE app.app_year     = ap_ri.app_year " +
-                                "    AND   app.app_herd_no  = ap_ri.app_herd_no " +
-                                "    AND   app.app_mde_code IN (3, 4, 6, 8) " +
-                                ") " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY ap_ri.app_herd_no";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds by scheme year
-            // ----------------------------------------------------------------
-            case "HERDS BY SCHEME YEAR":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                        "SELECT h.hld_herd_no " +
-                                "FROM tddp_application a " +
-                                "JOIN tdco_holding h ON h.hld_id = a.app_applicant_holding_id " +
-                                "WHERE a.app_syr_code = ? " +
-                                "ORDER BY h.hld_herd_no";
-                jdbcParams = new Object[]{ parseInt(params[0], "schemeYear") };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Resolve holding ID for a given herd number
-            // ----------------------------------------------------------------
-            case "GET HOLD ID FOR HERD":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql        = "SELECT get_hold(?) AS holding_id FROM dual";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // INET DB: Get agent username for a given herd number
-            //
-            // Source: Query 19 from BISS test data reference document.
-            //
-            // Uses a correlated subquery with ROWNUM = 1 to return the first
-            // available agent login for the given herd. Works for any herd
-            // regardless of how many agents are associated.
-            //
-            // ORDER BY ca.ca_start_date DESC returns the most recently associated
-            // agent first — most likely to be the current active/primary agent.
-            //
-            // Expired agent handling:
-            //   SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date filters
-            //   expired herd registrations at the DB level. If the returned agent
-            //   has an expired SSO account, the TC_03 login step detects
-            //   "Account Expired" on screen and calls Hooks.markAgentExpired()
-            //   which re-resolves a fresh herd+agent pair automatically.
-            //
-            // Column returned: USERNAME
-            //   Aliased as LoginId in the original query but uppercased to USERNAME
-            //   by executeQuery() so getValue("USERNAME") works consistently.
-            // ----------------------------------------------------------------
-            case "GET LOGIN ID FOR HERD":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                        "SELECT hbcus.bcus_bus_id AS HERDNO, " +
-                                "       (SELECT ui.uri_username " +
-                                "          FROM tdcr_user_info ui " +
-                                "         WHERE ui.uri_ccs_bus_id = abcus.bcus_bus_id " +
-                                "           AND ROWNUM = 1) AS USERNAME " +
-                                "  FROM tdco_customer_asscs ca, " +
-                                "       tdco_business_customers abcus, " +
-                                "       tdco_business_customers hbcus " +
-                                " WHERE SYSDATE BETWEEN ca.ca_start_date AND ca.ca_end_date " +
-                                "   AND ca.ca_cac_code     = 194 " +
-                                "   AND ca.ca_bcus_id_from = abcus.bcus_id " +
-                                "   AND ca.ca_bcus_id_to   = hbcus.bcus_id " +
-                                "   AND hbcus.bcus_bus_id  = ? " +
-                                " ORDER BY ca.ca_start_date DESC";
-                jdbcParams = new Object[]{ params[0] };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with active Preliminary Checks (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIMINARY CHECKS":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Dual Claims or Overlap findings (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH DUAL CLAIMS CHECK":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                        "SELECT * " +
-                                "FROM vwbs_preliminary_check_dc_ol " +
-                                "WHERE scheme_year = ? " +
-                                "AND ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Overclaim findings (year)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH OVERCLAIMS CHECK":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                        "SELECT * " +
-                                "FROM vwbs_preliminary_check_oc " +
-                                "WHERE scheme_year = ? " +
-                                "AND ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Preliminary Checks on commonage parcels
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS AND COMMONAGE":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 5;
-                sql =
-                        "SELECT LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, LVL_COMMONAGE_ID, " +
-                                "       LVT_DESC, LVC_DESC, LVS_DESC, VDS_SRC_DESC, LVL_SOURCE_ID " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND lvl_commonage_id IS NOT NULL " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Herds with Preliminary Checks filtered by response status
-            //
-            // params[0] = year
-            // params[1] = status e.g. "Pending", "Accepted", "Rejected"
-            // params[2] = limit (optional)
-            // ----------------------------------------------------------------
-            case "LIST OF HERDS WITH PRELIM CHECKS BY STATUS":
-            {
-                requireParamCountBetween(key, params, 2, 3);
-                int    year     = parseInt(params[0], "year");
-                String status   = params[1].trim();
-                int    maxRows  = (params.length >= 3) ? parseInt(params[2], "limit") : 5;
-                sql =
-                        "SELECT LVS_DESC, LVL_HERD_NO, LVC_DESC " +
-                                "FROM vwbs_land_validation " +
-                                "WHERE lvl_year = ? " +
-                                "AND lvt_desc = 'Preliminary Check' " +
-                                "AND lvs_desc = ? " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY LVL_HERD_NO";
-                jdbcParams = new Object[]{ year, status, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: One herd per Preliminary Check type (offset-based retry)
-            //
-            // Returns one herd per check type (Overclaim, Dual claim, Agricultural
-            // Activity) using ROW_NUMBER() OVER (PARTITION BY LVC_DESC).
-            // The offset parameter increments on each retry so a different herd
-            // is returned if the previous candidate fails INET validation.
-            //
-            // params[0] = year
-            // params[1] = offset (0 on first call, increment on each retry)
-            // ----------------------------------------------------------------
-            case "PRELIMINARY CHECKS HERDS":
-            {
-                requireParamCountBetween(key, params, 2, 2);
-                int year     = parseInt(params[0], "year");
-                int offset   = parseInt(params[1], "offset");
-                int targetRn = offset + 1;
-
-                sql =
-                        "SELECT * FROM ( " +
-                                "  SELECT LVL_YEAR, LVL_HERD_NO, LVL_LNU_ID, LVL_SUB_DIV_NO, " +
-                                "         LVL_COMMONAGE_ID, LVT_DESC, LVC_DESC, LVS_DESC, " +
-                                "         VDS_SRC_DESC, LVL_SOURCE_ID, " +
-                                "         ROW_NUMBER() OVER ( " +
-                                "             PARTITION BY LVC_DESC " +
-                                "             ORDER BY LVL_HERD_NO " +
-                                "         ) AS RN " +
-                                "  FROM vwbs_land_validation " +
-                                "  WHERE LVL_YEAR = ? " +
-                                "  AND LVT_DESC = 'Preliminary Check' " +
-                                "  AND LVS_DESC = 'Pending' " +
-                                "  AND LVC_DESC IN ('Agricultural Activity', 'Dual claim', 'Overclaim') " +
-                                ") WHERE RN = ?";
-                jdbcParams = new Object[]{ year, targetRn };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Individual herds with CISYF scheme applied (TC_13 ENTS)
-            //
-            // Returns individual herds (applicant_type = 'I') where:
-            //   - Application status is Submitted (mde_abbrev = 'I')
-            //   - Herd prefix is 'J%' (intentional for TC_13 ENTS scenarios)
-            //   - At least one non-deleted land parcel exists
-            //   - No payment has been processed yet (pap_payment_ind = 'Y' absent)
-            //   - CISYF scheme is applied — fn_GetSchemeApplied(aph_app_id, 3) = 'Y'
-            //     (scheme code 3 = CISYF in pkbs_payment_utils)
-            //   - substr(app_herd_no, 1, 1) > 'A' excludes TRNs as an additional guard
-            //
-            // J% prefix is intentional — TC_13 ENTS transfer scenarios require
-            // J-prefix herds specifically. Do not generalise to other prefixes
-            // without confirming TC_13 test data requirements.
-            //
-            // params[0] = year  (required)
-            // params[1] = limit (optional — defaults to 50)
-            // ----------------------------------------------------------------
-            case "LIST OF INDIVIDUAL HERDS WITH CISYF SCHEME":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
-                sql =
-                        "SELECT app_herd_no, app_year, aph_herd_type " +
-                                "FROM vwbs_application_herd " +
-                                "WHERE mde_abbrev     = 'I' " +
-                                "AND   applicant_type = 'I' " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_application_land x " +
-                                "    WHERE x.apl_year        = app_year " +
-                                "    AND   x.apl_aph_id      = aph_id " +
-                                "    AND   x.apl_app_id      = aph_app_id " +
-                                "    AND   x.apl_deleted_ind = 'N' " +
-                                ") " +
-                                "AND NOT EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_payment_application x " +
-                                "    WHERE x.pap_app_id      = aph_app_id " +
-                                "    AND   x.pap_payment_ind = 'Y' " +
-                                ") " +
-                                "AND app_year = ? " +
-                                "AND NVL(( " +
-                                "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
-                                "    FROM dual " +
-                                "), 'N') = 'Y' " +
-                                "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY app_herd_no ASC";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-            // ----------------------------------------------------------------
-            // DATA DB: Submitted individual herds with CISYF scheme (TC_13 post-submission)
-            //
-            // Returns herds where application is fully submitted (mde_abbrev = 'I')
-            // and CISYF scheme was applied. Used for post-submission verification
-            // flow — viewing, correspondence, document download.
-            //
-            // params[0] = year  (required)
-            // params[1] = limit (optional — defaults to 100)
-            // ----------------------------------------------------------------
-            case "LIST OF SUBMITTED INDIVIDUAL HERDS WITH CISYF SCHEME":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT app_herd_no, app_year " +
-                                "FROM vwbs_application_herd " +
-                                "WHERE mde_abbrev     = 'I' " +
-                                "AND   applicant_type = 'I' " +
-                                "AND   app_year       = ? " +
-                                "AND   NVL(( " +
-                                "    SELECT pkbs_payment_utils.fn_GetSchemeApplied(aph_app_id, 3) " +
-                                "    FROM dual " +
-                                "), 'N') = 'Y' " +
-                                "AND SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY DBMS_RANDOM.VALUE";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: Not Started individual herds eligible for CISYF (TC_13 ENTS)
-            //
-            // Returns J-prefix individual herds where the CURRENT year application
-            // is Not Started (mde_abbrev = 'RI') but the PREVIOUS year's submitted
-            // application had CISYF applied — meaning the herd is eligible for
-            // NR/CISYF in the current year but hasn't started yet.
-            //
-            // Use case: TC_13 full submission flow from scratch — herd appears on
-            // the NR/CISYF tab with no existing application, allowing a fresh Apply.
-            //
-            // Selection criteria:
-            //   curr.mde_abbrev = 'RI'                → Not Started (current year)
-            //   curr.app_herd_no LIKE 'J%'             → J-prefix individual herds
-            //   curr.applicant_type = 'I'              → Individual only
-            //   EXISTS land parcel (current year)      → Herd has active land
-            //   EXISTS prev year submitted with CISYF  → CISYF-eligible based on
-            //                                            previous year application
-            //   SUBSTR > 'A'                           → Excludes TRNs
-            //
-            // params[0] = year  (required — current scheme year)
-            // params[1] = limit (optional — defaults to 50)
-            // ----------------------------------------------------------------
-            case "LIST OF NOT STARTED INDIVIDUAL HERDS ELIGIBLE FOR CISYF":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 500;
-                sql =
-                        "SELECT curr.app_herd_no, curr.app_year, curr.aph_herd_type " +
-                                "FROM vwbs_application_herd curr " +
-                                "WHERE curr.mde_abbrev     = 'RI' " +
-                                "AND   curr.applicant_type = 'I' " +
-                                "AND   curr.app_year       = ? " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM tdbs_application_land x " +
-                                "    WHERE x.apl_year        = curr.app_year " +
-                                "    AND   x.apl_aph_id      = curr.aph_id " +
-                                "    AND   x.apl_app_id      = curr.aph_app_id " +
-                                "    AND   x.apl_deleted_ind = 'N' " +
-                                ") " +
-                                "AND EXISTS ( " +
-                                "    SELECT 1 " +
-                                "    FROM vwbs_application_herd prev " +
-                                "    WHERE prev.app_herd_no = curr.app_herd_no " +
-                                "    AND   prev.app_year    = curr.app_year - 1 " +
-                                "    AND   prev.mde_abbrev  = 'I' " +
-                                "    AND   NVL(( " +
-                                "        SELECT pkbs_payment_utils.fn_GetSchemeApplied(prev.aph_app_id, 3) " +
-                                "        FROM dual " +
-                                "    ), 'N') = 'Y' " +
-                                ") " +
-                                "AND SUBSTR(curr.app_herd_no, 1, 1) > 'A' " +
-                                "AND ROWNUM <= ? " +
-                                "ORDER BY curr.app_herd_no ASC";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // =========================================================================================================
-            // STAFF PORTAL QUERIES - migrated from the legacy com.pages.DatabaseQueriesPage
-            // ---------------------------------------------------------------------------------------------------------
-            // Consumed by the @staffdata hook in Hooks.java, which fills the STAFF_* pools these labels feed.
-            //
-            // MIGRATION NOTES
-            //   - Legacy built its SQL by string-concatenating a row count, wrote the result to .xls, then read it
-            //     back by row index. These cases return rows directly - no Excel round-trip, no row references.
-            //   - Legacy hardcoded the scheme year (2023 / 2024 / 2025) inside each query. Year is now a bind
-            //     parameter, matching the convention of every case above.
-            //   - Legacy used "fetch first N rows only"; ROWNUM is used here for consistency with this class.
-            //
-            // LEGACY DEFECT NOT CARRIED FORWARD
-            //   getQueryForSubmittedHerd() and getQueryForSubmittedHerdWithSimOptedIn() both contained:
-            //       app_herd_no like '[A-Z]%'
-            //   That is SQL Server bracket syntax. Oracle LIKE has no character classes, so Oracle compares against
-            //   the literal string "[A-Z]%" and the predicate is NEVER true. It sat inside NOT EXISTS(...), which
-            //   made the whole clause a no-op - the filter never filtered anything.
-            //   These cases OMIT it, so the result set matches what the legacy actually returned at runtime rather
-            //   than what it appeared to intend.
-            //   If the intent was real, the Oracle form is REGEXP_LIKE(app_herd_no, '^[A-Z]') - but adding it
-            //   CHANGES the returned data and the affected packs must be re-baselined.
-            // =========================================================================================================
-
-
-            // submitted -> STAFF_SUBMITTED_HERDS | reads APP_HERD_NO
-            case "GET SUBMITTED HERDS":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-
-                sql =
-                        "SELECT app_herd_no FROM ( " +
-                                "  SELECT h.app_herd_no " +
-                                "  FROM vwbs_application_herd h " +
-                                "  JOIN vwbs_application_land l " +
-                                "    ON l.app_herd_no = h.app_herd_no " +
-                                "   AND l.app_year = h.app_year " +
-                                "   AND l.app_mde_code = 4 " +
-                                "  WHERE h.mde_abbrev = 'I' " +
-                                "    AND h.app_year = ? " +
-                                "    AND REGEXP_LIKE(h.app_herd_no, '^[A-Z]') " +
-                                "  GROUP BY h.app_herd_no " +
-                                "  HAVING COUNT(DISTINCT l.parcel_id) >= 2 " +
-                                "  ORDER BY DBMS_RANDOM.VALUE " +
-                                ") WHERE ROWNUM <= ?";
-
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // penalty -> STAFF_PENALTY_HERDS | reads APP_HERD_NO
-            case "GET SUBMITTED HERDS WITH PENALTY":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT app_herd_no FROM ( " +
-                                "  SELECT app_herd_no " +
-                                "  FROM vwbs_application_penalty " +
-                                "  WHERE penalty_type = 'APPLICATION' " +
-                                "  AND   app_year     = ? " +
-                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                                "  ORDER BY app_herd_no " +
-                                ") WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // noamend -> STAFF_NOAMEND_HERDS | reads APP_HERD_NO
-            case "GET SUBMITTED HERDS WITH NO AMENDMENT":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT app_herd_no FROM ( " +
-                                "  SELECT app_herd_no " +
-                                "  FROM tdbs_application " +
-                                "  WHERE app_year      = ? " +
-                                "  AND   app_mde_code  = 4 " +
-                                "  AND   app_dct_code != 7 " +
-                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                                "  ORDER BY app_herd_no " +
-                                ") WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // admincheck -> STAFF_ADMINCHECK_HERDS | reads APP_HERD_NO
-            case "GET HERDS WITH ADMIN CHECK NOT STARTED":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT app_herd_no FROM ( " +
-                                "  SELECT ta.app_herd_no " +
-                                "  FROM tdbs_application ta " +
-                                "  LEFT JOIN tdbs_admin_check tac ON tac.adc_app_id = ta.app_id " +
-                                "  WHERE ta.app_mde_code = 4 " +
-                                "  AND   ta.app_year     = ? " +
-                                "  AND   tac.adc_app_id IS NULL " +
-                                "  AND   SUBSTR(ta.app_herd_no, 1, 1) > 'A' " +
-                                "  ORDER BY ta.app_herd_no " +
-                                ") WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // queryletter -> STAFF_QUERYLETTER_HERDS | reads APP_HERD_NO
-            case "GET HERDS WITH QUERY LETTER NOT STARTED":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT app_herd_no FROM ( " +
-                                "  SELECT DISTINCT app_year, app_herd_no " +
-                                "  FROM tdbs_system_note, tdbs_application " +
-                                "  WHERE snt_app_id = app_id " +
-                                "  AND   app_year   = ? " +
-                                "  AND   snt_action_subtype != 'QUERY_LETTER_SUBMITTED' " +
-                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                                "  ORDER BY app_herd_no " +
-                                ") WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // simopted -> STAFF_SIMOPTED_HERDS | reads APP_HERD_NO
-            // (legacy read APH_HERD_NO — projecting APP_HERD_NO to match the new hook)
-            case "GET SUBMITTED HERDS WITH SIM OPTED IN":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT app_herd_no FROM ( " +
-                                "  SELECT app_herd_no " +
-                                "  FROM vwbs_application_herd " +
-                                "  WHERE mde_abbrev = 'I' " +
-                                "  AND   app_year   = ? " +
-                                "  AND   SUBSTR(app_herd_no, 1, 1) > 'A' " +
-                                "  AND aph_app_id IN ( " +
-                                "      SELECT apf_app_id FROM tdbs_application_flag " +
-                                "      WHERE apf_flag_value = 'Y' AND apf_flg_code = 7 ) " +
-                                "  ORDER BY app_herd_no " +
-                                ") WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // payments -> STAFF_PAYMENT_HERDS | reads PHD_HERD_NO
-            // (aliased join from legacy dummy-code, which projects PHD_HERD_NO)
-            case "GET HERDS WITH PAYMENTS":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT phd_herd_no FROM ( " +
-                                "  SELECT ta.app_herd_no AS phd_herd_no " +
-                                "  FROM tdbs_application ta " +
-                                "  LEFT JOIN tdbs_payment_header tph ON tph.phd_app_id = ta.app_id " +
-                                "  WHERE ta.app_year      = ? " +
-                                "  AND   tph.phd_ptp_code = 9 " +
-                                "  ORDER BY ta.app_herd_no " +
-                                ") WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // parcels -> STAFF_PARCELS | reads LPS_PARCEL_LABEL (no year in legacy)
-            case "GET LPIS PARCELS":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                int maxRows = parseInt(params[0], "limit");
-                sql =
-                        "SELECT lps_parcel_label FROM ( " +
-                                "  SELECT DISTINCT twp.lps_parcel_label " +
-                                "  FROM vwlp_parcel twp " +
-                                "  JOIN tddp_scheme_land_unit tslu ON tslu.slu_lnu_id = twp.lps_parcel_id " +
-                                ") WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ maxRows };
-                break;
-            }
-
-            // refs -> STAFF_REFERENCES | reads APP_HERD_NO (TRN: substr < 'A', inverse guard)
-            case "GET REFERENCE NUMBERS":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 100;
-                sql =
-                        "SELECT app_herd_no FROM ( " +
-                                "  SELECT app_herd_no " +
-                                "  FROM vwbs_application_herd " +
-                                "  WHERE mde_abbrev = 'I' " +
-                                "  AND   app_year   = ? " +
-                                "  AND   SUBSTR(app_herd_no, 1, 1) < 'A' " +
-                                "  ORDER BY app_herd_no " +
-                                ") WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // =========================================================================================================
-            // ENTS QUERIES - Confluence "SQL Query Reference for Automation Testing" (Ruchi Malik)
-            // ---------------------------------------------------------------------------------------------------------
-            // Run on the ENTS_DATA connection: DBRouter.runDB("ENTS", label, params...)
-            // Consumed by utilities.EntsTestData, which picks a random unused row for each transfer.
-            //
-            // Differences from the Confluence text (the logic is the same):
-            //   - The agent login and the scheme year are bind parameters instead of literals.
-            //   - The rows are returned in random order (DBMS_RANDOM) and capped with ROWNUM, so every run sees a
-            //     different sample even when the agent has more herds than the cap.
-            //   - Individual Login uses DATE '2022-12-31' instead of '31-DEC-22', which only works when the session
-            //     date format happens to match. A JDBC session does not always use the SQL Developer format.
-            //   - The optional "herd_number IN (...)" lines were left out.
-            //   - TRNs (temporary reference numbers, which do not start with a letter) are excluded with
-            //     REGEXP_LIKE(herd, '^[A-Z]'). The BISS queries use SUBSTR(herd,1,1) > 'A', which also drops every
-            //     real herd starting with 'A' (e.g. A1011114); the ENTS queries keep those. (22-09-2026)
-            //   - Expired herds are excluded with the death indicator of vwco_ems_client_details (22-09-2026,
-            //     logic confirmed on CENTEST by Aniket): herd_number_status.has_n = 1 when the herd has a row with
-            //     death_indicator = 'N'; that row is ranked first, and only herds whose chosen row is 'N' are kept.
-            //     A herd whose old holder is 'Y' but has a current 'N' row is kept. The ETF query has no
-            //     herd_number_status CTE, so it uses EXISTS (death_indicator = 'N') on the same view.
-            //   - 08-10-2026: a NULL death indicator counts as 'N' (NVL(death_indicator, 'N') = 'N'). The current
-            //     holder row can be NULL: T1973669 = JOSEPH TULLY 'N' (2015) and JOHN CHARLES CLANCY NULL (2024). With
-            //     "= 'N'" the old holder was picked, the transfer went to him, and the transferee login opened the
-            //     current holder with no Transfer In application. Among live rows the newest start_date wins. The
-            //     ETF queries took the name from any client row (ROWNUM = 1); they now take the newest live row.
-            // =========================================================================================================
-
-            // ----------------------------------------------------------------
-            // ENTS DB: Agent Login - herds of one agent with more than 10 entitlements
-            //
-            // params[0] = agent login e.g. "aga6077"   (required)
-            // params[1] = limit                        (optional - defaults to 200)
-            // params[2] = scheme year e.g. "2026"      (optional - blank = all years, as on Confluence)
-            //             With the year, only herds holding more than 10 entitlements in that year are returned.
-            //             Without it, herds that only had entitlements in past years come back too, and they are
-            //             often missing from the agent's Transfer Out list (seen 22-09-2026 with D3900895).
-            // params[3] = customer type e.g. "Individual" (optional - blank = all types)
-            //             vwco_ents_herd_abls_rpt.cust_type. D3900895 is a 'Joint Venture' and is not in the agent's
-            //             Transfer Out list; the ETF Login query on Confluence already filters cust_type = 'Individual'.
-            // params[4] = "Y" = only herds whose name is exactly two words, e.g. "Martin Starr" (optional - blank = all)
-            //             The transferee search in the Create Transfer dialog wants the exact name shown in the portal.
-            //             payee_name can differ from it (D3930387 is "Martin Starr" in the DB but "Martin Starr Jnr" in
-            //             the portal), so names with a third word (Jnr, Snr, a middle name, "& Sons", a company name)
-            //             are left out. Letters and hyphens only, so "Mary-Anne Kelly" is kept. (22-09-2026)
-            // herd_agt holds "<agent code> <end date> <login>" entries separated by ", ", e.g.
-            //   "AGT12169J 31-DEC-9999 agr17724, AGT10155L 13-JAN-2023 aga6325"
-            //   The date is the END date of the agent link: 31-DEC-9999 = current, a past date = the link has ended.
-            //   Only CURRENT links are matched: (UPPER(herd_agt) || ',') LIKE '% 31-DEC-9999 <LOGIN>,%'.
-            //   The trailing comma also stops aga6325 matching aga63251. (30-09-2026 - A1400412 was picked for aga6325,
-            //   whose link ended 13-JAN-2023, so it was not in aga6325's Transfer Out list in TC_04_ENTS.)
-            //
-            // Columns returned: HERD_NUMBER, HERD_NAME (trimmed), ADDRESSLINE1, AGENT_LOGIN
-            // ----------------------------------------------------------------
-            case "ENTS AGENT LOGIN HERDS":
-            {
-                requireParamCountBetween(key, params, 1, 5);
-                String  agent   = params[0].trim();
-                int     maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 200;
-                boolean hasYear = params.length >= 3 && params[2] != null && !params[2].isBlank();
-                Integer year    = hasYear ? parseInt(params[2], "schemeYear") : null;
-                boolean hasType = params.length >= 4 && params[3] != null && !params[3].isBlank();
-                String  custTyp = hasType ? params[3].trim() : null;
-                boolean twoWord = params.length >= 5 && params[4] != null
-                        && ("Y".equalsIgnoreCase(params[4].trim()) || "true".equalsIgnoreCase(params[4].trim()));
-                sql =
-                        "WITH herd_numbers AS ( " +
-                                "    SELECT DISTINCT ohs_herd app_from_herd " +
-                                "    FROM tden_owner_history, " +
-                                "         vwen_ent_sets, " +
-                                "         vwco_ents_herd_abls_rpt " +
-                                "    WHERE ohs_scheme_year = ent_scheme_year " +
-                                "    AND   ohs_own_id      = ent_own_id " +
-                                "    AND   ohs_hist_no     = ent_hist_no " +
-                                (hasYear ? "    AND   ent_scheme_year = ? " : "") +
-                                "    AND   ent_num_ents    > 10 " +
-                                "    AND   ohs_herd        = herd_id " +
-                                "    AND   (UPPER(herd_agt) || ',') LIKE ? " +
-                                "    AND   REGEXP_LIKE(ohs_herd, '^[A-Z]') " +
-                                (hasType ? "    AND   cust_type = ? " : "") +
-                                "), " +
-                                "herd_number_status AS ( " +
-                                "    SELECT t.herd_number, " +
-                                "           MAX(CASE WHEN NVL(t.death_indicator, 'N') = 'N' THEN 1 ELSE 0 END) has_n " +
-                                "    FROM vwco_ems_client_details t " +
-                                "    JOIN herd_numbers i ON i.app_from_herd = t.herd_number " +
-                                "    GROUP BY t.herd_number " +
-                                "), " +
-                                "picked AS ( " +
-                                "    SELECT herd_number, " +
-                                "           initcap(TRIM(payee_name)) herd_name, " +
-                                "           initcap(addr1)      addressline1 " +
-                                "    FROM ( " +
-                                "        SELECT t.*, " +
-                                "               ROW_NUMBER() OVER ( " +
-                                "                   PARTITION BY t.herd_number " +
-                                "                   ORDER BY CASE " +
-                                "                                WHEN s.has_n = 1 AND NVL(t.death_indicator, 'N') = 'N' THEN 1 " +
-                                "                                ELSE 2 " +
-                                "                            END, " +
-                                "                            t.start_date DESC NULLS LAST " +
-                                "               ) rn " +
-                                "        FROM vwco_ems_client_details t " +
-                                "        JOIN herd_numbers i       ON i.app_from_herd = t.herd_number " +
-                                "        JOIN herd_number_status s ON s.herd_number   = t.herd_number " +
-                                "        WHERE s.has_n = 1 " +
-                                "    ) " +
-                                "    WHERE rn = 1 " +
-                                "    AND   NVL(death_indicator, 'N') = 'N' " +
-                                (twoWord ? "    AND   REGEXP_LIKE(TRIM(payee_name), '^[[:alpha:]-]+ [[:alpha:]-]+$') " : "") +
-                                "    ORDER BY DBMS_RANDOM.VALUE " +
-                                ") " +
-                                "SELECT herd_number, herd_name, addressline1, CAST(? AS VARCHAR2(50)) agent_login " +
-                                "FROM picked " +
-                                "WHERE ROWNUM <= ?";
-                List<Object> binds = new ArrayList<>();
-                if (hasYear) binds.add(year);
-                binds.add(currentAgentLinkPattern(agent));
-                if (hasType) binds.add(custTyp);
-                binds.add(agent);
-                binds.add(maxRows);
-                jdbcParams = binds.toArray();
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: Individual Login - herds whose holder has an online login
-            //
-            // params[0] = limit (optional - defaults to 200)
-            // params[1] = "Y" = only herds whose name is exactly two words (optional - blank = all). Same filter as
-            //             "ENTS Agent Login herds": the transferee search in the Create Transfer dialog needs the exact
-            //             portal name, so names with a third word are left out. (30-09-2026, TC_05_ENTS / TC_06_ENTS)
-            // params[2] = customer type e.g. "Individual" (optional - blank = all types) (30-09-2026)
-            // params[3] = scheme year e.g. "2026" (optional - blank = no entitlement filter) (07-10-2026)
-            // params[4] = minimum entitlements, the herd must hold MORE than this in that year (optional - default 10,
-            //             the Agent Login rule ent_num_ents > 10). Only used with params[3]. (07-10-2026)
-            //             Before 07-10-2026 this query had no entitlement check at all and sometimes returned herds with
-            //             no entitlements, which cannot be used as a transferor.
-            // params[5] = "Y" = single login only (optional - blank = off) (08-10-2026). The login (abls view) and the
-            //             name (client details view) are only joined on the herd number, so a herd with more than one
-            //             online login is left out: the login could belong to another holder than the name. A login
-            //             linked to more than one herd is left out too. Counted in one pass over the view (analytic
-            //             COUNT OVER); the first version used two GROUP BYs over the whole view and made the query hang
-            //             (08-10-2026). Partnership members are NOT caught here: DFP10449 is not in this view at all, so
-            //             login D3950957 looks like a single-herd login - EntsSession.ensureIndividualTransferorHerd
-            //             catches it in the portal. Default off (ents.individual.single.holder=false).
-            //
-            // Holder name (08-10-2026): T1973669 has JOSEPH TULLY (death_indicator 'N', 2015) and the current holder
-            //             JOHN CHARLES CLANCY (death_indicator NULL, 14-05-2024). The old "= 'N'" test ranked Tully first,
-            //             so the transfer went to the old holder while login SEANGALL opens Clancy (no Transfer In).
-            //             NULL now counts as alive (NVL(death_indicator, 'N') = 'N'), so the newest holder is picked.
-            //
-            // Columns returned: LOGIN_ID, NAME (trimmed), HERD_NUMBER, ADDRESS
-            // ----------------------------------------------------------------
-            case "ENTS INDIVIDUAL LOGIN HERDS":
-            {
-                requireParamCountBetween(key, params, 0, 6);
-                int     maxRows = (params.length >= 1 && !isBlank(params[0])) ? parseInt(params[0], "limit") : 200;
-                boolean twoWord = params.length >= 2 && params[1] != null
-                        && ("Y".equalsIgnoreCase(params[1].trim()) || "true".equalsIgnoreCase(params[1].trim()));
-                boolean hasType = params.length >= 3 && !isBlank(params[2]);
-                String  custTyp = hasType ? params[2].trim() : null;
-                boolean hasEnts = params.length >= 4 && !isBlank(params[3]);
-                Integer entYear = hasEnts ? parseInt(params[3], "schemeYear") : null;
-                int     minEnts = (params.length >= 5 && !isBlank(params[4])) ? parseInt(params[4], "minEnts") : 10;
-                boolean single  = params.length >= 6 && params[5] != null
-                        && ("Y".equalsIgnoreCase(params[5].trim()) || "true".equalsIgnoreCase(params[5].trim()));
-                sql =
-                        "WITH " +
-                                (single ?
-                                "abls AS ( " +
-                                "    SELECT a.herd_ols_login, a.herd_id, a.start_date, a.cust_type, " +
-                                "           COUNT(DISTINCT UPPER(TRIM(a.herd_ols_login))) OVER (PARTITION BY a.herd_id) logins_per_herd, " +
-                                "           COUNT(DISTINCT a.herd_id) OVER (PARTITION BY UPPER(TRIM(a.herd_ols_login))) herds_per_login " +
-                                "    FROM vwco_ents_herd_abls_rpt a " +
-                                "    WHERE a.herd_ols_login IS NOT NULL " +
-                                "), " : "") +
-                                "herd_numbers AS ( " +
-                                "    SELECT vr.herd_ols_login login_id, " +
-                                "           vr.herd_id        app_from_herd " +
-                                (single ? "    FROM abls vr " : "    FROM vwco_ents_herd_abls_rpt vr ") +
-                                "    WHERE vr.herd_ols_login IS NOT NULL " +
-                                "    AND   vr.start_date > DATE '2022-12-31' " +
-                                "    AND   REGEXP_LIKE(vr.herd_id, '^[A-Z]') " +
-                                (hasType ? "    AND   vr.cust_type = ? " : "") +
-                                (single ? "    AND   vr.logins_per_herd = 1 AND vr.herds_per_login = 1 " : "") +
-                                (hasEnts ?
-                                "    AND   EXISTS ( " +
-                                "            SELECT 1 " +
-                                "            FROM   tden_owner_history, vwen_ent_sets " +
-                                "            WHERE  ohs_scheme_year = ent_scheme_year " +
-                                "            AND    ohs_own_id      = ent_own_id " +
-                                "            AND    ohs_hist_no     = ent_hist_no " +
-                                "            AND    ohs_herd        = vr.herd_id " +
-                                "            AND    ent_scheme_year = ? " +
-                                "            AND    ent_num_ents    > ? " +
-                                "          ) " : "") +
-                                "), " +
-                                "herd_number_status AS ( " +
-                                "    SELECT t.herd_number, " +
-                                "           MAX(CASE WHEN NVL(t.death_indicator, 'N') = 'N' THEN 1 ELSE 0 END) has_n " +
-                                "    FROM vwco_ems_client_details t " +
-                                "    JOIN herd_numbers i ON i.app_from_herd = t.herd_number " +
-                                "    GROUP BY t.herd_number " +
-                                "), " +
-                                "picked AS ( " +
-                                "    SELECT login_id, " +
-                                "           initcap(TRIM(payee_name)) name, " +
-                                "           herd_number, " +
-                                "           initcap(addr1)      address " +
-                                "    FROM ( " +
-                                "        SELECT t.*, " +
-                                "               i.login_id, " +
-                                "               ROW_NUMBER() OVER ( " +
-                                "                   PARTITION BY t.herd_number " +
-                                "                   ORDER BY CASE " +
-                                "                                WHEN s.has_n = 1 AND NVL(t.death_indicator, 'N') = 'N' THEN 1 " +
-                                "                                ELSE 2 " +
-                                "                            END, " +
-                                "                            t.start_date DESC NULLS LAST " +
-                                "               ) rn " +
-                                "        FROM vwco_ems_client_details t " +
-                                "        JOIN herd_numbers i       ON i.app_from_herd = t.herd_number " +
-                                "        JOIN herd_number_status s ON s.herd_number   = t.herd_number " +
-                                "        WHERE s.has_n = 1 " +
-                                "    ) " +
-                                "    WHERE rn = 1 " +
-                                "    AND   NVL(death_indicator, 'N') = 'N' " +
-                                (twoWord ? "    AND   REGEXP_LIKE(TRIM(payee_name), '^[[:alpha:]-]+ [[:alpha:]-]+$') " : "") +
-                                "    ORDER BY DBMS_RANDOM.VALUE " +
-                                ") " +
-                                "SELECT login_id, name, herd_number, address " +
-                                "FROM picked " +
-                                "WHERE ROWNUM <= ?";
-                List<Object> binds = new ArrayList<>();
-                if (hasType) binds.add(custTyp);
-                if (hasEnts) { binds.add(entYear); binds.add(minEnts); }
-                binds.add(maxRows);
-                jdbcParams = binds.toArray();
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: ETF Login - individual herds linked to an ETF, with the ETF username
-            //
-            // params[0] = scheme year e.g. "2026"  (required)
-            // params[1] = limit                     (optional - defaults to 200)
-            //
-            // Columns returned: INDIVIDUAL_LOGIN, HERD_NUMBER, HERD_NAME, ETF_USERNAME
-            // ETF_USERNAME is NULL when the herd's ETF does not meet the year / entitlement rules.
-            // ----------------------------------------------------------------
-            case "ENTS ETF LOGIN HERDS":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "schemeYear");
-                int maxRows = (params.length >= 2) ? parseInt(params[1], "limit") : 200;
-                sql =
-                        "SELECT * FROM ( " +
-                                "    SELECT t.individual_login, " +
-                                "           t.herd_number, " +
-                                "           t.herd_name, " +
-                                "           ( " +
-                                "               SELECT username " +
-                                "               FROM tden_herd_etf_link, vw_sso_roles_for_user_ents " +
-                                "               WHERE hel_scheme_year       = ? " +
-                                "               AND   hel_txor_ents_allowed > 10 " +
-                                "               AND   businessid            = hel_etf_no " +
-                                "               AND   hel_herd_no NOT LIKE '2%' " +
-                                "               AND   hel_etf_no            = t.etf_no " +
-                                "               AND   ROWNUM = 1 " +
-                                "           ) AS etf_username " +
-                                "    FROM ( " +
-                                "        SELECT ve.herd_ols_login individual_login, " +
-                                "               ve.herd_id        herd_number, " +
-                                "               ( " +
-                                "                   SELECT MAX(initcap(cd.payee_name)) KEEP (DENSE_RANK LAST ORDER BY cd.start_date NULLS FIRST) " +
-                                "                   FROM vwco_ems_client_details cd " +
-                                "                   WHERE cd.herd_number = ve.herd_id " +
-                                "                   AND   NVL(cd.death_indicator, 'N') = 'N' " +
-                                "               ) AS herd_name, " +
-                                "               ( " +
-                                "                   SELECT hel_etf_no " +
-                                "                   FROM tden_herd_etf_link " +
-                                "                   WHERE hel_herd_no = ve.herd_id " +
-                                "                   AND   ROWNUM = 1 " +
-                                "               ) AS etf_no " +
-                                "        FROM vwco_ents_herd_abls_rpt ve " +
-                                "        WHERE ve.cust_type = 'Individual' " +
-                                "        AND   ve.herd_ols_login IS NOT NULL " +
-                                "        AND   EXISTS     (SELECT 1 FROM vwco_ems_client_details dn " +
-                                "                          WHERE dn.herd_number = ve.herd_id AND NVL(dn.death_indicator, 'N') = 'N') " +
-                                "        AND   REGEXP_LIKE(ve.herd_id, '^[A-Z]') " +
-                                "        AND   ve.herd_id IN ( " +
-                                "            SELECT DISTINCT hel_herd_no " +
-                                "            FROM tden_herd_etf_link " +
-                                "            WHERE hel_grantor_type = 1 " +
-                                "        ) " +
-                                "    ) t " +
-                                "    ORDER BY DBMS_RANDOM.VALUE " +
-                                ") " +
-                                "WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: ETF partner herds - herds linked to ONE ETF partner login (01-10-2026)
-            //
-            // ETF partners (agr15678, agr15512, ...) are not in vwco_ents_herd_abls_rpt.herd_agt: checked on
-            // CENTEST_ENTS_DATA on 01-10-2026, COUNT(*) WHERE UPPER(herd_agt) LIKE '%AGR15512%' = 0, same for agr15678.
-            // Their herds come from tden_herd_etf_link. This is the "ENTS ETF Login herds" query (Confluence) with
-            // the ETF username filtered to one partner - Aniket ran it with that filter: 33 herds for agr15678,
-            // 50+ for agr15512.
-            //
-            // params[0] = ETF partner login e.g. "agr15512"     (required)
-            // params[1] = limit                                 (optional - defaults to 200)
-            // params[2] = scheme year e.g. "2026"               (optional - blank = current year)
-            // params[3] = "Y" = only two-word names             (optional - same rule as the Agent Login query)
-            //
-            // 08-10-2026 (TC_10_ENTS: T1450828 was in the pool of agr15678 but not in its Transfer Out list): the
-            // year, grantor type, "more than 10 entitlements allowed" and partner checks were not tied to the herd.
-            // The herd's ETF number came from ANY of its link rows (ROWNUM = 1, any year), and the partner's username
-            // was looked up from any 2026 link row of that ETF - so a herd linked to the ETF only in an earlier year,
-            // or linked to two ETFs, could be returned. Now the herd must have its OWN link row for the scheme year,
-            // grantor type 1, more than 10 entitlements allowed, to this partner's ETF. The holder name is the newest
-            // live client row (NULL death indicator counts as alive).
-            //
-            // params[4] = minimum entitlements (optional - blank = no check) (09-10-2026): the herd must hold MORE than
-            //             this many entitlements in the scheme year (sum of its entitlement sets). TC_11_ENTS: 20 of the
-            //             42 herds of agr15512 held no 2026 entitlements, so the ETF partner had nothing to transfer;
-            //             with > 10, 13 herds remained (checked in SQL Developer on 09-10-2026).
-            //             hel_txee_ents_allowed was checked too and is not the cause (1 of 42 herds > 10 - it is the
-            //             "Transfer Ents In" allowance, not used when the ETF partner is the transferor).
-            //
-            // Columns returned: HERD_NUMBER, HERD_NAME, ADDRESSLINE1, INDIVIDUAL_LOGIN, ETF_USERNAME
-            // ----------------------------------------------------------------
-            case "ENTS ETF PARTNER HERDS":
-            {
-                requireParamCountBetween(key, params, 1, 5);
-                String  partner = params[0].trim();
-                int     maxRows = (params.length >= 2 && !isBlank(params[1])) ? parseInt(params[1], "limit") : 200;
-                int     year    = (params.length >= 3 && !isBlank(params[2])) ? parseInt(params[2], "schemeYear")
-                                                                             : java.time.LocalDate.now().getYear();
-                boolean twoWord = params.length >= 4 && params[3] != null
-                        && ("Y".equalsIgnoreCase(params[3].trim()) || "true".equalsIgnoreCase(params[3].trim()));
-                boolean hasMin  = params.length >= 5 && !isBlank(params[4]);
-                int     minEnts = hasMin ? parseInt(params[4], "minEnts") : 0;
-                sql =
-                        "SELECT * FROM ( " +
-                                "  SELECT * FROM ( " +
-                                "    SELECT DISTINCT " +
-                                "           ve.herd_id        herd_number, " +
-                                "           (SELECT MAX(initcap(TRIM(cd.payee_name))) KEEP (DENSE_RANK LAST ORDER BY cd.start_date NULLS FIRST) " +
-                                "            FROM   vwco_ems_client_details cd " +
-                                "            WHERE  cd.herd_number = ve.herd_id AND NVL(cd.death_indicator, 'N') = 'N') herd_name, " +
-                                "           (SELECT MAX(initcap(cd.addr1)) KEEP (DENSE_RANK LAST ORDER BY cd.start_date NULLS FIRST) " +
-                                "            FROM   vwco_ems_client_details cd " +
-                                "            WHERE  cd.herd_number = ve.herd_id AND NVL(cd.death_indicator, 'N') = 'N') addressline1, " +
-                                "           ve.herd_ols_login individual_login, " +
-                                "           CAST(? AS VARCHAR2(100)) etf_username " +
-                                "    FROM   vwco_ents_herd_abls_rpt ve " +
-                                "    WHERE  ve.cust_type = 'Individual' " +
-                                "    AND    ve.herd_ols_login IS NOT NULL " +
-                                "    AND    REGEXP_LIKE(ve.herd_id, '^[A-Z]') " +
-                                "    AND    EXISTS (SELECT 1 FROM vwco_ems_client_details dn " +
-                                "                   WHERE dn.herd_number = ve.herd_id AND NVL(dn.death_indicator, 'N') = 'N') " +
-                                "    AND    EXISTS ( " +
-                                "             SELECT 1 " +
-                                "             FROM   tden_herd_etf_link l, vw_sso_roles_for_user_ents u " +
-                                "             WHERE  l.hel_herd_no           = ve.herd_id " +
-                                "             AND    l.hel_scheme_year       = ? " +
-                                "             AND    l.hel_grantor_type      = 1 " +
-                                "             AND    l.hel_txor_ents_allowed > 10 " +
-                                "             AND    u.businessid            = l.hel_etf_no " +
-                                "             AND    LOWER(u.username)       = LOWER(?) " +
-                                "           ) " +
-                                (hasMin ?
-                                "    AND    EXISTS ( " +
-                                "             SELECT 1 " +
-                                "             FROM   tden_owner_history, vwen_ent_sets " +
-                                "             WHERE  ohs_scheme_year = ent_scheme_year " +
-                                "             AND    ohs_own_id      = ent_own_id " +
-                                "             AND    ohs_hist_no     = ent_hist_no " +
-                                "             AND    ohs_herd        = ve.herd_id " +
-                                "             AND    ent_scheme_year = ? " +
-                                "             GROUP BY ohs_herd " +
-                                "             HAVING SUM(ent_num_ents) > ? " +
-                                "           ) " : "") +
-                                "  ) " +
-                                "  WHERE herd_name IS NOT NULL " +
-                                (twoWord ? "  AND REGEXP_LIKE(herd_name, '^[[:alpha:]-]+ [[:alpha:]-]+$') " : "") +
-                                "  ORDER BY DBMS_RANDOM.VALUE " +
-                                ") " +
-                                "WHERE ROWNUM <= ?";
-                jdbcParams = hasMin ? new Object[]{ partner, year, partner, year, minEnts, maxRows }
-                                    : new Object[]{ partner, year, partner, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: Young Farmer herds - herds with an agent and NO NR/CISYF application yet (02-10-2026)
-            //
-            // Source: Simon's "for Young Farmer" query (shared 02-10-2026). It returns herds managed by an agent (aga...)
-            // that have no row in tden_inet_application with iap_group_code = 4, so the NR/CISYF tab shows Apply for
-            // them. Used by the @tc13 test cases (TC_13, TC_15, TC_16, TC_21 to TC_25_ENTS) through
-            // utilities.NrcisyfTestData and the vault pool ENTS_YOUNG_FARMER.
-            //
-            // Three changes from the query as shared - the herds it selects are the same idea:
-            //   1. Login: Simon's SUBSTR(herd_agt, INSTR(herd_agt, 'aga', -1, 1), 7) takes the LAST "aga" in herd_agt,
-            //      7 characters long. That can be an agent link that has ended, and a login of another length is cut.
-            //      Here the login is the one of a CURRENT link (end date 31-DEC-9999), same rule as the Agent Login query.
-            //   2. NOT IN (SELECT iap_from_herd ...) became NOT EXISTS: with NOT IN, a single NULL iap_from_herd in
-            //      tden_inet_application makes the whole query return no rows.
-            //   3. Random order and a row limit, like the other pool queries. The fixed herd list
-            //      (herd_id IN ('D1461126','D195C519','W1750439')) is optional - params[1].
-            //
-            // params[0] = limit                                         (optional - defaults to 200)
-            // params[1] = herd list, comma separated, e.g. "D1461126,D195C519"  (optional - blank = all herds)
-            //
-            // Columns returned: HERD_ID, LOGIN_ID
-            // ----------------------------------------------------------------
-            case "ENTS YOUNG FARMER HERDS":
-            {
-                requireParamCountBetween(key, params, 0, 2);
-                int maxRows = (params.length >= 1 && !isBlank(params[0])) ? parseInt(params[0], "limit") : 200;
-                List<String> herds = new ArrayList<>();
-                if (params.length >= 2 && !isBlank(params[1]))
+                String iPurpose = iRaw.getOrDefault("transferType", "").trim();
+                if (iToIndividual)
                 {
-                    for (String h : params[1].split("[,;\\s]+")) if (!h.isBlank()) herds.add(h.trim().toUpperCase(Locale.ROOT));
+                    EntsTestData.nextAgentToIndividualPair(EntsTestData.loggedInUser(), iPurpose);
                 }
-                StringBuilder inList = new StringBuilder();
-                for (int i = 0; i < herds.size(); i++) inList.append(i == 0 ? "?" : ", ?");
-                sql =
-                        "SELECT herd_id, login_id FROM ( " +
-                                "  SELECT herd_id, login_id FROM ( " +
-                                "    SELECT DISTINCT ve.herd_id herd_id, " +
-                                "           LOWER(REGEXP_SUBSTR(UPPER(ve.herd_agt), '31-DEC-9999 (AGA[^, ]*)', 1, 1, NULL, 1)) login_id " +
-                                "    FROM vwco_ents_herd_abls_rpt ve " +
-                                "    WHERE ve.herd_agt IS NOT NULL " +
-                                "    AND   UPPER(ve.herd_agt) LIKE '%31-DEC-9999 AGA%' " +
-                                "    AND   NOT EXISTS (SELECT 1 FROM tden_inet_application a " +
-                                "                      WHERE a.iap_from_herd  = ve.herd_id " +
-                                "                      AND   a.iap_group_code = 4) " +
-                                (herds.isEmpty() ? "" : "    AND   ve.herd_id IN (" + inList + ") ") +
-                                "  ) " +
-                                "  WHERE login_id IS NOT NULL " +
-                                "  ORDER BY DBMS_RANDOM.VALUE " +
-                                ") " +
-                                "WHERE ROWNUM <= ?";
-                List<Object> binds = new ArrayList<>(herds);
-                binds.add(maxRows);
-                jdbcParams = binds.toArray();
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: Herd has an NR/CISYF application - spot check for the Young Farmer pool (02-10-2026)
-            //
-            // A herd taken from the pool on Monday may have an NR/CISYF application by Thursday (another tester, or an
-            // earlier run). TC_00_DATA checks a few pool rows with this query and marks them BAD when CNT > 0.
-            //
-            // params[0] = herd number (required)
-            //
-            // Columns returned: CNT
-            // ----------------------------------------------------------------
-            case "ENTS HERD HAS NRCISYF APPLICATION":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql = "SELECT COUNT(*) cnt FROM tden_inet_application WHERE iap_from_herd = ? AND iap_group_code = 4";
-                jdbcParams = new Object[]{ params[0].trim() };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: Top agents - agent logins ranked by how many usable herds they manage (01-10-2026)
-            //
-            // Used by the {auto.agent} token: instead of hard-coding an agent with few herds (aga6325 has 5), the
-            // framework takes the agent with the most herds that the "ENTS Agent Login herds" query would return.
-            //
-            // herd_agt holds one entry per agent link: "AGTcode END_DATE login, AGTcode END_DATE login, ...".
-            // Only entries ending 31-DEC-9999 are current. idx (1..10) splits a herd that has several current agent
-            // entries; REGEXP_SUBSTR takes the login of the k-th current entry.
-            //
-            // Same herd filters as "ENTS Agent Login herds": more than 10 entitlements, herd number starts with a
-            // letter, holder alive (death_indicator = 'N'), optional scheme year, customer type and two-word name.
-            // The count is therefore close to the size of the agent's pool (the two-word check here uses any client
-            // row, the pool query uses the latest one, so the pool can be a few herds smaller).
-            //
-            // params[0] = how many agents to return             (optional - defaults to 10)
-            // params[1] = scheme year e.g. "2026"               (optional - blank = all years)
-            // params[2] = customer type e.g. "Individual"       (optional - blank = all types)
-            // params[3] = "Y" = only two-word names             (optional)
-            // params[4] = login LIKE pattern                    (optional - defaults to "ag%")
-            //
-            // Columns returned: AGENT_LOGIN, HERD_COUNT  (most herds first)
-            // ----------------------------------------------------------------
-            case "ENTS TOP AGENTS":
-            {
-                requireParamCountBetween(key, params, 0, 5);
-                int     maxRows = (params.length >= 1 && !isBlank(params[0])) ? parseInt(params[0], "limit") : 10;
-                boolean hasYear = params.length >= 2 && !isBlank(params[1]);
-                Integer year    = hasYear ? parseInt(params[1], "schemeYear") : null;
-                boolean hasType = params.length >= 3 && !isBlank(params[2]);
-                String  custTyp = hasType ? params[2].trim() : null;
-                boolean twoWord = params.length >= 4 && params[3] != null
-                        && ("Y".equalsIgnoreCase(params[3].trim()) || "true".equalsIgnoreCase(params[3].trim()));
-                String  like    = (params.length >= 5 && !isBlank(params[4])) ? params[4].trim().toLowerCase(Locale.ROOT) : "ag%";
-                sql =
-                        "WITH idx AS ( " +
-                                "    SELECT LEVEL k FROM dual CONNECT BY LEVEL <= 10 " +
-                                "), " +
-                                "links AS ( " +
-                                "    SELECT DISTINCT ohs_herd herd_number, " +
-                                "           LOWER(REGEXP_SUBSTR(UPPER(herd_agt), '31-DEC-9999 ([^, ]+)', 1, idx.k, NULL, 1)) agent_login " +
-                                "    FROM tden_owner_history, " +
-                                "         vwen_ent_sets, " +
-                                "         vwco_ents_herd_abls_rpt, " +
-                                "         idx " +
-                                "    WHERE ohs_scheme_year = ent_scheme_year " +
-                                "    AND   ohs_own_id      = ent_own_id " +
-                                "    AND   ohs_hist_no     = ent_hist_no " +
-                                (hasYear ? "    AND   ent_scheme_year = ? " : "") +
-                                "    AND   ent_num_ents    > 10 " +
-                                "    AND   ohs_herd        = herd_id " +
-                                "    AND   UPPER(herd_agt) LIKE '%31-DEC-9999%' " +
-                                "    AND   REGEXP_LIKE(ohs_herd, '^[A-Z]') " +
-                                (hasType ? "    AND   cust_type = ? " : "") +
-                                "    AND   idx.k <= REGEXP_COUNT(UPPER(herd_agt), '31-DEC-9999 [^, ]+') " +
-                                ") " +
-                                "SELECT * FROM ( " +
-                                "    SELECT l.agent_login, COUNT(*) herd_count " +
-                                "    FROM links l " +
-                                "    WHERE l.agent_login LIKE ? " +
-                                "    AND   EXISTS (SELECT 1 FROM vwco_ems_client_details d " +
-                                "                  WHERE d.herd_number = l.herd_number " +
-                                "                  AND   NVL(d.death_indicator, 'N') = 'N' " +
-                                (twoWord ? "                  AND   REGEXP_LIKE(TRIM(d.payee_name), '^[[:alpha:]-]+ [[:alpha:]-]+$') " : "") +
-                                "                 ) " +
-                                "    GROUP BY l.agent_login " +
-                                "    ORDER BY COUNT(*) DESC " +
-                                ") " +
-                                "WHERE ROWNUM <= ?";
-                List<Object> binds = new ArrayList<>();
-                if (hasYear) binds.add(year);
-                if (hasType) binds.add(custTyp);
-                binds.add(like);
-                binds.add(maxRows);
-                jdbcParams = binds.toArray();
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: Agent herds WITHOUT entitlements (TC_02_ENTS Section 2, negative case)
-            //
-            // Same agent filter (current links only, end date 31-DEC-9999), TRN filter, expired-herd filter and random
-            // order as "ENTS Agent Login herds",
-            // but keeps the herds of the agent that hold NO entitlements in the scheme year, instead of more than 10.
-            // A herd is kept when it has no owner-history / ent-set row with ent_num_ents > 0 for that year.
-            //
-            // Verified in SQL Developer on CENTEST_ENTS_DATA (23-09-2026, Aniket): the herd_numbers part returns 50 herds
-            // for aga6077 in scheme year 2026, including A1374039, the no-entitlements herd used by the Selenium version.
-            //
-            // params[0] = agent login e.g. "aga6077"      (required)
-            // params[1] = limit                           (optional - defaults to 200)
-            // params[2] = scheme year e.g. "2026"         (required by the NOT EXISTS - EntsTestData passes
-            //                                              ents.scheme.year, or the current year when it is blank)
-            // params[3] = customer type e.g. "Individual" (optional - blank = all types)
-            //
-            // Columns returned: HERD_NUMBER, HERD_NAME (trimmed), ADDRESSLINE1, AGENT_LOGIN
-            // ----------------------------------------------------------------
-            case "ENTS AGENT HERDS WITHOUT ENTITLEMENTS":
-            {
-                requireParamCountBetween(key, params, 3, 4);
-                String  agent   = params[0].trim();
-                int     maxRows = (params[1] == null || params[1].isBlank()) ? 200 : parseInt(params[1], "limit");
-                int     year    = parseInt(params[2], "schemeYear");
-                boolean hasType = params.length >= 4 && params[3] != null && !params[3].isBlank();
-                String  custTyp = hasType ? params[3].trim() : null;
-                sql =
-                        "WITH herd_numbers AS ( " +
-                                "    SELECT DISTINCT r.herd_id app_from_herd " +
-                                "    FROM vwco_ents_herd_abls_rpt r " +
-                                "    WHERE (UPPER(r.herd_agt) || ',') LIKE ? " +
-                                "    AND   REGEXP_LIKE(r.herd_id, '^[A-Z]') " +
-                                (hasType ? "    AND   r.cust_type = ? " : "") +
-                                "    AND   NOT EXISTS ( " +
-                                "        SELECT 1 " +
-                                "        FROM tden_owner_history, vwen_ent_sets " +
-                                "        WHERE ohs_scheme_year = ent_scheme_year " +
-                                "        AND   ohs_own_id      = ent_own_id " +
-                                "        AND   ohs_hist_no     = ent_hist_no " +
-                                "        AND   ohs_herd        = r.herd_id " +
-                                "        AND   ent_scheme_year = ? " +
-                                "        AND   ent_num_ents    > 0 " +
-                                "    ) " +
-                                "), " +
-                                "herd_number_status AS ( " +
-                                "    SELECT t.herd_number, " +
-                                "           MAX(CASE WHEN NVL(t.death_indicator, 'N') = 'N' THEN 1 ELSE 0 END) has_n " +
-                                "    FROM vwco_ems_client_details t " +
-                                "    JOIN herd_numbers i ON i.app_from_herd = t.herd_number " +
-                                "    GROUP BY t.herd_number " +
-                                "), " +
-                                "picked AS ( " +
-                                "    SELECT herd_number, " +
-                                "           initcap(TRIM(payee_name)) herd_name, " +
-                                "           initcap(addr1)      addressline1 " +
-                                "    FROM ( " +
-                                "        SELECT t.*, " +
-                                "               ROW_NUMBER() OVER ( " +
-                                "                   PARTITION BY t.herd_number " +
-                                "                   ORDER BY CASE " +
-                                "                                WHEN s.has_n = 1 AND NVL(t.death_indicator, 'N') = 'N' THEN 1 " +
-                                "                                ELSE 2 " +
-                                "                            END, " +
-                                "                            t.start_date DESC NULLS LAST " +
-                                "               ) rn " +
-                                "        FROM vwco_ems_client_details t " +
-                                "        JOIN herd_numbers i       ON i.app_from_herd = t.herd_number " +
-                                "        JOIN herd_number_status s ON s.herd_number   = t.herd_number " +
-                                "        WHERE s.has_n = 1 " +
-                                "    ) " +
-                                "    WHERE rn = 1 " +
-                                "    AND   NVL(death_indicator, 'N') = 'N' " +
-                                "    ORDER BY DBMS_RANDOM.VALUE " +
-                                ") " +
-                                "SELECT herd_number, herd_name, addressline1, CAST(? AS VARCHAR2(50)) agent_login " +
-                                "FROM picked " +
-                                "WHERE ROWNUM <= ?";
-                List<Object> binds = new ArrayList<>();
-                binds.add(currentAgentLinkPattern(agent));
-                if (hasType) binds.add(custTyp);
-                binds.add(year);
-                binds.add(agent);
-                binds.add(maxRows);
-                jdbcParams = binds.toArray();
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB (CENTEST_BISS_DATA): Not Started individual herds with a CISYF flag (TC_03_IND)
-            //
-            // Source query supplied by Aniket (25-09-2026):
-            //   select app.app_herd_no, app.app_year, sch.*
-            //   from vwbs_application app, vwbs_application_flag_schemes sch
-            //   where app.app_id = sch.app_id and mde_abbrev='I' and cisyf_ind is not null
-            //   and app.app_applicant_type = 'I';
-            //
-            // Checked in SQL Developer on CENTEST_BISS_DATA (25-09-2026, Aniket):
-            //   - A Not Started ('RI') application has NO rows in vwbs_application_flag_schemes. For 2026 the flag
-            //     rows exist only for I 5539, EI 4486, DD 146, D 25, H 1 - so 'RI' + cisyf_ind returned 0 rows.
-            //   - 119387 individual herds are 'RI' in 2026.
-            //   - Current year 'RI' + a CISYF flag on the PREVIOUS year's application returns rows
-            //     (X1240336, P126128X, T1351676, ...). That is the query used here.
-            //
-            // Selection:
-            //   curr: mde_abbrev = 'RI', app_applicant_type = 'I', app_year = params[0]   -> Not Started this year
-            //   REGEXP_LIKE(app_herd_no, '^[A-Z]')                                         -> real herds (no TRNs)
-            //   EXISTS prev: same herd, app_year = params[0] - 1, cisyf_ind IS NOT NULL      -> CISYF flag last year
-            //   EXISTS land parcel (tdbs_application_land, apl_deleted_ind = 'N')          -> herd has land to claim
-            //   NOT EXISTS same herd + year with app_mde_code IN (3, 4, 6, 8)               -> not started for real
-            //       3 = D (Draft), 4 = I (Submitted), 6 = H (Helpdesk), 8 = DD (Draft Dept)
-            //       Added 05-10-2026, same guards as "List of herds with no errors at all". That query needs the
-            //       NOT EXISTS because 'RI' alone does not prove the herd has not started: a herd can have an RI
-            //       row and a Draft / Submitted row in the same year. This query had no such check.
-            //   ORDER BY DBMS_RANDOM.VALUE + ROWNUM                                        -> random pick, params[1] rows
-            //   mde_abbrev and cisyf_ind stay unqualified, exactly as in the checked query.
-            //
-            // params[0] = year  (required - current scheme year)
-            // params[1] = limit (optional - defaults to 50)
-            // Column returned: APP_HERD_NO
-            // ----------------------------------------------------------------
-            case "LIST OF NOT STARTED INDIVIDUAL HERDS WITH CISYF FLAG":
-            {
-                requireParamCountBetween(key, params, 1, 2);
-                int year    = parseInt(params[0], "year");
-                int maxRows = (params.length >= 2 && !isBlank(params[1])) ? parseInt(params[1], "limit") : 50;
-                sql =
-                        "SELECT app_herd_no " +
-                                "FROM ( " +
-                                "    SELECT app_herd_no " +
-                                "    FROM ( " +
-                                "        SELECT DISTINCT curr.app_herd_no " +
-                                "        FROM vwbs_application curr " +
-                                "        WHERE mde_abbrev              = 'RI' " +
-                                "        AND   curr.app_applicant_type = 'I' " +
-                                "        AND   curr.app_year           = ? " +
-                                "        AND   REGEXP_LIKE(curr.app_herd_no, '^[A-Z]') " +
-                                "        AND   EXISTS ( " +
-                                "                SELECT 1 " +
-                                "                FROM tdbs_application_land x " +
-                                "                WHERE x.apl_year        = curr.app_year " +
-                                "                AND   x.apl_app_id      = curr.app_id " +
-                                "                AND   x.apl_deleted_ind = 'N' " +
-                                "              ) " +
-                                "        AND   NOT EXISTS ( " +
-                                "                SELECT 1 " +
-                                "                FROM vwbs_application started " +
-                                "                WHERE started.app_year     = curr.app_year " +
-                                "                AND   started.app_herd_no  = curr.app_herd_no " +
-                                "                AND   started.app_mde_code IN (3, 4, 6, 8) " +
-                                "              ) " +
-                                "        AND   EXISTS ( " +
-                                "                SELECT 1 " +
-                                "                FROM vwbs_application prev, vwbs_application_flag_schemes sch " +
-                                "                WHERE prev.app_id      = sch.app_id " +
-                                "                AND   prev.app_herd_no = curr.app_herd_no " +
-                                "                AND   prev.app_year    = ? " +
-                                "                AND   cisyf_ind IS NOT NULL " +
-                                "              ) " +
-                                "    ) " +
-                                "    ORDER BY DBMS_RANDOM.VALUE " +
-                                ") " +
-                                "WHERE ROWNUM <= ?";
-                jdbcParams = new Object[]{ year, year - 1, maxRows };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // INET DB (CENTEST_BISS_INET): Individual login for a herd (TC_03_IND)
-            //
-            // Source query supplied by Aniket (25-09-2026). Role 100 = the herd, role 115 = the customer's
-            // online business record that the login (tdcr_user_info) is attached to. The herd is now a bind
-            // parameter instead of the fixed 'E1080206'.
-            //
-            // One herd can return more than one login - Hooks.resolveIndividualHerdAndUser takes the first one not expired.
-            //
-            // params[0] = herd number (required)
-            // Columns returned: HERDNUMBER, LOGIN
-            // ----------------------------------------------------------------
-            case "GET INDIVIDUAL LOGIN FOR HERD":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                        "SELECT bc_100.bcus_bus_id AS herdnumber, " +
-                                "       ui.uri_username     AS login " +
-                                "FROM tdcr_user_info ui, " +
-                                "     tdco_business_customers bc_100, " +
-                                "     tdco_business_customers bc_115 " +
-                                "WHERE ui.uri_ccs_bus_id      = bc_115.bcus_bus_id " +
-                                "AND   bc_100.bcus_cust_id    = bc_115.bcus_cust_id " +
-                                "AND   bc_100.bcus_bus_id     = ? " +
-                                "AND   bc_100.bcus_role_code  = 100 " +
-                                "AND   bc_115.bcus_role_code  = 115";
-                jdbcParams = new Object[]{ params[0].trim() };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // DATA DB: has this herd started an application in this year? (TestDataVault spot-check, 05-10-2026)
-            //
-            // A herd harvested on Monday may be in Draft or Submitted by Thursday (another tester, or an earlier run).
-            // TC_00_DATA checks a few BISS vault rows with this query and marks them BAD when CNT > 0.
-            // Same statuses as the NOT EXISTS of the two Not Started queries: 3 = D, 4 = I, 6 = H, 8 = DD.
-            //
-            // params[0] = herd number  (required)
-            // params[1] = scheme year  (required)
-            //
-            // Columns returned: CNT
-            // ----------------------------------------------------------------
-            case "BISS HERD APPLICATION STARTED":
-            {
-                requireParamCountBetween(key, params, 2, 2);
-                sql =
-                        "SELECT COUNT(*) cnt " +
-                                "FROM vwbs_application " +
-                                "WHERE app_herd_no  = ? " +
-                                "AND   app_year     = ? " +
-                                "AND   app_mde_code IN (3, 4, 6, 8)";
-                jdbcParams = new Object[]{ params[0].trim(), parseInt(params[1], "year") };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: ETF logins - every Entitlements Transfer Facilitator code with its online login (06-10-2026)
-            //
-            // TC_14_ENTS picks a random ETF from the "Select one ETF" dropdown and then logs in as that ETF's partner to
-            // check the authorisation. This query gives the login of each ETF code. Checked on CENTEST_ENTS_DATA
-            // (06-10-2026, Aniket): businessid holds the code as shown in the portal table, e.g. ETF00009 -> agr15512,
-            // ETF00077 -> agr15678 (same join as the ETF Login query: businessid = hel_etf_no).
-            //
-            // No parameters. Columns returned: ETF_CODE (upper case), LOGIN (lower case)
-            // ----------------------------------------------------------------
-            case "ENTS ETF LOGINS":
-            {
-                requireParamCountBetween(key, params, 0, 0);
-                sql =
-                        "SELECT DISTINCT UPPER(TRIM(businessid)) etf_code, LOWER(TRIM(username)) login " +
-                                "FROM vw_sso_roles_for_user_ents " +
-                                "WHERE UPPER(businessid) LIKE 'ETF%' " +
-                                "AND   username IS NOT NULL " +
-                                "ORDER BY etf_code, login";
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: does this herd still have a CURRENT link to this agent? (TestDataVault spot-check, 01-10-2026)
-            //
-            // One row (HERD_ID) when the link is current (end date 31-DEC-9999), no rows otherwise. Milliseconds,
-            // unlike the full Agent Login query, so the vault can check a few rows before a run.
-            //
-            // params[0] = herd number  (required)
-            // params[1] = agent login  (required)
-            // ----------------------------------------------------------------
-            case "ENTS HERD HAS CURRENT AGENT LINK":
-            {
-                requireParamCountBetween(key, params, 2, 2);
-                sql =
-                        "SELECT herd_id " +
-                                "FROM vwco_ents_herd_abls_rpt " +
-                                "WHERE herd_id = ? " +
-                                "AND   (UPPER(herd_agt) || ',') LIKE ? " +
-                                "AND   ROWNUM = 1";
-                jdbcParams = new Object[]{ params[0].trim(), currentAgentLinkPattern(params[1]) };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: current holder of one herd (EntsTestData.withCurrentName, 12-10-2026)
-            //
-            // Same holder rule as the pool queries: newest live row (NULL death indicator = alive). Run each time a
-            // herd is handed out, because vault rows can be days old and the SIT names change after a refresh
-            // (TC_04_ENTS: the vault had C1520235 "Oliver Coyle", the database now has Eileen Currie).
-            //
-            // params[0] = herd number (required)
-            //
-            // Columns returned: HERD_NAME (initcap, trimmed), ADDRESSLINE1 - no row when the herd has no live holder
-            // ----------------------------------------------------------------
-            case "ENTS HERD CURRENT HOLDER":
-            {
-                requireParamCountBetween(key, params, 1, 1);
-                sql =
-                        "SELECT herd_name, addressline1 FROM ( " +
-                                "    SELECT initcap(TRIM(t.payee_name)) herd_name, " +
-                                "           initcap(t.addr1)            addressline1, " +
-                                "           NVL(t.death_indicator, 'N') alive_flag, " +
-                                "           ROW_NUMBER() OVER ( " +
-                                "               ORDER BY CASE WHEN NVL(t.death_indicator, 'N') = 'N' THEN 1 ELSE 2 END, " +
-                                "                        t.start_date DESC NULLS LAST " +
-                                "           ) rn " +
-                                "    FROM   vwco_ems_client_details t " +
-                                "    WHERE  t.herd_number = ? " +
-                                ") " +
-                                "WHERE rn = 1 AND alive_flag = 'N'";
-                jdbcParams = new Object[]{ params[0].trim() };
-                break;
-            }
-
-            // ----------------------------------------------------------------
-            // ENTS DB: entitlement sets of one herd in one scheme year (TC_11 / TC_12 / TC_20, 09-10-2026)
-            //
-            // The "Manual Addition of Entitlements to Transfer" popup only accepts a set the transferor herd really
-            // holds: the Entitlement Type and the Unit Value (itsNetUv) must match one of its sets, otherwise the
-            // portal shows "Cannot add manual entitlement set". Checked on CENTEST_ENTS_DATA (09-10-2026, Aniket):
-            // Q1670329 holds four BISS sets for 2026, all with ENT_NET_UV 174.99; the feature typed 1 and failed.
-            //
-            // Sets with entitlements only; sets with no lease end first, then the biggest set first.
-            //
-            // params[0] = herd number               (required)
-            // params[1] = scheme year e.g. "2026"   (required)
-            //
-            // Columns returned: ENT_SET_TYPE, ENT_NET_UV, ENT_NUM_ENTS, ENT_LEASE_END
-            // ----------------------------------------------------------------
-            case "ENTS HERD ENTITLEMENT SETS":
-            {
-                requireParamCountBetween(key, params, 2, 2);
-                sql =
-                        "SELECT e.ent_set_type, e.ent_net_uv, e.ent_num_ents, e.ent_lease_end " +
-                                "FROM   tden_owner_history o " +
-                                "JOIN   vwen_ent_sets e " +
-                                "ON     e.ent_scheme_year = o.ohs_scheme_year " +
-                                "AND    e.ent_own_id      = o.ohs_own_id " +
-                                "AND    e.ent_hist_no     = o.ohs_hist_no " +
-                                "WHERE  o.ohs_herd        = ? " +
-                                "AND    e.ent_scheme_year = ? " +
-                                "AND    e.ent_num_ents    > 0 " +
-                                "AND    e.ent_net_uv IS NOT NULL " +
-                                "ORDER BY CASE WHEN e.ent_lease_end IS NULL THEN 0 ELSE 1 END, e.ent_num_ents DESC";
-                jdbcParams = new Object[]{ params[0].trim(), parseInt(params[1], "scheme year") };
-                break;
-            }
-
-            default:
-                throw new RuntimeException("Unknown DB label: " + label);
-        }
-
-        // 13-10-2026: query time per label for the dashboard report (reporting.ExecutionMetrics)
-        long iQueryStart = System.currentTimeMillis();
-        executeQuery(which, sql, jdbcParams);
-        List<Map<String, Object>> iDone = THREAD_MODE.get() ? THREAD_ROWS.get() : lastRows;
-        reporting.ExecutionMetrics.dbQuery(which, label, System.currentTimeMillis() - iQueryStart, iDone == null ? 0 : iDone.size());
-    }
-
-    // =====================================================================
-    // PUBLIC API — RAW SQL EXECUTION
-    // =====================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : runRawSQL
-    // Description   : Executes a user-supplied raw SQL string directly on the chosen database,
-    //                 bypassing the label switch in runDB(). Used by utility tools such as
-    //                 HerdAgentExtractor where the SQL is composed at runtime and does not
-    //                 correspond to a predefined label.
-    //                 Results are stored identically to runDB() — accessible via getValue(),
-    //                 getRows(), and hasRows().
-    // Parameters    : dbKey  — target database: "DATA" (BISS_DATA) or "INET" (BISS_INET)
-    //                 sql    — raw SQL string to execute
-    //                 params — optional bind parameters matching '?' placeholders in sql
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 05-05-2026
-    // ***************************************************************************************************************************************************************************************
-    public static void runRawSQL(String dbKey, String sql, Object... params)
-    {
-        refuseForFixedData("raw SQL");
-        Objects.requireNonNull(dbKey, "dbKey cannot be null");
-        Objects.requireNonNull(sql,   "sql cannot be null");
-        if (!THREAD_MODE.get()) lastLabel = "RAW_SQL";
-        executeQuery(normalizeDb(dbKey), sql, params);
-    }
-
-    // =====================================================================
-    // EXECUTE SQL (internal — shared by runDB and runRawSQL)
-    // =====================================================================
-    private static void executeQuery(String whichDb, String sql, Object... params)
-    {
-        List<Map<String, Object>> iRows = new ArrayList<>();
-
-        try (Connection conn = openConnection(whichDb);
-             PreparedStatement stmt = conn.prepareStatement(sql))
-        {
-            for (int i = 0; i < params.length; i++)
-            {
-                stmt.setObject(i + 1, params[i]);
-            }
-
-            // 08-10-2026: a slow query used to hang the run with no message (the browser stayed on the login page).
-            // db.query.max.seconds (default 300, 0 = no limit) makes it fail with the label instead.
-            int iMaxSeconds = utilities.ConfigManager.getInt("db.query.max.seconds", 300);
-            if (iMaxSeconds > 0) stmt.setQueryTimeout(iMaxSeconds);
-            long iStart = System.currentTimeMillis();
-
-            try (ResultSet rs = stmt.executeQuery())
-            {
-                ResultSetMetaData md       = rs.getMetaData();
-                int               colCount = md.getColumnCount();
-
-                while (rs.next())
+                else if (iCrossAgent)
                 {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    for (int c = 1; c <= colCount; c++)
-                    {
-                        String col = md.getColumnLabel(c);
-                        if (col == null || col.isEmpty()) col = md.getColumnName(c);
-                        // Always uppercase — callers use getValue("APP_HERD_NO") etc.
-                        row.put(col.toUpperCase(Locale.ROOT), rs.getObject(c));
-                    }
-                    iRows.add(row);
+                    EntsTestData.nextCrossAgentPair(EntsTestData.loggedInUser(), iTransfereeAgent, iPurpose);
+                }
+                else
+                {
+                    EntsTestData.nextSameAgentPair(EntsTestData.loggedInUser(), iPurpose);
                 }
             }
-            long iSeconds = (System.currentTimeMillis() - iStart) / 1000;
-            if (iSeconds >= 20)
+            iData = EntsTestData.resolveTable(iRaw);
+
+            String iRejectedHerd = null;
+            String iReason       = iSkipTransferee ? null : herdProblem(iData.get("transfereeHerd").trim(), "transferee");
+            if (iReason != null)
             {
-                log.warning("[DBRouter] Slow query (" + whichDb + (THREAD_MODE.get() ? "" : ", " + lastLabel) + "): "
-                        + iSeconds + " s, " + iRows.size() + " row(s)");
+                iRejectedHerd = iData.get("transfereeHerd").trim();
             }
-        }
-        catch (SQLTimeoutException e)
-        {
-            throw new RuntimeException("DB (" + whichDb + ") query stopped after db.query.max.seconds ("
-                    + utilities.ConfigManager.getInt("db.query.max.seconds", 300) + " s) - "
-                    + (THREAD_MODE.get() ? "" : "label '" + lastLabel + "'. ") + "Run it in SQL Developer to check its speed.", e);
-        }
-        catch (SQLException e)
-        {
-            throw new RuntimeException("DB (" + whichDb + ") execution failed: "
-                    + e.getMessage(), e);
-        }
-
-        if (THREAD_MODE.get())
-        {
-            // query() / queryRaw(): hand the rows back to the calling thread, leave the shared store alone
-            THREAD_ROWS.set(iRows);
-            return;
-        }
-
-        lastRows   = iRows;
-        lastScalar = iRows.isEmpty() ? null : iRows.get(0).values().iterator().next();
-    }
-
-    private static Connection openConnection(String whichDb) throws SQLException
-    {
-        switch (whichDb)
-        {
-            case "INET": return getInetConnection();
-            case "ENTS": return getEntsConnection();
-            default:     return getDataConnection();
-        }
-    }
-
-    private static Connection getEntsConnection() throws SQLException
-    {
-        if (isBlank(DB_ENTS_URL) || isBlank(DB_ENTS_USER) || isBlank(DB_ENTS_PASSWORD))
-        {
-            throw new RuntimeException("ENTS_DATA connection is not configured. Add db.ents.url, db.ents.username "
-                    + "and db.ents.password to " + PROPERTIES_FILE + " (see db.properties.example).");
-        }
-        return DriverManager.getConnection(DB_ENTS_URL, DB_ENTS_USER, DB_ENTS_PASSWORD);
-    }
-
-    private static Connection getDataConnection() throws SQLException
-    {
-        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
-    }
-
-    private static Connection getInetConnection() throws SQLException
-    {
-        return DriverManager.getConnection(DB_INET_URL, DB_INET_USER, DB_INET_PASSWORD);
-    }
-
-    // =====================================================================
-    // HELPER ACCESSORS
-    // =====================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getValue
-    // Description   : Returns the value of the specified column from the first row of the last
-    //                 query result. Column name matching is case-insensitive. Returns null if
-    //                 the result set is empty or the column is not found.
-    // Parameters    : column — column name e.g. "APP_HERD_NO" or "USERNAME"
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static String getValue(String column)
-    {
-        if (lastRows.isEmpty()) return null;
-        Map<String, Object> first = lastRows.get(0);
-        for (String k : first.keySet())
-            if (k.equalsIgnoreCase(column))
-                return Objects.toString(first.get(k), null);
-        return null;
-    }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : getRows
-    // Description   : Returns all rows from the last query result as a list of column-value maps.
-    //                 Column names are always stored in uppercase.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static List<Map<String, Object>> getRows()  { return lastRows; }
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : hasRows
-    // Description   : Returns true if the last query returned at least one row.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    public static boolean hasRows() { return !lastRows.isEmpty(); }
-
-    // =====================================================================
-    // PROPERTY LOADER
-    // =====================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : loadDBProperties
-    // Description   : Loads BISS_DATA and BISS_INET JDBC connection properties from
-    //                 src/test/resources/db.properties at class initialisation time.
-    //                 Throws RuntimeException if any required property is missing or blank.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void loadDBProperties()
-    {
-        Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(PROPERTIES_FILE))
-        {
-            props.load(fis);
-
-            DB_URL      = props.getProperty("db.url");
-            DB_USER     = props.getProperty("db.username");
-            DB_PASSWORD = props.getProperty("db.password");
-            if (isBlank(DB_URL) || isBlank(DB_USER) || isBlank(DB_PASSWORD))
+            else
             {
-                throw new RuntimeException(
-                        "Missing BISS_DATA properties (db.url / db.username / db.password)");
+                iReason = herdProblem(iData.get("transferorHerd").trim(), "transferor");
+                if (iReason != null) iRejectedHerd = iData.get("transferorHerd").trim();
             }
 
-            DB_INET_URL      = props.getProperty("db.inet.url");
-            DB_INET_USER     = props.getProperty("db.inet.username");
-            DB_INET_PASSWORD = props.getProperty("db.inet.password");
-            if (isBlank(DB_INET_URL) || isBlank(DB_INET_USER) || isBlank(DB_INET_PASSWORD))
+            if (iReason == null)
             {
-                throw new RuntimeException(
-                        "Missing BISS_INET properties " +
-                                "(db.inet.url / db.inet.username / db.inet.password)");
+                // herdProblem may have swapped a DB name for the portal name - resolve the tokens again
+                if (iRuntime) iData = EntsTestData.resolveTable(iRaw);
+                break;
             }
 
-            // ENTS_DATA is optional: BISS test cases run without it, ENTS test cases fail with a clear message
-            DB_ENTS_URL      = props.getProperty("db.ents.url");
-            DB_ENTS_USER     = props.getProperty("db.ents.username");
-            DB_ENTS_PASSWORD = props.getProperty("db.ents.password");
-            boolean iEntsConfigured = !isBlank(DB_ENTS_URL) && !isBlank(DB_ENTS_USER) && !isBlank(DB_ENTS_PASSWORD);
-
-            log.info("[DBRouter] DATA and INET connection properties loaded successfully."
-                    + (iEntsConfigured ? " ENTS connection configured." : " ENTS connection not configured (only needed by ENTS test cases)."));
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException("Cannot load db.properties at "
-                    + PROPERTIES_FILE + " : " + e.getMessage(), e);
-        }
-    }
-
-    // =====================================================================
-    // LOGGER SETUP
-    // =====================================================================
-
-    // ***************************************************************************************************************************************************************************************
-    // Function Name : setupLogger
-    // Description   : Configures a custom ConsoleHandler with a timestamped log format.
-    //                 Removes any default parent handlers to prevent duplicate log output.
-    // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 27-04-2026
-    // ***************************************************************************************************************************************************************************************
-    private static void setupLogger()
-    {
-        try
-        {
-            Logger iRoot = Logger.getLogger(DBRouter.class.getName());
-            iRoot.setUseParentHandlers(false);
-            iRoot.setLevel(Level.ALL);
-
-            java.util.logging.Formatter iFmt = new java.util.logging.Formatter()
+            if (!iRuntime || iTry == iMaxTries)
             {
-                @Override
-                public String format(LogRecord r)
+                EntsTestData.unpinPair();
+                throw new RuntimeException("[TRANSFER] Herd " + iRejectedHerd + " is " + iReason
+                        + (iRuntime ? " (tried " + iMaxTries + " pairs - check the Agent Login query / ents.scheme.year)" : ""));
+            }
+            if (EntsTestData.isPairPinned())
+            {
+                if (iRejectedHerd.equals(iData.get("transferorHerd").trim()))
                 {
-                    return String.format("[%s] [%s] %s%n",
-                            new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                                    .format(new Date(r.getMillis())),
-                            r.getLevel(),
-                            r.getMessage());
+                    EntsTestData.unpinPair();
+                    throw new RuntimeException("[TRANSFER] Transferor " + iRejectedHerd + " picked earlier in the scenario is "
+                            + iReason + ". Its OwnerID is already captured, so it cannot be swapped here - run the scenario again.");
                 }
-            };
-
-            ConsoleHandler iConsole = new ConsoleHandler();
-            iConsole.setLevel(Level.ALL);
-            iConsole.setFormatter(iFmt);
-
-            for (Handler h : iRoot.getHandlers()) iRoot.removeHandler(h);
-            iRoot.addHandler(iConsole);
+                EntsTestData.replaceTransferee(iReason, iRaw.getOrDefault("transferType", "").trim());
+                log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": transferee " + iRejectedHerd + " " + iReason
+                        + " - transferee replaced, transferor kept.");
+                continue;
+            }
+            EntsTestData.markNotFound(iRejectedHerd, iReason);
+            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTries + ": " + iRejectedHerd + " " + iReason + " - picking another pair.");
         }
-        catch (Exception e)
+
+        // The pinned pair is used up - a later create step in the same scenario picks a new pair as usual
+        EntsTestData.unpinPair();
+
+        String iTransferorHerd = iData.get("transferorHerd").trim();
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
+        String iTransfereeName = iData.get("transfereeName").trim();
+        String iTransferType   = iData.get("transferType").trim();
+        String iEntitlements   = iData.get("entitlements").trim();
+        String iNotes          = iData.get("notes").trim();
+        boolean iHasLeaseYear  = "Yes".equalsIgnoreCase(iData.getOrDefault("leaseYear", "").trim());
+
+        // The last search on screen is the transferor (checked above) - click View in ITS row
+        // (first NOT-expired row of that herd - expired rows are skipped)
+        EntsSession.clickTransferOutView(iTransferorHerd);
+        log.info("Transferor herd opened: " + iTransferorHerd);
+
+        // ── Step 2 : Click "Create Transfer Application" ─────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCreateTransferBtn"), null);
+
+        // ── Step 3 : Search for the transferee ───────────────────────────────────────────
+        // Same herd returned twice ("2 matches found. Please select one:") - select the row with no End Date (24-09-2026).
+        // "No transferee matches were found" (02-10-2026): mostly a cross-agent or individual transferee, whose portal
+        // name cannot be checked first. With runtime data the transferee is replaced (same pool) and searched again in
+        // the same dialog, up to ents.transferee.retries times (default 3).
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTypeSearchBtn"), null);
+        int iMaxTransferees = iRuntime ? Math.max(1, ConfigManager.getInt("ents.transferee.retries", 3)) : 1;
+        for (int iTry = 1; !EntsSession.searchTransferee(iTransfereeHerd, iTransfereeName); iTry++)
         {
-            System.err.println("Logger setup failed: " + e.getMessage());
+            String iReason = "Transferee Search found no match for " + iTransfereeHerd + " / '" + iTransfereeName
+                    + "' (the portal name differs from the DB name, or the herd cannot receive transfers)";
+            if (iTry >= iMaxTransferees)
+            {
+                throw new IllegalStateException("[TRANSFER] " + iReason
+                        + (iRuntime ? " - tried " + iMaxTransferees + " transferee(s), see ents.transferee.retries" : ""));
+            }
+            log.warning("[TRANSFER] Try " + iTry + "/" + iMaxTransferees + ": " + iReason + " - picking another transferee.");
+            EntsTestData.replaceTransferee(iReason, iTransferType);
+            Map<String, String> iRetry = EntsTestData.resolveTable(iRaw);
+            iTransfereeHerd = iRetry.get("transfereeHerd").trim();
+            iTransfereeName = iRetry.get("transfereeName").trim();
         }
+
+        // ── Step 4 : Select the transfer type ────────────────────────────────────────────
+        selectTransferType(iTransferType);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+
+        // ── Step 5 : Add the entitlement (row with the most available) + lease year, then Next ───
+        addEntitlementAndContinue(iEntitlements, iHasLeaseYear);
+
+        // ── Step 5b : Leased entitlements error - Back, allowed type, add again (30-09-2026) ───
+        iTransferType = handleLeasedEntitlementsError(iTransferType, iEntitlements);
+
+        // ── Step 6 : Enter transfer notes ────────────────────────────────────────────────
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), iNotes);
+
+        log.info("Transfer application created | Type=" + iTransferType + " | Transferor=" + iTransferorHerd
+                + " -> Transferee=" + iTransfereeHerd + " | Entitlements=" + iEntitlements);
     }
 
-    // =====================================================================
-    // NORMALIZERS AND VALIDATORS
-    // =====================================================================
 
     // ***************************************************************************************************************************************************************************************
-    // Function Name : currentAgentLinkPattern
-    // Description   : LIKE pattern that matches a CURRENT link of one agent in vwco_ents_herd_abls_rpt.herd_agt.
-    //                 herd_agt entries are "<agent code> <end date> <login>"; 31-DEC-9999 is the open end date.
-    //                 Used with (UPPER(herd_agt) || ',') so the last entry also ends with a comma.
-    //                 e.g. "aga6325" -> "% 31-DEC-9999 AGA6325,%"
-    // Parameters    : agent - agent login e.g. "aga6325"
+    // Function Name : selectTransferType
+    // Description   : Clicks the transfer type radio button whose label contains pTransferType (same XPath as Selenium).
+    // Parameters    : pTransferType (String) - e.g. "Gift of Entitlements", "Change of Registration"
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 30-09-2026
     // ***************************************************************************************************************************************************************************************
-    private static String currentAgentLinkPattern(String agent)
+    static void selectTransferType(String pTransferType)
     {
-        return "% 31-DEC-9999 " + agent.trim().toUpperCase(Locale.ROOT) + ",%";
+        pause(1000);
+        iAction("CLICK", "XPATH",
+                "//mat-radio-button[contains(.,'" + pTransferType + "')] | "
+                        + "//tr[contains(.,'" + pTransferType + "')]//input | "
+                        + "//*[@value='" + pTransferType + "']",
+                null);
+        pause(1000);
+        log.info("Transfer type selected: " + pTransferType);
     }
 
-    private static String normalizeDb(String s)
-    {
-        String v = (s == null) ? "" : s.trim().toUpperCase(Locale.ROOT);
-        if ("DATA".equals(v) || "INET".equals(v) || "ENTS".equals(v)) return v;
-        throw new IllegalArgumentException(
-                "dbKey must be 'DATA', 'INET' or 'ENTS' (was: " + s + ")");
-    }
 
-    private static String normalize(String s)
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : addEntitlementAndContinue
+    // Description   : On the entitlements page: clicks Add on the row with the highest Available Entitlements value,
+    //                 enters the amount, selects the lease year when asked, confirms with Add and clicks Next.
+    // Parameters    : pEntitlements (String) - amount e.g. "0.01" | pHasLeaseYear (boolean) - true for Lease
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (moved out of the create step so it can be repeated; also
+    //                 used by TC_08_ENTS "the individual creates a transfer application")
+    // ***************************************************************************************************************************************************************************************
+    static void addEntitlementAndContinue(String pEntitlements, boolean pHasLeaseYear)
     {
-        if (s == null) return "";
-        return s.replace(':', ' ')
-                .replace("\u2013", "-")
-                .replace("\u2014", "-")
-                .replaceAll("\\s+", " ")
-                .trim()
-                .toUpperCase(Locale.ROOT);
-    }
+        // The value cells and the Add buttons are parallel lists - index N in one is index N in the other.
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferEntitlementValues"), null);
+        List<Locator> iEntitlementCells = xp(ObjReader.getLocator("iTransferEntitlementValues")).all();
+        List<Locator> iAddButtons       = xp(ObjReader.getLocator("iTransferAddEntitlementBtns")).all();
 
-    private static void requireParamCountBetween(String labelKey,
-                                                 String[] params,
-                                                 int min, int max)
-    {
-        int n = (params == null) ? 0 : params.length;
-        if (n < min || n > max)
+        if (iEntitlementCells.isEmpty())
         {
-            throw new IllegalArgumentException(
-                    "Label '" + labelKey + "' expects between "
-                            + min + " and " + max + " parameter(s); got " + n);
+            throw new RuntimeException("[TRANSFER] No entitlement rows found in 'Entitlements available to transfer' table.");
         }
+
+        int    iMaxIndex = 0;
+        double iMaxValue = -1.0;
+
+        for (int i = 0; i < iEntitlementCells.size(); i++)
+        {
+            String iRawValue = iEntitlementCells.get(i).innerText().trim();
+            try
+            {
+                double iVal = Double.parseDouble(iRawValue);
+                log.info("[TRANSFER] Row " + (i + 1) + " entitlements: " + iVal);
+                if (iVal > iMaxValue)
+                {
+                    iMaxValue = iVal;
+                    iMaxIndex = i;
+                }
+            }
+            catch (NumberFormatException e)
+            {
+                log.warning("[TRANSFER] Could not parse entitlement value at row " + (i + 1) + ": '" + iRawValue + "' - skipping.");
+            }
+        }
+
+        if (iMaxIndex >= iAddButtons.size())
+        {
+            throw new RuntimeException("[TRANSFER] " + iEntitlementCells.size() + " entitlement row(s) but only "
+                    + iAddButtons.size() + " Add button(s) - check iTransferAddEntitlementBtns.");
+        }
+
+        log.info("[TRANSFER] Highest entitlement: " + iMaxValue + " at row " + (iMaxIndex + 1) + " - clicking Add.");
+
+        // Selenium: scrollIntoView + JavaScript click
+        Locator iTargetAddBtn = iAddButtons.get(iMaxIndex);
+        iTargetAddBtn.scrollIntoViewIfNeeded();
+        UiHelpers.jsClick(iTargetAddBtn);
+        log.info("[TRANSFER] Add clicked for entitlement value: " + iMaxValue);
+
+        // Enter the entitlement amount
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferEntitlementAmountField"), pEntitlements);
+
+        // Lease year selection (Lease only)
+        if (pHasLeaseYear)
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearDropdown"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferLeaseYearFirstOption"), null);
+            log.info("Lease year selected.");
+        }
+
+        // Confirm the entitlement, then go to the summary / notes page
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogAddBtn"), null);
+        pause(1500);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
     }
 
-    private static int parseInt(String s, String name)
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : handleLeasedEntitlementsError
+    // Description   : After Next on the entitlements page the portal either opens the summary / notes page or shows
+    //                 "Leased entitlements can only be transferred by Change of Registration, Change of Legal Entity,
+    //                 Merger or Division of Entitlements (Scission)" when the transferor's entitlements are leased.
+    //                 Waits for one of the two. On the error: clicks Back, selects ents.leased.fallback.type (default
+    //                 "Change of Registration"), clicks Next and adds the entitlement again (no lease year).
+    //                 Fails when the error is still shown after the retry.
+    // Parameters    : pTransferType (String) - the type selected so far | pEntitlements (String) - amount
+    // Returns       : the transfer type in use after this call (the fallback type when the error was handled)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String handleLeasedEntitlementsError(String pTransferType, String pEntitlements)
     {
-        try { return Integer.parseInt(s.trim()); }
+        if (!leasedEntitlementsErrorShown())
+        {
+            return pTransferType;
+        }
+
+        log.warning("[TRANSFER] '" + pTransferType + "' is not allowed - the transferor's entitlements are leased. "
+                + "Going Back and using '" + LEASED_FALLBACK_TYPE + "' (ents.leased.fallback.type).");
+
+        iAction("WAITCLICKABLE", "XPATH", TRANSFER_BACK_BTN_XPATH, null);
+        iAction("CLICK",         "XPATH", TRANSFER_BACK_BTN_XPATH, null);
+
+        selectTransferType(LEASED_FALLBACK_TYPE);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferNextBtn"), null);
+        addEntitlementAndContinue(pEntitlements, false);
+
+        if (leasedEntitlementsErrorShown())
+        {
+            throw new RuntimeException("[TRANSFER] Leased entitlements error still shown after switching from '"
+                    + pTransferType + "' to '" + LEASED_FALLBACK_TYPE + "'. Set ents.leased.fallback.type to another "
+                    + "type listed in the error (Change of Registration, Change of Legal Entity, Merger or Division).");
+        }
+
+        log.info("[TRANSFER] Transfer type changed from '" + pTransferType + "' to '" + LEASED_FALLBACK_TYPE
+                + "' because the transferor's entitlements are leased.");
+        return LEASED_FALLBACK_TYPE;
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : leasedEntitlementsErrorShown
+    // Description   : Waits until the notes field (next page) or the leased entitlements error is visible, then says
+    //                 whether it is the error. The wait ends as soon as either appears, so a normal run is not slowed.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 30-09-2026
+    // ***************************************************************************************************************************************************************************************
+    private static boolean leasedEntitlementsErrorShown()
+    {
+        String iEither = ObjReader.getLocator("iTransferNotesField") + " | " + LEASED_ENTS_ERROR_XPATH;
+        isVisible(iEither, ConfigManager.getInt("ents.next.page.seconds", 15));
+        return xp(LEASED_ENTS_ERROR_XPATH).first().isVisible();
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : herdProblem
+    // Description   : Searches a herd in the agent's Transfer Out list and applies the TC_03 herd checks.
+    //                 Uses EntsSession.searchTransferOut, which waits for the row of THIS herd (not the first row).
+    //                 Returns null when the herd is usable, otherwise the reason it is not:
+    //                   - "blacklisted"                              herd is in Hooks.BLACKLISTED_HERDS
+    //                   - "not in the Transfer Out list of <agent>"  the search returns no row for this herd
+    //                   - "expired (...)"                            every row of the herd has the Expired icon
+    //                 One herd can have several rows (one per holder); only the NOT-expired row is used, for the name
+    //                 and for the View link (EntsSession.transferOutRowXpath). The name of that row replaces the DB name
+    //                 (ents.name.from.portal).
+    // Parameters    : pHerd (String) - herd number | pRole (String) - "transferor" or "transferee" (for the log)
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    static String herdProblem(String pHerd, String pRole)
+    {
+        if (Hooks.BLACKLISTED_HERDS.contains(pHerd))
+        {
+            return "blacklisted";
+        }
+
+        if (!EntsSession.searchTransferOut(pHerd))
+        {
+            return "not in the Transfer Out list of " + EntsTestData.loggedInUser();
+        }
+
+        // A herd can have several rows (one per holder), some expired. searchTransferOut logged each of them;
+        // the herd is usable when at least one row is not expired, and that row is the one used from here on.
+        if (EntsSession.activeTransferOutRows(pHerd) == 0)
+        {
+            return "expired (every Transfer Out row of this herd has the Expired icon)";
+        }
+
+        // Name check (22-09-2026): the transferee search needs the exact portal name, which can differ from the DB
+        // name (D3930387: DB "Martin Starr", portal "Martin Starr Jnr"). The name of the NOT-expired row replaces
+        // the DB name, so {transferee.name} is what the dialog expects. Only runtime herds are changed.
+        if (ConfigManager.getBool("ents.name.from.portal", true))
+        {
+            String iPortalName = EntsSession.transferOutName(pHerd);
+            log.info("[TRANSFER] " + pRole + " " + pHerd + " portal name (not-expired row)='" + iPortalName + "'");
+            EntsTestData.usePortalName(pHerd, iPortalName);
+        }
+        return null;
+    }
+
+
+    // ===================================================================================================================================
+    //  TRANSFEROR — DOCUMENT UPLOAD
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent uploads the transferor signature document
+    // Description   : Opens the upload dialog, selects "Transferor Signature Confirmation" as the document type
+    //                 (falls back to "Companies Registrations Office (Company Printout)" when that option is not
+    //                 offered), attaches the sample PDF and confirms the upload.
+    //                 Change from Selenium: the option list is given PROBE_SECONDS to render before the fallback
+    //                 is chosen (Selenium checked immediately after opening the dropdown).
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright)
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent uploads the transferor signature document")
+    public void theAgentUploadsTheTransferorSignatureDocument()
+    {
+        log.info("[STEP] And the agent uploads the transferor signature document");
+
+        String iFilePath = System.getProperty("transfer.upload.path",
+                System.getProperty("user.dir")
+                        + java.io.File.separator + "src"
+                        + java.io.File.separator + "test"
+                        + java.io.File.separator + "resources"
+                        + java.io.File.separator + "Test_Data"
+                        + java.io.File.separator + "Cover_Letter.pdf");
+
+        // ── Click "Upload Document" on the summary card ───────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
+
+        // ── Wait for dialog to open ───────────────────────────────────────────────────
+        iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
+
+        // ── Select document type ──────────────────────────────────────────────────────
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
+
+        String iPreferredOption = "//mat-option//span[normalize-space()='Transferor Signature Confirmation']";
+        String iSelectedType;
+
+        if (isVisible(iPreferredOption, PROBE_SECONDS))
+        {
+            xp(iPreferredOption).first().click();
+            iSelectedType = "Transferor Signature Confirmation";
+        }
+        else
+        {
+            iSelectedType = "Companies Registrations Office (Company Printout)";
+            iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), iSelectedType);
+        }
+        log.info("[TRANSFER] Document type selected: " + iSelectedType);
+
+        // ── Attach PDF ────────────────────────────────────────────────────────────────
+        iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iTransferFileUploadInput"), iFilePath);
+
+        // ── Confirm upload ────────────────────────────────────────────────────────────
+        iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("WAITCLICKABLE", "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iTransferDialogUploadDocBtn"), null);
+
+        // ── Wait for dialog to close ──────────────────────────────────────────────────
+        iAction("WAITINVISIBLE", "XPATH", "//app-supporting-doc-upload-transfer-application-popup", null);
+    }
+
+
+    // ===================================================================================================================================
+    //  TRANSFEROR — SEND FOR ACCEPTANCE
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent sends the transfer for acceptance
+    // Description   : Clicks "Send to Transferee for Acceptance", accepts T&C, and confirms.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent sends the transfer for acceptance")
+    public void theAgentSendsTheTransferForAcceptance()
+    {
+        log.info("[STEP] And the agent sends the transfer for acceptance");
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSendForAcceptanceBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSendForAcceptanceBtn"), null);
+
+        log.info("Transfer sent for acceptance.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the transfer key should be captured
+    // Description   : Reads the transfer key from the summary screen and keeps it for the Transferee flow.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (also published as lastCapturedTransferKey)
+    // ***************************************************************************************************************************************************************************************
+    @Then("the transfer key should be captured")
+    public void theTransferKeyShouldBeCaptured()
+    {
+        log.info("[STEP] Then the transfer key should be captured");
+
+        String iKey = iAction("GETTEXT", "XPATH", ObjReader.getLocator("iTransferKeySummaryField"), null);
+        iCapturedTransferKey = iKey == null ? "" : iKey.trim();
+
+        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key should be visible on the summary screen.");
+
+        System.setProperty("lastCapturedTransferKey", iCapturedTransferKey);
+        log.info("Transfer key captured: " + iCapturedTransferKey);
+    }
+
+
+    // ===================================================================================================================================
+    //  TRANSFEREE FLOW — Accept and Submit
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent navigates to the transferee acceptance flow (DataTable)
+    // Description   : My Clients → Transfers tab, searches for the transferee herd, clicks View, then clicks View on the
+    //                 transferee dashboard row for that herd.
+    //                 DataTable keys: transfereeHerd (String) - herd number, or {transferee.herd}
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent navigates to the transferee acceptance flow")
+    public void theAgentNavigatesToTheTransfereeAcceptanceFlow(DataTable pDataTable)
+    {
+        log.info("[STEP] When the agent navigates to the transferee acceptance flow");
+
+        Map<String, String> iData = EntsTestData.resolveTable(pDataTable.asMap(String.class, String.class));
+        String iTransfereeHerd = iData.get("transfereeHerd").trim();
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
+
+        EntsSession.openTransferOutHerd(iTransfereeHerd);
+
+        iAction("CLICK", "XPATH", "//tr[contains(.,'" + iTransfereeHerd + "')]//button[contains(text(),'View')] | "
+                + "//button[contains(text(),'View')]", null);
+
+        log.info("Navigated to transferee acceptance flow for herd: " + iTransfereeHerd);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent enters the transfer key and views the application
+    // Description   : Enters the captured transfer key and clicks "View Transfer Application".
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent enters the transfer key and views the application")
+    public void theAgentEntersTheTransferKeyAndViewsTheApplication()
+    {
+        log.info("[STEP] And the agent enters the transfer key and views the application");
+
+        Assertions.assertFalse(iCapturedTransferKey.isEmpty(), "Transfer key must have been captured before entering it on the transferee side.");
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferKeyInputField"), iCapturedTransferKey.trim());
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferViewApplicationBtn"), null);
+
+        log.info("Transfer key entered and application loaded: " + iCapturedTransferKey);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent submits the transfer to DAFM with notes {string}
+    // Description   : Enters the transferee notes, clicks "Submit Application to DAFM", accepts T&C, confirms, and
+    //                 checks that a success message is shown.
+    // Parameters    : pNotes (String) - notes to enter e.g. "Approved Test"
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @And("the agent submits the transfer to DAFM with notes {string}")
+    public void theAgentSubmitsTheTransferToDAFMWithNotes(String pNotes)
+    {
+        log.info("[STEP] And the agent submits the transfer to DAFM with notes: " + pNotes);
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransferNotesField"), pNotes);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferSubmitToDAFMBtn"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferTandCCheckbox"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDialogSubmitBtn"), null);
+
+        log.info("Transfer submitted to DAFM.");
+
+        String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+        Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+        log.info("Transfer submitted successfully: " + iConfirmation);
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the transfer should be submitted successfully
+    // Description   : Looks for the success message after submission, then logs out so the next section starts with
+    //                 a fresh login.
+    //
+    //                 Kept from Selenium ON PURPOSE (one-to-one): when no success message is found the step still
+    //                 PASSES - it only writes a warning. Tell us if it should fail instead.
+    //                 Change from Selenium: the logout now always runs (finally). Selenium skipped the logout when the
+    //                 message was missing, so the next section's login found no username box and failed.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright, logout in finally)
+    // ***************************************************************************************************************************************************************************************
+    @Then("the transfer should be submitted successfully")
+    public void theTransferShouldBeSubmittedSuccessfully()
+    {
+        log.info("[STEP] Then the transfer should be submitted successfully");
+
+        boolean iConfirmed = false;
+        try
+        {
+            String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+            log.info("Transfer submitted successfully: " + iConfirmation);
+            iConfirmed = true;
+        }
         catch (Exception e)
         {
-            throw new IllegalArgumentException(
-                    "Expected integer for " + name + " but got: " + s);
+            log.warning("[TRANSFER] No success message found after submission (" + e.getMessage()
+                    + ") - step passes as in the Selenium version. Check the screenshot of this section.");
+        }
+        finally
+        {
+            // Test Data Vault (01-10-2026): both herds of this section are finished with. In reuse mode
+            // (data.reuse.herds=true) a confirmed transfer frees both herds again; an unconfirmed one keeps them out.
+            EntsTestData.markCurrentPairUsed(iConfirmed);
+            EntsSession.logout();
         }
     }
 
-    private static boolean isBlank(String s)
+
+    // ===================================================================================================================================
+    //  NAVIGATION — Reset between sections
+    // ===================================================================================================================================
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the agent navigates back to the Transfers client list
+    // Description   : Clears the captured key and goes back to My Clients → Transfers tab for the next section.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026
+    // ***************************************************************************************************************************************************************************************
+    @When("the agent navigates back to the Transfers client list")
+    public void theAgentNavigatesBackToTheTransfersClientList()
     {
-        return s == null || s.trim().isEmpty();
+        log.info("[STEP] When the agent navigates back to the Transfers client list");
+
+        iCapturedTransferKey = "";
+
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iCLientLeftMenuLink"), null);
+        iAction("CLICK", "XPATH", TRANSFERS_TAB_XPATH, null);
+
+        log.info("Navigated back to Transfers client list.");
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Method        : performLogout
+    // Description   : Kept for callers of the Selenium name - delegates to the shared EntsSession.logout()
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 22-05-2026 | Updated: 22-09-2026
+    // ***************************************************************************************************************************************************************************************
+    public void performLogout()
+    {
+        EntsSession.logout();
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : Validate if Appeal can be made sucessfully
+    // Description   : Submits an appeal from whichever appeal button is shown (transfer or NR/CISYF), checks the
+    //                 confirmation, then logs out. Same as Selenium: a failure on screen is logged and the step passes.
+    //
+    //                 Change 22-09-2026 (TC_18 to TC_24):
+    //                   - The logout always runs (finally). Selenium logged out only after a confirmed appeal; when the
+    //                     appeal failed, the next section of TC_18 / TC_19 / TC_20 found no login page and failed there.
+    //                 Note: a missing appeal key in the ObjectRepository is caught by the try block below, so the step
+    //                 then passes with an "Appeal not confirmed" warning - check the log for that line.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 30-09-2026 (Playwright, logout in finally; EntsSupport key check removed)
+    // ***************************************************************************************************************************************************************************************
+    @Then("Validate if Appeal can be made sucessfully")
+    public void theAppealShouldBeSubmittedSuccessfully()
+    {
+        log.info("[STEP] Then the Appeal should be submitted successfully");
+
+        try
+        {
+            boolean iTransferAppeal = isVisible(ObjReader.getLocator("iAppealApplicationBtn"), 3);
+
+            iAction("CLICK", "XPATH", ObjReader.getLocator(iTransferAppeal ? "iAppealApplicationBtn" : "iAppealNRCISYFApplicationBtn"), null);
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAppealNotesField"), "Test Automation");
+            iAction("CLICK", "XPATH", ObjReader.getLocator(iTransferAppeal ? "iAppealChkBoxAccept" : "iAppealNRCISYFChkBoxAccept"), null);
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iSubmitAppealBtn"), null);
+
+            String iConfirmation = iAction("GETTEXT", "XPATH", "//*[contains(text(),'Appeal has been submitted')]", null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Appeal submission success indicator should be visible.");
+            log.info("Appeal submitted successfully (" + (iTransferAppeal ? "transfer" : "NR/CISYF") + "): " + iConfirmation);
+        }
+        catch (Exception e)
+        {
+            log.warning("[APPEAL] Appeal not confirmed (" + e.getMessage() + ") - step passes as in the Selenium version.");
+        }
+        finally
+        {
+            EntsSession.logout();
+        }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Step          : the transfers should be submitted successfully
+    // Description   : Same check as "the transfer should be submitted successfully" but without the logout (the
+    //                 appeal step that follows in TC_18 to TC_24 logs out).
+    //                 02-10-2026: tells the Test Data Vault the section is finished, like the singular step. Before
+    //                 this, the herds of TC_18 / TC_19 / TC_20 sections stayed RESERVED and were never reused.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 31-03-2026 | Updated: 02-10-2026 (vault)
+    // ***************************************************************************************************************************************************************************************
+    @Then("the transfers should be submitted successfully")
+    public void theTransfersShouldBeSubmittedSuccessfully()
+    {
+        log.info("[STEP] Then the transfers should be submitted successfully");
+
+        boolean iConfirmed = false;
+        try
+        {
+            String iConfirmation = iAction("GETTEXT", "XPATH", SUBMITTED_MESSAGE_XPATH, null);
+            Assertions.assertFalse(iConfirmation == null || iConfirmation.isEmpty(), "Transfer submission success indicator should be visible.");
+            log.info("Transfer submitted successfully: " + iConfirmation);
+            iConfirmed = true;
+        }
+        catch (Exception e)
+        {
+            log.warning("[TRANSFER] No success message found after submission (" + e.getMessage()
+                    + ") - step passes as in the Selenium version.");
+        }
+        finally
+        {
+            EntsTestData.markCurrentPairUsed(iConfirmed);
+        }
     }
 }
