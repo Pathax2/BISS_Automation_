@@ -1,99 +1,65 @@
-# This file is a template, and might need editing before it works on your project.
-# You can copy and paste this template into a new `.gitlab-ci.yml` file.
-# You should not add this template to an existing `.gitlab-ci.yml` file by using the `include:` keyword.
+#!/usr/bin/env bash
+# ===================================================================================================================================
+# File          : run-tests.sh
+# Description   : Called by the Jenkinsfile inside the Playwright Java container.
+#                   1. copies db.properties and TestData.xlsx from BISS_SECRETS_DIR (filled by the Jenkinsfile from the
+#                      Jenkins "Secret file" credentials)
+#                   2. runs the framework once with the docker profile (headless bundled Chromium, no Excel write-back)
+#                 Exit codes: 0 = all passed, 1 = Maven/test failure, 2 = setup problem (missing secret file)
 #
-# To contribute improvements to CI/CD templates, please follow the Development guide at:
-# https://docs.gitlab.com/development/cicd/templates/
-# This specific template is located at:
-# https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/OpenShift.gitlab-ci.yml
+# Inputs (environment variables set by the Jenkinsfile):
+#   MAVEN_ARGS         Artifactory settings, proxy and local repository
+#   PLAYWRIGHT_VERSION must equal the image tag, so the browsers in the image are used
+#   TESTCASE_IDS       e.g. TC_00_DATA,TC_01_Login (blank = Execution=Y rows of ExecutionControl.xlsx)
+#   APP_ENVIRONMENT    blank = Environment column of ExecutionControl.xlsx
+#   BISS_SECRETS_DIR   folder holding the two secret files
+#
+# Author        : Aniket Pathare | aniket.pathare@government.ie
+# Date Created  : 09-10-2026
+# Updated       : 15-10-2026 - secret files come from Jenkins credentials (copied by the Jenkinsfile), messages updated
+# ===================================================================================================================================
 
-image: openshift/origin-cli
+set -u
 
-stages:
-  - build  # dummy stage to follow the template guidelines
-  - test
-  - deploy  # dummy stage to follow the template guidelines
-  - review
-  - staging
-  - production
-  - cleanup
+SECRETS_DIR="${BISS_SECRETS_DIR:-/home/jenkins/biss-secrets}"
+RESOURCES="src/test/resources"
 
-variables:
-  OPENSHIFT_SERVER: openshift.default.svc.cluster.local
-  # OPENSHIFT_DOMAIN: apps.example.com
-  # Configure this variable in Secure Variables:
-  # OPENSHIFT_TOKEN: my.openshift.token
+echo "=== BISS Playwright run ==="
+echo "Test cases : ${TESTCASE_IDS:-<Execution=Y rows>}"
+echo "Environment: ${APP_ENVIRONMENT:-<ExecutionControl.xlsx column>}"
+echo "Playwright : ${PLAYWRIGHT_VERSION:-<pom default>}"
+java -version 2>&1 | head -1
+mvn -v 2>&1 | head -1
 
-test1:
-  stage: test
-  before_script: []
-  script:
-    - echo run tests
+# --- 1. Secret files ---------------------------------------------------------------------------------------------------------------
+if [ ! -f "${SECRETS_DIR}/db.properties" ]; then
+    echo "ERROR: ${SECRETS_DIR}/db.properties not found - check the Jenkins credential 'biss-playwright-db-properties' (Secret file)."
+    exit 2
+fi
+if [ ! -f "${SECRETS_DIR}/TestData.xlsx" ]; then
+    echo "ERROR: ${SECRETS_DIR}/TestData.xlsx not found - check the Jenkins credential 'biss-playwright-testdata' (Secret file)."
+    exit 2
+fi
+mkdir -p "${RESOURCES}/Test_Data"
+cp "${SECRETS_DIR}/db.properties" "${RESOURCES}/db.properties"
+cp "${SECRETS_DIR}/TestData.xlsx" "${RESOURCES}/Test_Data/TestData.xlsx"
+echo "Secret files copied (db.properties, TestData.xlsx)."
 
-test2:
-  stage: test
-  before_script: []
-  script:
-    - echo run tests
+# --- 2. Run -----------------------------------------------------------------------------------------------------------------------
+ARGS=( -B -ntp -Pdocker )
+[ -n "${PLAYWRIGHT_VERSION:-}" ] && ARGS+=( "-Dplaywright.version=${PLAYWRIGHT_VERSION}" )
+[ -n "${TESTCASE_IDS:-}" ]       && ARGS+=( "-Dtestcase.ids=${TESTCASE_IDS}" )
+[ -n "${APP_ENVIRONMENT:-}" ]    && ARGS+=( "-Denvironment=${APP_ENVIRONMENT}" )
+ARGS+=( "-Dbamboo.buildNumber=${BUILD_NUMBER:-LOCAL}" "-Dbamboo.buildPlanKey=${JOB_NAME:-BISS-PW}" )
 
-.deploy: &deploy
-  before_script:
-    - oc login "$OPENSHIFT_SERVER" --token="$OPENSHIFT_TOKEN" --insecure-skip-tls-verify
-    - oc project "$CI_PROJECT_NAME-$CI_PROJECT_ID" 2> /dev/null || oc new-project "$CI_PROJECT_NAME-$CI_PROJECT_ID"
-  script:
-    - "oc get services $APP 2> /dev/null || oc new-app . --name=$APP --strategy=docker"
-    - "oc start-build $APP --from-dir=. --follow || sleep 3s && oc start-build $APP --from-dir=. --follow"
-    - "oc get routes $APP 2> /dev/null || oc expose service $APP --hostname=$APP_HOST"
+# MAVEN_ARGS is split on purpose (several -D options and -s <file>)
+# shellcheck disable=SC2086
+mvn ${MAVEN_ARGS:-} "${ARGS[@]}" test
+RC=$?
 
-review:
-  <<: *deploy
-  stage: review
-  variables:
-    APP: review-$CI_COMMIT_REF_NAME
-    APP_HOST: $CI_PROJECT_NAME-$CI_ENVIRONMENT_SLUG.$OPENSHIFT_DOMAIN
-  environment:
-    name: review/$CI_COMMIT_REF_NAME
-    url: http://$CI_PROJECT_NAME-$CI_ENVIRONMENT_SLUG.$OPENSHIFT_DOMAIN
-    on_stop: stop-review
-  rules:
-    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+# Remove the copied secret files from the workspace
+rm -f "${RESOURCES}/db.properties" "${RESOURCES}/Test_Data/TestData.xlsx"
 
-stop-review:
-  <<: *deploy
-  stage: cleanup
-  script:
-    - oc delete all -l "app=$APP"
-  variables:
-    APP: review-$CI_COMMIT_REF_NAME
-    GIT_STRATEGY: none
-  environment:
-    name: review/$CI_COMMIT_REF_NAME
-    action: stop
-  rules:
-    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
-      when: manual
-
-staging:
-  <<: *deploy
-  stage: staging
-  variables:
-    APP: staging
-    APP_HOST: $CI_PROJECT_NAME-staging.$OPENSHIFT_DOMAIN
-  environment:
-    name: staging
-    url: http://$CI_PROJECT_NAME-staging.$OPENSHIFT_DOMAIN
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-production:
-  <<: *deploy
-  stage: production
-  variables:
-    APP: production
-    APP_HOST: $CI_PROJECT_NAME.$OPENSHIFT_DOMAIN
-  environment:
-    name: production
-    url: http://$CI_PROJECT_NAME.$OPENSHIFT_DOMAIN
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
+echo "Maven exit code: ${RC}"
+[ "${RC}" -eq 0 ] && exit 0
+exit 1
