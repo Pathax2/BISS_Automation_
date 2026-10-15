@@ -1,65 +1,113 @@
-#!/usr/bin/env bash
-# ===================================================================================================================================
-# File          : run-tests.sh
-# Description   : Called by the Jenkinsfile inside the Playwright Java container.
-#                   1. copies db.properties and TestData.xlsx from BISS_SECRETS_DIR (filled by the Jenkinsfile from the
-#                      Jenkins "Secret file" credentials)
-#                   2. runs the framework once with the docker profile (headless bundled Chromium, no Excel write-back)
-#                 Exit codes: 0 = all passed, 1 = Maven/test failure, 2 = setup problem (missing secret file)
-#
-# Inputs (environment variables set by the Jenkinsfile):
-#   MAVEN_ARGS         Artifactory settings, proxy and local repository
-#   PLAYWRIGHT_VERSION must equal the image tag, so the browsers in the image are used
-#   TESTCASE_IDS       e.g. TC_00_DATA,TC_01_Login (blank = Execution=Y rows of ExecutionControl.xlsx)
-#   APP_ENVIRONMENT    blank = Environment column of ExecutionControl.xlsx
-#   BISS_SECRETS_DIR   folder holding the two secret files
-#
-# Author        : Aniket Pathare | aniket.pathare@government.ie
-# Date Created  : 09-10-2026
-# Updated       : 15-10-2026 - secret files come from Jenkins credentials (copied by the Jenkinsfile), messages updated
-# ===================================================================================================================================
+Push event to branch feature/playwright-migration
+Started by GitLab push by Pathare Aniket
+Querying the current revision of branch feature/playwright-migration...
+Current revision of branch feature/playwright-migration is b27c011eb0eee3017da9a4320c8aad97313ab0ad
+Obtained pipeline/Jenkinsfile from b27c011eb0eee3017da9a4320c8aad97313ab0ad
+[Pipeline] Start of Pipeline
+[Pipeline] properties
+[Pipeline] podTemplate
+[Pipeline] {
+[Pipeline] timeout
+Timeout set to expire in 3 hr 0 min
+[Pipeline] {
+[Pipeline] node
+Created Pod: openshift biss-cicd/biss-playwright-3-sfmk7-xrdrv
+Agent biss-playwright-3-sfmk7-xrdrv is provisioned from template BISS-Playwright-3-sfmk7
+---
+apiVersion: "v1"
+kind: "Pod"
+metadata:
+  annotations:
+    buildUrl: "http://172.30.130.56:80/job/GitLab%20Organization%20Folder/job/biss%252Fbiss-automation%252Fdafm-automation_playwright/job/feature%252Fplaywright-migration/3/"
+    runUrl: "job/GitLab%20Organization%20Folder/job/biss%252Fbiss-automation%252Fdafm-automation_playwright/job/feature%252Fplaywright-migration/3/"
+  labels:
+    jenkins: "slave"
+    jenkins/label-digest: "84e9d76c01a7ae542e9a8b6b384259845dee3e8a"
+    jenkins/label: "BISS-Playwright-3"
+  name: "biss-playwright-3-sfmk7-xrdrv"
+  namespace: "biss-cicd"
+spec:
+  containers:
+  - command:
+    - "cat"
+    env:
+    - name: "no_proxy"
+      value: "localhost,127.0.0.1,.agriculture.gov.ie,.svc,.cluster.local"
+    - name: "http_proxy"
+      value: "http://vsdbahlprxy1:8080"
+    - name: "password"
+      valueFrom:
+        secretKeyRef:
+          key: "password"
+          name: "mvn-repo-secret"
+    - name: "BISS_SECRETS_DIR"
+      value: "/home/jenkins/biss-secrets"
+    - name: "https_proxy"
+      value: "http://vsdbahlprxy1:8080"
+    - name: "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"
+      value: "1"
+    - name: "username"
+      valueFrom:
+        secretKeyRef:
+          key: "username"
+          name: "mvn-repo-secret"
+    image: "registry.apps.services1.agriculture.gov.ie/openshift/playwright:java-v1.60.0-noble"
+    imagePullPolicy: "IfNotPresent"
+    name: "playwright-java"
+    resources: {}
+    tty: true
+    volumeMounts:
+    - mountPath: "/home/jenkins"
+      name: "workspace-volume"
+      readOnly: false
+    workingDir: "/home/jenkins"
+  - env:
+    - name: "JENKINS_SECRET"
+      value: "********"
+    - name: "no_proxy"
+      value: "localhost,127.0.0.1,.svc,.cluster.local,172.30.0.1,.agriculture.gov.ie"
+    - name: "http_proxy"
+      value: "http://vsdbahlprxy1:8080"
+    - name: "JENKINS_TUNNEL"
+      value: "172.30.187.132:50000"
+    - name: "JENKINS_AGENT_NAME"
+      value: "biss-playwright-3-sfmk7-xrdrv"
+    - name: "JENKINS_NAME"
+      value: "biss-playwright-3-sfmk7-xrdrv"
+    - name: "JENKINS_AGENT_WORKDIR"
+      value: "/home/jenkins"
+    - name: "JENKINS_URL"
+      value: "http://172.30.130.56:80/"
+    image: "registry.redhat.io/ocp-tools-4/jenkins-agent-base-rhel9:v4.18.0"
+    imagePullPolicy: "IfNotPresent"
+    name: "jnlp"
+    resources: {}
+    tty: false
+    volumeMounts:
+    - mountPath: "/home/jenkins"
+      name: "workspace-volume"
+      readOnly: false
+    workingDir: "/home/jenkins"
+  nodeSelector:
+    kubernetes.io/os: "linux"
+  restartPolicy: "Never"
+  serviceAccountName: "jenkins"
+  volumes:
+  - emptyDir:
+      medium: ""
+    name: "workspace-volume"
 
-set -u
-
-SECRETS_DIR="${BISS_SECRETS_DIR:-/home/jenkins/biss-secrets}"
-RESOURCES="src/test/resources"
-
-echo "=== BISS Playwright run ==="
-echo "Test cases : ${TESTCASE_IDS:-<Execution=Y rows>}"
-echo "Environment: ${APP_ENVIRONMENT:-<ExecutionControl.xlsx column>}"
-echo "Playwright : ${PLAYWRIGHT_VERSION:-<pom default>}"
-java -version 2>&1 | head -1
-mvn -v 2>&1 | head -1
-
-# --- 1. Secret files ---------------------------------------------------------------------------------------------------------------
-if [ ! -f "${SECRETS_DIR}/db.properties" ]; then
-    echo "ERROR: ${SECRETS_DIR}/db.properties not found - check the Jenkins credential 'biss-playwright-db-properties' (Secret file)."
-    exit 2
-fi
-if [ ! -f "${SECRETS_DIR}/TestData.xlsx" ]; then
-    echo "ERROR: ${SECRETS_DIR}/TestData.xlsx not found - check the Jenkins credential 'biss-playwright-testdata' (Secret file)."
-    exit 2
-fi
-mkdir -p "${RESOURCES}/Test_Data"
-cp "${SECRETS_DIR}/db.properties" "${RESOURCES}/db.properties"
-cp "${SECRETS_DIR}/TestData.xlsx" "${RESOURCES}/Test_Data/TestData.xlsx"
-echo "Secret files copied (db.properties, TestData.xlsx)."
-
-# --- 2. Run -----------------------------------------------------------------------------------------------------------------------
-ARGS=( -B -ntp -Pdocker )
-[ -n "${PLAYWRIGHT_VERSION:-}" ] && ARGS+=( "-Dplaywright.version=${PLAYWRIGHT_VERSION}" )
-[ -n "${TESTCASE_IDS:-}" ]       && ARGS+=( "-Dtestcase.ids=${TESTCASE_IDS}" )
-[ -n "${APP_ENVIRONMENT:-}" ]    && ARGS+=( "-Denvironment=${APP_ENVIRONMENT}" )
-ARGS+=( "-Dbamboo.buildNumber=${BUILD_NUMBER:-LOCAL}" "-Dbamboo.buildPlanKey=${JOB_NAME:-BISS-PW}" )
-
-# MAVEN_ARGS is split on purpose (several -D options and -s <file>)
-# shellcheck disable=SC2086
-mvn ${MAVEN_ARGS:-} "${ARGS[@]}" test
-RC=$?
-
-# Remove the copied secret files from the workspace
-rm -f "${RESOURCES}/db.properties" "${RESOURCES}/Test_Data/TestData.xlsx"
-
-echo "Maven exit code: ${RC}"
-[ "${RC}" -eq 0 ] && exit 0
-exit 1
+Running on biss-playwright-3-sfmk7-xrdrv in /home/jenkins/workspace/ght_feature_playwright-migration
+[Pipeline] {
+[Pipeline] echo
+Ran due to a GitLab push event - tests are started manually with Build with Parameters. Aborting.
+[Pipeline] }
+[Pipeline] // node
+[Pipeline] }
+[Pipeline] // timeout
+[Pipeline] }
+[Pipeline] // podTemplate
+[Pipeline] End of Pipeline
+[GitLab Pipeline Status] Notifying branch build status: SUCCESS GitLab Organization Folder/biss%2Fbiss-automation%2Fdafm-automation_playwright/feature%2Fplaywright-migration: This commit looks good
+[GitLab Pipeline Status] Notified
+Finished: SUCCESS
