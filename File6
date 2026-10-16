@@ -1,195 +1,109 @@
-# Biss_Automation_Playwright
+Feature: TC_16_STAFF - OpenShift Migration Search, Maps and Navigation E2E Regression Pack
 
-The BISS / ENTS BDD Cucumber automation framework for DAFM, running on **Playwright for Java**.
-It is a one-to-one migration of the Selenium framework (`Biss_Automation`): the same feature files, step texts,
-Object Repository keys, Excel files and folder layout. The Selenium project stays as it is until this one reaches parity.
+  # --------------------------------------------------------------------------------------------------------------------
+  # Legacy  : "Regression Pack for Openshift Cases" (BISSAGL-12669, AT-TC-01 to 10)
+  # Rewritten 16-10-2026 in the StaffSteps vocabulary (the wording the MAPS features run with). One end-to-end
+  # scenario on the OpenShift deployment; # SECTION markers show where each legacy scenario starts.
+  #
+  # Purpose:
+  #   After the move to OpenShift the main staff journeys still work: side menu, Home searches by reference, herd and
+  #   parcel, map generation by parcel and by herd (with download details and paging), Online Response, an internal
+  #   amendment, every side menu area of an application, and the Active Farmer admin check entry point.
+  #
+  # Legacy coverage notes carried forward:
+  #   - Legacy only searched in AT-TC-02 to 04 and 07; the searches here run the same way.
+  #   - AT-TC-08 had a branch that deleted every admin inspection when "Admin Inspection is Completed." was already on
+  #     screen before Amend was clicked. That destructive branch is not carried over; the amendment is submitted
+  #     without scheme changes and confirmed.
+  #   - AT-TC-10 stopped after Start admin check; Section 10 checks that Send is offered and does not send, so no
+  #     payment stop is applied to the herd.
+  #   - Each user switch signs out first, as legacy started each scenario with a fresh login.
+  #
+  # Test data:
+  #   Herds, reference numbers and LPIS parcels from the database ("Get Submitted Herds", "Get Reference Numbers",
+  #   "Get LPIS Parcels"), as in legacy.
+  #   Logins agr4442 (BISS Co-ordination 1), agr11612 and agr2332 (map printing users, as in legacy).
+  #   Password: TD:Password from the TestData row of this test case, the same for all three.
+  #
+  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps
+  # Author: Aniket Pathare | aniket.pathare@government.ie
+  # --------------------------------------------------------------------------------------------------------------------
 
-> Everything in this repository is for human review. No generated code is committed to the government repository
-> without a review.
+  @regression @staff @openshift @search @maps @e2e
+  Scenario: AT-STAFF-OS-MIGRATION-E2E-01 - Staff runs the main BISS journeys on the OpenShift deployment
 
-| Item | Value |
-|---|---|
-| Language / build | Java 17, Maven (wrapper) |
-| Browser engine | Playwright for Java 1.61.0 (installed Chrome, or Chromium in Docker) |
-| BDD | Cucumber-JVM 7.15.0, JUnit 5 |
-| Test selection | `Execution_Control_File/ExecutionControl.xlsx` (Execution = Y), or `-Dtestcase.ids=...` |
-| Test data | `Test_Data/TestData.xlsx` (passwords) + Oracle at run time (DATA, INET, ENTS) + Test Data Vault |
-| Locators | `Object_Repository/ObjectRepository.properties` (Selenium XPaths, `xpath=` prefix added at run time) |
-| Execution | IntelliJ / Maven on the laptop; Docker planned (`mcr.microsoft.com/playwright/java:v1.61.0-noble`) |
+    # SECTION 1 : Switch between side menu areas - AT-TC-01
+    Given the staff user is logged in to the OpenShift BISS portal as "agr4442"
+    When the staff user navigates the dashboard side menu
+      | Coordination |
+      | Home         |
+    Then the dashboard should remain available
 
----
+    # SECTION 2 : Search with a reference number - AT-TC-02
+    When the staff user searches the Home screen for the next reference number for scheme year "2023"
 
-## 1. Running
+    # SECTION 3 : Search with a herd number - AT-TC-03
+    When the staff user searches the Home screen for the next submitted herd for scheme year "2024"
 
-```powershell
-.\mvnw.cmd -q test-compile
-.\mvnw.cmd test "-Dtestcase.ids=TC_01_Login"
-.\mvnw.cmd test "-Dtestcase.ids=TC_00_DATA,TC_01_ENTS"
-.\mvnw.cmd test "-Dtestcase.ids=TC_03" "-Denvironment=QA"
-```
+    # SECTION 4 : Parcel search - AT-TC-04
+    When the staff user searches the Parcels screen for the next LPIS parcel for scheme year "2024"
 
-| Switch | Meaning |
-|---|---|
-| `-Dtestcase.ids=A,B` | Runs exactly these test cases, ignoring the Execution flag |
-| `-Denvironment=QA` | Overrides the Environment column for every selected row |
-| `-Dexecution.control.writeback=false` | Does not write PASS / FAIL back into ExecutionControl.xlsx |
-| `-Dbrowser=CHROME -Dbrowser.force=true` | Uses this browser whatever the Browser column says |
-| `-Ddb.bootstrap=false` | BISS test cases use the herd / username from TestData.xlsx instead of the database |
+    # SECTION 5 : Generate a map from a parcel search - AT-TC-05
+    When the staff user signs out of the portal
+    Given the staff user is logged in to the OpenShift BISS portal as "agr11612"
+    And the staff user is on the Map Printing screen
+    And the staff user is searching by parcel
+    When the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
+    And the staff user requests a map with the following settings
+      | parcels | single               |
+      | mapType | Inspection Discovery |
+      | legend  | yes                  |
+    Then the map generation request should be accepted
 
-The runner finds `<TestCase_ID>.feature` anywhere under `src/test/resources/Test_Cases/` (any sub-folder depth).
-Every test case also needs a row in TestData.xlsx (the Password column is used by every login).
+    # SECTION 6 : Generate a map from a herd search, check its details, page the maps table - AT-TC-06
+    When the staff user signs out of the portal
+    Given the staff user is logged in to the OpenShift BISS portal as "agr2332"
+    And the staff user is on the Map Printing screen
+    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
+    Then the staff user should see the herd identity details
+      | name    |
+      | address |
+    When the staff user requests a map with the following settings
+      | parcels | single              |
+      | mapType | Full Color Ortho A4 |
+      | legend  | yes                 |
+    Then the generated map should be recorded with the following details
+      | status     |
+      | id         |
+      | herdNumber |
+      | date       |
+    And the generated map should reach its final status
+    When the staff user pages through the generated maps table
+      | Next page     |
+      | Previous page |
+    Then the generated maps table should remain displayed
 
-**Recommended order:** run `TC_00_DATA` first in a run. It fills the Test Data Vault for every selected test case,
-so the test cases do not wait for slow queries.
+    # SECTION 7 : Online Response search - AT-TC-07
+    When the staff user signs out of the portal
+    Given the staff user is logged in to the OpenShift BISS portal as "agr4442"
+    When the staff user searches the Online Response screen for the next submitted herd for scheme year "2023"
 
----
+    # SECTION 8 : Internal amendment without scheme changes - AT-TC-08
+    When the staff user amends the application for the next submitted herd for scheme year "2024"
+    And the staff user submits the amendment and confirms
 
-## 2. Project layout
+    # SECTION 9 : Every side menu area of an application - AT-TC-09
+    When the staff user opens the application for the next submitted herd for scheme year "2024"
+    Then the following application tabs should be available
+      | Payments         |
+      | Correspondence   |
+      | Errors/Stops     |
+      | Inspections      |
+      | Notes/History    |
+      | BISS Application |
+      | SIM              |
 
-```
-src/main/java/commonFunctions   PlaywrightFactory, CommonFunctions (iAction), UiHelpers, LoginScreens
-src/main/java/utilities         ConfigManager, ExcelUtilities, ObjReader, ScreenshotManager, SoftAssertManager,
-                                RetryAnalyser, BrowserProcessCleaner, ObjectRepositoryValidator,
-                                TestDataVault, DataHarvester, EntsTestData, NrcisyfTestData, StaffTestData
-src/main/java/reporting         ReportManager, CucumberStepListener, HtmlReportGenerator, JUnitXmlGenerator,
-                                TestStepLogger, ExecutionSummaryEmailer, BambooIntegration
-src/main/java/database          DBRouter (every SQL query, by label)
-src/test/java/runner            TestRunner
-src/test/java/stepdefinitions   Hooks, TC_00_DATA, BISS agent / individual / partnership steps (TC_01 ... TC_18)
-src/test/java/stepdefinitions/ENTS          EntsSession, EntsSupport, TC_xx_ENTS
-src/test/java/stepdefinitions/BISS/STAFF    StaffSteps (all staff features)
-src/test/resources/config       application.properties + application-<env>.properties
-src/test/resources/Test_Cases   TC_00_DATA, BISS/INET, BISS/STAFF/<area>, ENTS
-src/test/resources/Object_Repository, Test_Data, Execution_Control_File
-guide/                          step-by-step guides and SQL files to check the queries in SQL Developer
-```
-
----
-
-## 3. Test suites
-
-| Suite | Test cases | Who logs in | Herd / login source |
-|---|---|---|---|
-| Data | `TC_00_DATA` | nobody (no browser) | fills the Test Data Vault |
-| Login | `TC_01_Login`, `TC_02_InvalidCredentials_Login` | agent | TestData.xlsx |
-| BISS agent | `TC_03` - `TC_10` | agent | DATA "List of herds with no errors at all" + INET agent |
-| BISS individual | `TC_03_IND` | the farmer | DATA "not started individual herds with CISYF flag" + INET own login |
-| BISS partnership | `TC_03_PART` | agent of the partnership herd | DATA "List of not started partnership herds" + INET agent |
-| Preliminary Checks | `TC_15` - `TC_20` | agent | DATA Preliminary Check queries (Pending) |
-| ENTS transfers | `TC_01_ENTS` - `TC_12_ENTS`, `TC_17_ENTS` - `TC_20_ENTS` | agent, individual, ETF partner | ENTS Agent / Individual / ETF queries |
-| ENTS NR/CISYF | `TC_13_ENTS`, `TC_15_ENTS`, `TC_16_ENTS`, `TC_21_ENTS` - `TC_25_ENTS` | agent | ENTS "Young Farmer herds" |
-| ENTS ETF | `TC_14_ENTS` | individual, then ETF partner | random ETF from the dropdown + "ENTS ETF logins" |
-| Staff | `TC_01_STAFF` - `TC_37_STAFF` | staff (internal portal) | StaffTestData pools (DATA) |
-
-The test case type is read from its ID: `_ENTS`, `_IND`, `_PART`, `_STAFF`, `_DATA`. Column C of
-ExecutionControl.xlsx describes every test case in two lines (what it does, then the technical flow).
-
----
-
-## 4. Runtime test data
-
-No herd number or login needs to be typed in a feature file. Values are taken from Oracle at run time.
-
-### 4.1 Tokens in feature files
-
-| Token | Value |
-|---|---|
-| `{transferor.herd}` `{transferor.name}` `{transferor.address}` | transferor of the current transfer pair |
-| `{transferee.herd}` `{transferee.name}` `{transferee.address}` | transferee of the current pair |
-| `{agent}` `{transferor.login}` `{transferee.agent}` `{transferee.login}` | who creates / who accepts |
-| `{auto.agent}` `{auto.agent.2}` ... | the agent with the most usable herds, the second best, ... |
-| `{etf.code}` `{etf.partner}` | ETF picked by TC_14_ENTS and the login of its partner |
-| `{random}` | TC_14_ENTS: pick a random ETF from the dropdown |
-
-A plain value still works, so a herd can be pinned for debugging.
-
-### 4.2 Test Data Vault
-
-`runtime-data/vault` (git-ignored, it holds farmer names and herds - never commit it).
-
-- `TC_00_DATA` reads which test cases are selected, works out how many herds each needs, runs the pool queries in
-  parallel and stores the rows. It refills after the weekly database refresh (`data.refresh.day`) and spot-checks
-  rows that are already there (agent link still current, application not started, login still mapped).
-- Every herd handed out is RESERVED, then USED (passed) or BAD (failed, with the reason). A herd is not handed out twice.
-- `data.force.refresh=true` refills everything once (set it back to false afterwards).
-
-| Pool | Used by |
-|---|---|
-| `ENTS_AGENT`, `ENTS_ETF`, `ENTS_NO_ENTS`, `ENTS_INDIVIDUAL`, `ENTS_YOUNG_FARMER` | ENTS test cases |
-| `BISS_NOT_STARTED`, `BISS_IND_CISYF`, `BISS_PARTNERSHIP` | TC_03 family and other BISS agent test cases |
-
-### 4.3 Checking a query
-
-Every query lives in `DBRouter` under a label. The SQL files in `guide/sql/` are the same queries with the
-parameters filled in, ready for SQL Developer (CENTEST_BISS_DATA, CENTEST_BISS_INET, CENTEST_ENTS_DATA).
-
----
-
-## 5. Configuration (application.properties)
-
-Most used settings. Any setting can also be passed as `-Dname=value`.
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `browser.reuse` | true | one browser for the whole run, clean session per test case |
-| `browser.zoom.percent` | 67 | Chrome page zoom, same as the Selenium framework |
-| `browser.profile.delete` | background | delete the temporary zoom profile without holding up the end of the run |
-| `trace.mode` | retain-on-failure | Playwright trace kept for failed test cases only |
-| `probe.timeout.seconds` | 3 | how long an "if present" check waits |
-| `login.screen.wait.seconds` | 15 | wait for the screen after Login (new-user Next screens, PIN, OTP) |
-| `clients.list.timeout.seconds` | 45 | wait for the My Clients filter bar |
-| `ents.scheme.year` | 2026 | ENTS herds must hold entitlements in this year |
-| `ents.individual.min.ents` | 10 | individual herds must hold more than this many entitlements (-1 = off) |
-| `ents.pair.retries` | 15 | transfer pairs tried before a create step fails |
-| `ents.transferee.retries` | 3 | transferees tried on "No transferee matches were found" |
-| `data.vault.enabled` | true | take herds from the vault first |
-| `staff.url` | (blank) | staff login page; blank = StaffURL column of the Config sheet |
-| `staff.pool.size` | 20 | rows per staff data pool (tags like `@parcels:10` ask for more) |
-
----
-
-## 6. Reports and evidence
-
-| Output | Location |
-|---|---|
-| HTML suite report | `Test_Report/html/` |
-| Word evidence per test case | `Test_Report/docs/` |
-| Playwright traces (failed test cases) | `Test_Report/traces/` - open on trace.playwright.dev |
-| Downloads made by the application | `Test_Report/downloads/` |
-| JUnit XML (CI) | `target/surefire-reports/BISS_Execution_Results.xml` |
-
----
-
-## 7. Security rules
-
-- `src/test/resources/db.properties` holds the database credentials and is git-ignored. Share
-  `db.properties.example` (empty values) instead.
-- `TestData.xlsx` holds passwords. Do not attach it to tickets or chats.
-- Trace zips contain typed passwords and cookies. Do not share them outside the team.
-- `runtime-data/` (vault, used-herds file) holds farmer names and herd numbers and is git-ignored.
-- Never put a Windows password in a proxy URL.
-
----
-
-## 8. Migration status
-
-| Area | Status |
-|---|---|
-| Framework core (factory, iAction, reporting, Hooks, runner, vault) | done |
-| Docker image and compose files | proof of concept (`playwright-poc`), not yet moved into this project |
-| BISS agent end-to-end `TC_03` | passing |
-| BISS individual `TC_03_IND` | converted |
-| BISS partnership `TC_03_PART` | new - first dry run pending (partnership-only screens to be added) |
-| BISS dashboard / My Clients / correspondence / payments `TC_04` - `TC_10` | converted, to be re-run |
-| Preliminary Checks `TC_15` - `TC_20` | converted, to be re-run |
-| ENTS transfers `TC_01_ENTS` | passing |
-| ENTS `TC_02_ENTS` - `TC_25_ENTS` | converted, runs in progress |
-| Staff MAPS (`TC_01`-`05`, `10`, `11_STAFF`) | converted; Section 19 Object Repository XPaths not yet checked on a live session |
-| Staff other areas | step definitions done; feature files being rewritten to the new step wording |
-
-Known items: some staff features sit in a folder that does not match their content (for example `SIM/TC_09_STAFF`
-is about payment roles); `TC_15` - `TC_17` feature titles say TC_18 - TC_20. The runner finds them either way.
-
----
-
-Author: Aniket Pathare | aniket.pathare@government.ie
+    # SECTION 10 : Active Farmer - the admin check can be started - AT-TC-10
+    When the staff user opens the application for the next submitted herd for scheme year "2023"
+    And the staff user opens the "Active Farmer" screen
+    Then the start admin check confirmation should be offered
