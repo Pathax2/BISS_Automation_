@@ -1,43 +1,28 @@
-Jenkins (biss-cicd): add 2 "Secret file" credentials for the Playwright test pipeline
-Background
-The BISS / ENTS automated regression suite has been migrated from Selenium to Playwright.
-Repository: GitLab biss/biss-automation/dafm-automation_playwright
-Branch: feature/playwright-migration
-Jenkins: jenkins-biss-cicd > biss > biss/biss-automation/dafm-automation_playwright
+Hi Sinem,
 
-The pipeline is set up and working up to the test step: Jenkins finds pipeline/Jenkinsfile,
-the agent pod starts in namespace biss-cicd, and the code is cloned.
-The run then stops with:
-  CredentialNotFoundException: Could not find credentials entry with ID 'biss-playwright-db-properties'
+Thank you - yes, biss-playwright-credentials in biss-cicd is a good name.
 
-The tests need two configuration files that contain passwords:
-  - db.properties  (Oracle test database connection)
-  - TestData.xlsx  (test user logins)
-For security these files are NOT stored in GitLab. The Jenkinsfile reads them from Jenkins
-Credentials at run time, copies them in for the duration of the test run and deletes them
-straight afterwards. They are never printed to the log or archived.
+The secret needs two keys, named exactly like the files (the pipeline mounts the secret as a
+folder, so each key becomes a file of that name):
 
-My Jenkins account has no Credentials permission, so I cannot add them myself.
+  Key              Value
+  db.properties    the contents of our db.properties file (Oracle test database connection)
+  TestData.xlsx    the TestData.xlsx file (an Excel file, so it has to be added from the file)
 
-Request (either option is fine)
-Option A - please add two credentials in the folder store of
-           biss/biss-automation/dafm-automation_playwright (or the biss folder):
-    1. Kind: Secret file   ID: biss-playwright-db-properties   Description: BISS Playwright db.properties
-    2. Kind: Secret file   ID: biss-playwright-testdata        Description: BISS Playwright TestData
-    The IDs must match exactly (lower case, no spaces) - they are referenced in pipeline/Jenkinsfile.
-Option B - grant Aniket.Pathare Credentials Create / Update / View permission on the folder
-           biss/biss-automation/dafm-automation_playwright, so the test team can add them and keep
-           them up to date when test passwords change.
+Equivalent command:
+  oc create secret generic biss-playwright-credentials -n biss-cicd \
+     --from-file=db.properties=<path to db.properties> \
+     --from-file=TestData.xlsx=<path to TestData.xlsx>
 
-Handover of the files
-The files contain passwords and will NOT be attached to this ticket or sent by email / Teams.
-I will upload them directly during a short screen-share, or through whichever secure channel
-Operations prefers.
+It does not need to be synced to Jenkins as a credential. The Jenkinsfile mounts it read-only
+into the agent pod (podTemplate secretVolume, /home/jenkins/biss-secrets), the same way it
+already uses mvn-repo-secret.
 
-Acceptance criteria
-- Both credential IDs exist and are visible to the dafm-automation_playwright pipeline.
-- A "Build with Parameters" run (TESTCASE_IDS = TC_00_DATA,TC_01_Login) gets past the
-  credentials step; the console shows "Secret files copied (db.properties, TestData.xlsx)."
+The two files contain passwords, so I will not attach them to this ticket. Please let me
+know how you would like to receive them (screen-share, or another secure channel you prefer).
 
-Reference
-Jenkins build #4 on feature/playwright-migration (console output shows the error above).
+One question: test passwords change from time to time. When they do, should I raise a ticket
+each time, or could the test team be given permission to update the values of this one secret?
+
+Best regards,
+Aniket
