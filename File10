@@ -66,8 +66,18 @@
 //   - "the Active Farmer screen should be displayed"
 //   - Scheme / AMS / query letter / Active Farmer Object Repository keys replaced by the Selenium XPaths
 //
+// Updated 16-10-2026 (BISS Letters / Active Farmer notes / OpenShift / Home screen / CISYF payments pack, TC_06 / 13 / 16 /
+//                     17 / 20):
+//   - Payments: "opens the Payments screen for the next payment herd" / "... for the same herd", the BISS / CRISS / CISYF
+//     columns, Total DPS Payment = sum of the net payment amounts, Reduction Type columns and rows
+//   - Active Farmer: the result is a radio button, the notes box is in biss-active-farmer-admin-notes, the appeal upload
+//     uses Test_Data/Cover_Letter.pdf, "the start admin check confirmation should be offered" (no stop applied)
+//   - Coordination amendment: Save fails on a form error and logs the confirmation message
+//   - Farmer search uses the Search By radio button
+//
 // Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 15-07-2026 | Updated: 05-10-2026 (Playwright), 15-10-2026 (SIM pack, SSO Administration, Scheme / AMS pack)
+// Date Created  : 15-07-2026 | Updated: 05-10-2026 (Playwright), 15-10-2026 (SIM pack, SSO Administration, Scheme / AMS pack),
+//                 16-10-2026 (Letters / Active Farmer / OpenShift / Payments pack)
 // =====================================================================================================================================
 
 package stepdefinitions.BISS.STAFF;
@@ -126,6 +136,7 @@ public class StaffSteps
     private int iSimOptedHerdCursor   = 0;
     private int iParcelCursor         = 0;
     private int iReferenceCursor      = 0;
+    private int iPaymentHerdCursor    = 0;
 
     // Holds the value most recently taken from a pool, so a step can re-use the SAME herd rather than advance
     // to the next one. Needed where legacy deliberately re-visits one herd across several scheme years.
@@ -1330,6 +1341,7 @@ public class StaffSteps
     // Function Name : theStaffUserSearchesTheHomeScreenForTheFollowingFarmers
     // Description   : Runs a farmer search per row. Legacy had one scenario per surname/county pair; the table
     //                 makes the set of cases visible in one place.
+    //                 16-10-2026: Search By is a radio button (Selenium StaffSelectTheSearchByType), not a dropdown.
     // Parameters    : pFarmers (DataTable) - columns: surname, county
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 15-07-2026
@@ -1341,7 +1353,7 @@ public class StaffSteps
         for (Map<String, String> iRow : pFarmers.asMaps(String.class, String.class))
         {
             iAction("CLICK",   "XPATH", ObjReader.getLocator("iNavbarLink").replace("{LINK}", "Home"), null);
-            iAction("LIST",    "XPATH", ObjReader.getLocator("iSearchByTypeSelect"), "Farmer");
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iSearchByTypeRadio").replace("{TYPE}", "Farmer"), null);
             iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iHomeSurname"), iRow.get("surname"));
             iAction("LIST",    "XPATH", ObjReader.getLocator("iHomeCounty"), iRow.get("county"));
             iAction("CLICK",   "XPATH", ObjReader.getLocator("iHomeSearchButton"), null);
@@ -2572,6 +2584,8 @@ public class StaffSteps
     // Function Name : theStaffUserStartsTheActiveFarmerAdminCheck
     // Description   : Starts the admin check and confirms the send dialog. Starting a check applies a STOP that
     //                 blocks payment until it is resolved.
+    //                 16-10-2026: Send is found in the dialog, or on the page if there is no dialog (Selenium clicked any
+    //                 button with that text).
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 15-07-2026
     // ---------------------------------------------------------------------------------------------------------------------------------
@@ -2580,7 +2594,23 @@ public class StaffSteps
     {
         log.info("[STEP] the staff user starts the active farmer admin check");
         iAction("CLICK", "XPATH", ObjReader.getLocator("iStartAdminCheckButton"), null);
-        iAction("CLICK", "XPATH", ObjReader.getLocator("iDialogButton").replace("{LABEL}", "Send"), null);
+        iClickButton("Send");
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    // Function Name : theStartAdminCheckConfirmationShouldBeOffered
+    // Description   : Clicks Start admin check and checks that the Send confirmation is offered, without sending it. Used where
+    //                 Selenium stopped after Start admin check (OpenShift pack), so no payment stop is applied.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 16-10-2026
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    @Then("the start admin check confirmation should be offered")
+    public void theStartAdminCheckConfirmationShouldBeOffered()
+    {
+        log.info("[STEP] the start admin check confirmation should be offered");
+        iAction("CLICK",         "XPATH", ObjReader.getLocator("iStartAdminCheckButton"), null);
+        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iButtonByText").replace("{LABEL}", "Send"), null);
+        log.info("[STAFF] Start admin check offers Send - not sent, so no stop is applied.");
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------------
@@ -2588,6 +2618,8 @@ public class StaffSteps
     // Description   : Records an admin check outcome with its mandatory note. APPROVED lifts the payment stop;
     //                 REJECTED leaves it in place. The note text carries into the system note, which is why the
     //                 feature asserts it verbatim afterwards.
+    //                 16-10-2026: the result is a radio button and the notes box sits in biss-active-farmer-admin-notes
+    //                 (Selenium StaffSelectAdminCheckResult / StaffEnterTextInAdminNotes).
     // Parameters    : pResult (DataTable) - keys: result (APPROVED/REJECTED), notes
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 15-07-2026
@@ -2598,7 +2630,7 @@ public class StaffSteps
         log.info("[STEP] the staff user completes the admin check with the following result");
         Map<String, String> iResult = pResult.asMap(String.class, String.class);
 
-        iAction("LIST",    "XPATH", ObjReader.getLocator("iAdminCheckResultSelect"), iResult.get("result"));
+        iAction("CLICK",   "XPATH", ObjReader.getLocator("iAdminCheckResultRadio").replace("{RESULT}", iResult.get("result").trim()), null);
         iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iAdminNotes"), iResult.get("notes"));
         iAction("CLICK",   "XPATH", ObjReader.getLocator("iSaveChangesButton"), null);
     }
@@ -2606,7 +2638,10 @@ public class StaffSteps
     // ---------------------------------------------------------------------------------------------------------------------------------
     // Function Name : theStaffUserRaisesAnAppealWithSupportingEvidence
     // Description   : Runs the full appeal path - start the appeal, confirm it, upload the farmer's evidence and
-    //                 submit it for review. The file path comes from the TestData column AppealEvidencePath.
+    //                 submit it for review.
+    //                 16-10-2026: the evidence file is src/test/resources/Test_Data/Cover_Letter.pdf, the same file the
+    //                 ENTS and AP4 uploads use (property staff.appeal.upload.path to change it). It was the TestData
+    //                 column AppealEvidencePath, which held a Windows path that does not exist in the Jenkins pod.
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 15-07-2026
     // ---------------------------------------------------------------------------------------------------------------------------------
@@ -2614,11 +2649,21 @@ public class StaffSteps
     public void theStaffUserRaisesAnAppealWithSupportingEvidence()
     {
         log.info("[STEP] the staff user raises an appeal with supporting evidence");
+        String iFilePath = System.getProperty("staff.appeal.upload.path",
+                ConfigManager.getOrDefault("staff.appeal.upload.path",
+                        System.getProperty("user.dir") + java.io.File.separator + "src" + java.io.File.separator + "test"
+                                + java.io.File.separator + "resources" + java.io.File.separator + "Test_Data"
+                                + java.io.File.separator + "Cover_Letter.pdf"));
+        if (!new java.io.File(iFilePath).isFile())
+        {
+            throw new IllegalStateException("Appeal evidence file not found: " + iFilePath + " (set staff.appeal.upload.path).");
+        }
+
         iAction("CLICK",      "XPATH", ObjReader.getLocator("iStartAppealProcessButton"), null);
-        iAction("CLICK",      "XPATH", ObjReader.getLocator("iDialogButton").replace("{LABEL}", "Yes, Appeal"), null);
+        iClickButton("Yes, Appeal");
         iAction("CLICK",      "XPATH", ObjReader.getLocator("iUploadDocumentButton"), null);
-        iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iDocumentUploadInput"), "TD:AppealEvidencePath");
-        iAction("CLICK",      "XPATH", ObjReader.getLocator("iSubmitButton"), null);
+        iAction("UPLOADFILE", "XPATH", ObjReader.getLocator("iDocumentUploadInput"), iFilePath);
+        iClickButton("Submit");
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------------
@@ -2685,6 +2730,8 @@ public class StaffSteps
     // ---------------------------------------------------------------------------------------------------------------------------------
     // Function Name : theCoordinationAmendmentShouldBeSaved
     // Description   : Saves the transfer and confirms it persisted.
+    //                 16-10-2026: after Save, no form error may be shown and any confirmation message is logged
+    //                 (Selenium only clicked Save; the old panel locator was a placeholder).
     // Author        : Aniket Pathare | aniket.pathare@government.ie
     // Date Created  : 15-07-2026
     // ---------------------------------------------------------------------------------------------------------------------------------
@@ -2692,8 +2739,19 @@ public class StaffSteps
     public void theCoordinationAmendmentShouldBeSaved()
     {
         log.info("[STEP] the coordination amendment should be saved");
-        iAction("CLICK",         "XPATH", ObjReader.getLocator("iSaveButton"), null);
-        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iCoordinationAmendmentsPanel"), null);
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iSaveButton"), null);
+        if (UiHelpers.isVisible(UiHelpers.byXpath(ObjReader.getLocator("iFormError")), PROBE_SECONDS))
+        {
+            throw new AssertionError("Coordination amendment not saved: " + iShortText(ObjReader.getLocator("iFormError"), 300));
+        }
+        if (UiHelpers.isVisible(UiHelpers.byXpath(ObjReader.getLocator("iConfirmationMessage")), PROBE_SECONDS))
+        {
+            log.info("[STAFF] Coordination amendment saved: " + iShortText(ObjReader.getLocator("iConfirmationMessage"), 200));
+        }
+        else
+        {
+            log.info("[STAFF] Coordination amendment saved (no error shown).");
+        }
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------------
@@ -3247,6 +3305,189 @@ public class StaffSteps
         log.info("[STAFF] Supplementary payment form shown with payment reason and the three control dates.");
     }
 
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    // Function Name : theStaffUserOpensThePaymentsScreenForTheNextPaymentHerd
+    // Description   : Takes the next herd from the "Herds with Payments" pool, opens its application and the Payments
+    //                 screen.
+    // Parameters    : pSchemeYear (String) - scheme year
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 16-10-2026
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    @When("the staff user opens the Payments screen for the next payment herd for scheme year {string}")
+    public void theStaffUserOpensThePaymentsScreenForTheNextPaymentHerd(String pSchemeYear)
+    {
+        log.info("[STEP] the staff user opens the Payments screen for the next payment herd for scheme year " + pSchemeYear);
+        iCurrentHerd = iNextFromPool(StaffTestData.pool(Pool.PAYMENTS, pSchemeYear), iPaymentHerdCursor, Pool.PAYMENTS.description());
+        iPaymentHerdCursor++;
+        iOpenPaymentsScreen(iCurrentHerd, pSchemeYear);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    // Function Name : theStaffUserOpensThePaymentsScreenForTheSameHerd
+    // Description   : Re-opens the Payments screen of the herd already in play (Selenium AT-TC-13 and AT-TC-14 both used row 7).
+    // Parameters    : pSchemeYear (String) - scheme year
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 16-10-2026
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    @When("the staff user opens the Payments screen for the same herd for scheme year {string}")
+    public void theStaffUserOpensThePaymentsScreenForTheSameHerd(String pSchemeYear)
+    {
+        log.info("[STEP] the staff user opens the Payments screen for the same herd for scheme year " + pSchemeYear);
+        if (iCurrentHerd == null)
+        {
+            throw new IllegalStateException("No herd is currently in play. Open a payment herd first.");
+        }
+        iOpenPaymentsScreen(iCurrentHerd, pSchemeYear);
+    }
+
+    // Home search for the herd, View, then the Payments side menu entry
+    private void iOpenPaymentsScreen(String pHerd, String pSchemeYear)
+    {
+        iSearchHomeByHerd(pHerd, pSchemeYear);
+        iOpenFirstApplication();
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iNavbarLink").replace("{LINK}", "Payments"), null);
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    // Function Name : thePaymentSummaryShouldShowTheBissCrissAndCisyfColumns
+    // Description   : The Payment Summary table has the BISS, CRISS and CISYF headings, each with its amount column below
+    //                 (bissAmount, crissAmount, cisyfAmount). Selenium printed whether they existed; here a missing one fails
+    //                 the step, listing every missing heading.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 16-10-2026
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    @Then("the payment summary should show the BISS, CRISS and CISYF columns")
+    public void thePaymentSummaryShouldShowTheBissCrissAndCisyfColumns()
+    {
+        log.info("[STEP] the payment summary should show the BISS, CRISS and CISYF columns");
+        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iPaymentSummaryHeader").replace("{HEADER}", "BISS"), null);
+
+        StringBuilder iMissing = new StringBuilder();
+        for (String iScheme : new String[] { "BISS", "CRISS", "CISYF" })
+        {
+            if (UiHelpers.byXpath(ObjReader.getLocator("iPaymentSummaryHeader").replace("{HEADER}", iScheme)).count() == 0)
+            {
+                iMissing.append(iMissing.length() == 0 ? "" : ", ").append(iScheme).append(" heading");
+            }
+            String iColumn = iScheme.toLowerCase(java.util.Locale.ROOT) + "Amount";
+            if (UiHelpers.byXpath(ObjReader.getLocator("iPaymentAmountHeader").replace("{COLUMN}", iColumn)).count() == 0)
+            {
+                iMissing.append(iMissing.length() == 0 ? "" : ", ").append(iColumn).append(" column");
+            }
+        }
+        if (iMissing.length() > 0)
+        {
+            throw new AssertionError("Payment Summary is missing: " + iMissing + " (herd " + iCurrentHerd + ").");
+        }
+        log.info("[PAYMENTS] BISS, CRISS and CISYF headings and amount columns shown for herd " + iCurrentHerd + ".");
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    // Function Name : theTotalDpsPaymentShouldEqualTheSumOfTheNetPaymentAmounts
+    // Description   : Total DPS Payment equals the BISS + CRISS + CISYF Net Payment Amounts (Selenium StaffCheckDPSPaymentValue,
+    //                 assertEquals). Amounts are read without commas and the euro sign; a blank amount counts as 0.
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 16-10-2026
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    @Then("the Total DPS Payment should equal the sum of the net payment amounts")
+    public void theTotalDpsPaymentShouldEqualTheSumOfTheNetPaymentAmounts()
+    {
+        log.info("[STEP] the Total DPS Payment should equal the sum of the net payment amounts");
+        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iPaymentTotalDps"), null);
+
+        double iTotal = iAmount(ObjReader.getLocator("iPaymentTotalDps"));
+        double iNet   = 0;
+        for (String iColumn : new String[] { "bissAmount", "crissAmount", "cisyfAmount" })
+        {
+            iNet += iAmount(ObjReader.getLocator("iPaymentNetAmount").replace("{COLUMN}", iColumn));
+        }
+        log.info("[PAYMENTS] Total DPS Payment " + iTotal + ", sum of net payment amounts " + iNet);
+        if (Math.abs(iTotal - iNet) > 0.005)
+        {
+            throw new AssertionError("Total DPS Payment " + iTotal + " does not equal BISS + CRISS + CISYF Net Payment Amount " + iNet
+                    + " (herd " + iCurrentHerd + ").");
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    // Function Name : thePaymentSummaryShouldShowReductionTypeColumns
+    // Description   : The Payment Summary shows at least the given number of Reduction Type column headings (Selenium checked the
+    //                 first and the second).
+    // Parameters    : pCount (int) - number of Reduction Type headings expected
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 16-10-2026
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    @Then("the payment summary should show {int} Reduction Type columns")
+    public void thePaymentSummaryShouldShowReductionTypeColumns(int pCount)
+    {
+        log.info("[STEP] the payment summary should show " + pCount + " Reduction Type columns");
+        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iPaymentReductionTypeHeader"), null);
+        int iFound = UiHelpers.byXpath(ObjReader.getLocator("iPaymentReductionTypeHeader")).count();
+        if (iFound < pCount)
+        {
+            throw new AssertionError("Expected " + pCount + " Reduction Type columns, found " + iFound + " (herd " + iCurrentHerd + ").");
+        }
+        log.info("[PAYMENTS] " + iFound + " Reduction Type columns shown.");
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    // Function Name : thePaymentSummaryShouldShowTheFollowingReductionTypeRows
+    // Description   : Each named row is present under Reduction Type, as plain or bold text (the four Selenium variants
+    //                 StaffCheckReductionTypeHeadings 1-4 in one locator). The BISS, CRISS and CISYF amounts of each row are
+    //                 logged, as Selenium printed them. A missing row fails the step, listing every missing row.
+    // Parameters    : pRows (DataTable) - single column of row names; the text only has to be contained, e.g. Between
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 16-10-2026
+    // ---------------------------------------------------------------------------------------------------------------------------------
+    @Then("the payment summary should show the following reduction type rows")
+    public void thePaymentSummaryShouldShowTheFollowingReductionTypeRows(DataTable pRows)
+    {
+        log.info("[STEP] the payment summary should show the following reduction type rows");
+        iAction("VERIFYELEMENT", "XPATH", ObjReader.getLocator("iPaymentReductionTypeHeader"), null);
+
+        StringBuilder iMissing = new StringBuilder();
+        for (String iRowName : pRows.asList())
+        {
+            String iXpath = ObjReader.getLocator("iPaymentReductionTypeRow").replace("{HEADER}", iRowName.trim());
+            if (UiHelpers.byXpath(iXpath).count() == 0)
+            {
+                iMissing.append(iMissing.length() == 0 ? "" : ", ").append(iRowName.trim());
+                continue;
+            }
+            log.info("[PAYMENTS] " + iRowName.trim() + " : BISS " + iRowAmount(iRowName, "bissAmount")
+                    + " | CRISS " + iRowAmount(iRowName, "crissAmount") + " | CISYF " + iRowAmount(iRowName, "cisyfAmount"));
+        }
+        if (iMissing.length() > 0)
+        {
+            throw new AssertionError("Reduction Type row(s) not found: " + iMissing + " (herd " + iCurrentHerd + ").");
+        }
+    }
+
+    // Text of one amount cell of a Reduction Type row, for the log only
+    private static String iRowAmount(String pRowName, String pColumn)
+    {
+        return iShortText(ObjReader.getLocator("iPaymentRowAmount").replace("{HEADER}", pRowName.trim()).replace("{COLUMN}", pColumn), 40);
+    }
+
+    // Number in an amount cell: commas, euro sign and spaces removed; blank or a dash counts as 0
+    private static double iAmount(String pXpath)
+    {
+        String iRaw   = UiHelpers.byXpath(pXpath).innerText();
+        String iClean = iRaw == null ? "" : iRaw.replaceAll("[^0-9.\\-]", "");
+        if (iClean.isEmpty() || "-".equals(iClean))
+        {
+            return 0;
+        }
+        try
+        {
+            return Double.parseDouble(iClean);
+        }
+        catch (NumberFormatException e)
+        {
+            throw new AssertionError("Amount '" + iRaw + "' is not a number (" + pXpath + ").");
+        }
+    }
+
     // =================================================================================================================================
     // SECTION 18 : Small helpers
     // =================================================================================================================================
@@ -3276,6 +3517,21 @@ public class StaffSteps
     private static void pause(long pMilliseconds)
     {
         CommonFunctions.getPage().waitForTimeout(pMilliseconds);
+    }
+
+    // Clicks the button with this label in an open dialog, or on the page when no dialog shows it (Selenium
+    // StaffClickOnButton matched any button with the text)
+    private void iClickButton(String pLabel)
+    {
+        String iDialogButton = ObjReader.getLocator("iDialogButton").replace("{LABEL}", pLabel);
+        if (UiHelpers.isVisible(UiHelpers.byXpath(iDialogButton), PROBE_SECONDS))
+        {
+            iAction("CLICK", "XPATH", iDialogButton, null);
+        }
+        else
+        {
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iButtonByText").replace("{LABEL}", pLabel), null);
+        }
     }
 
     // Visible text of the first match, on one line and cut to pMax characters (for the log only, never fails)
