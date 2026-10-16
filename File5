@@ -1,58 +1,74 @@
-Feature: TC_13_STAFF - Active Farmer System Notes E2E Regression Pack
+Feature: TC_26_STAFF - OpenShift Map Printing E2E Regression Pack
 
   # --------------------------------------------------------------------------------------------------------------------
-  # Legacy  : "Regression Pack for Active Farmer History Notes" (BISSAGL-7777, AT-TC-01 to 03,
-  #           tmslinks BISSAGL-14850 / 14842 / 14840)
+  # Legacy  : "Regression Pack for Openshift Map Printing Regression Cases" (BISSAGL-12728, AT-TC-01 to 05,
+  #           tmslinks BISSAGL-18579 / 18583 / 18586 / 18589 / 18591)
   # Rewritten 16-10-2026 in the StaffSteps vocabulary (the wording the MAPS features run with). One end-to-end
-  # scenario; # SECTION markers show where each legacy scenario starts.
+  # scenario on the OpenShift deployment; # SECTION markers show where each legacy scenario starts.
   #
   # Purpose:
-  #   Every Active Farmer admin check action writes a system note to the History tab, word for word:
-  #     - starting the check applies the "Admin Check in Progress" stop
-  #     - approving the check lifts the stop, with the admin note as the comment
-  #     - rejecting, appealing with evidence and then approving lifts the stop with the appeal note
-  #   Each note must be dated today, so a note left by an earlier run on the same herd does not count.
+  #   Map Printing on OpenShift: a map from a herd search and one from a parcel search are generated, reach their final
+  #   status and can be downloaded; an unknown herd, an invalid parcel and empty searches are handled.
   #
   # Legacy coverage notes carried forward:
-  #   - AT-TC-02 approved the check that AT-TC-01 had started on the same herd (row 2); Section 2 returns to that herd
-  #     explicitly instead of relying on scenario order.
-  #   - The appeal evidence is Test_Data/Cover_Letter.pdf (legacy uploaded a file from a local Windows folder).
+  #   - AT-TC-03 (unknown herd ABDAAPT) had no check in legacy; the search runs the same way.
+  #   - The validation error step switches the screen back to herd search, as the MAPS packs do.
   #
   # Test data:
-  #   Herds from the database, as in legacy ("Herds with Admin Check Not Started", scheme year 2024) - each run
-  #   needs herds whose admin check has not started, which a fixed herd cannot give twice.
-  #   Login agr4442 (BISS Co-ordination 1). Password: TD:Password from the TestData row of this test case.
+  #   Herds and LPIS parcels from the database ("Get Submitted Herds", "Get LPIS Parcels"), as in legacy; ABDAAPT is
+  #   the legacy literal for an invalid herd and parcel.
+  #   Login agr11612 (map printing user, as in legacy). Password: TD:Password from the TestData row of this test case.
   #
-  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (Active Farmer, History)
+  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (Map Printing)
   # Author: Aniket Pathare | aniket.pathare@government.ie
   # --------------------------------------------------------------------------------------------------------------------
 
   Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+    Given the staff user is logged in to the OpenShift BISS portal as "agr11612"
+    And the staff user is on the Map Printing screen
 
-  @regression @staff @active-farmer @admin-check @appeals @e2e
-  Scenario: AT-STAFF-ADMIN-NOTES-E2E-01 - Staff runs the Active Farmer admin check and appeal and checks each system note
+  @regression @staff @openshift @maps @e2e
+  Scenario: AT-STAFF-OS-MAPS-E2E-01 - Staff generates and downloads maps on OpenShift and checks the search validations
 
-    # SECTION 1 : Start the admin check - the stop is applied - AT-TC-01 (BISSAGL-14850)
-    When the staff user opens the Active Farmer screen for the next admin-check herd for scheme year "2024"
-    And the staff user starts the active farmer admin check
-    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Applied with comment: Admin check started manually" today
+    # SECTION 1 : Map from a herd search, details, final status, download - AT-TC-01 (BISSAGL-18579)
+    When the staff user searches Map Printing for the next submitted herd for scheme year "2023"
+    Then the staff user should see the herd identity details
+      | name    |
+      | address |
+    When the staff user requests a map with the following settings
+      | parcels | single              |
+      | mapType | Full Color Ortho A4 |
+      | legend  | yes                 |
+    Then the generated map should be recorded with the following details
+      | status     |
+      | id         |
+      | herdNumber |
+      | date       |
+    And the generated map should reach its final status
+    And the staff user should be able to download the generated map
 
-    # SECTION 2 : Approve the same check - the stop is lifted - AT-TC-02 (BISSAGL-14842)
-    When the staff user returns to the Active Farmer screen for the same admin-check herd for scheme year "2024"
-    And the staff user completes the admin check with the following result
-      | result | APPROVED  |
-      | notes  | Test Note |
-    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Test Note" today
+    # SECTION 2 : Map from a parcel search, final status, download - AT-TC-02 (BISSAGL-18583)
+    When the staff user is searching by parcel
+    And the staff user searches Map Printing for the next LPIS parcel for scheme year "2023"
+    And the staff user requests a map with the following settings
+      | parcels | single               |
+      | mapType | Inspection Discovery |
+      | legend  | yes                  |
+    Then the generated map should reach its final status
+    And the staff user should be able to download the generated map
 
-    # SECTION 3 : Reject, appeal with evidence, approve - the stop is lifted - AT-TC-03 (BISSAGL-14840)
-    When the staff user opens the Active Farmer screen for the next admin-check herd for scheme year "2024"
-    And the staff user starts the active farmer admin check
-    And the staff user completes the admin check with the following result
-      | result | REJECTED  |
-      | notes  | Test Note |
-    And the staff user raises an appeal with supporting evidence
-    And the staff user completes the admin check with the following result
-      | result | APPROVED        |
-      | notes  | Appeal Approved |
-    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Appeal Approved" today
+    # SECTION 3 : Unknown herd - AT-TC-03 (BISSAGL-18586)
+    When the staff user is searching by herd
+    And the staff user searches Map Printing for herd "ABDAAPT" for scheme year "2023"
+
+    # SECTION 4 : Invalid parcel - AT-TC-04 (BISSAGL-18589)
+    When the staff user is searching by parcel
+    And the staff user searches Map Printing for parcel "ABDAAPT" for scheme year "2023"
+    Then the staff user should see the validation error "Parcel number is invalid"
+
+    # SECTION 5 : Empty herd and parcel searches - AT-TC-05 (BISSAGL-18591)
+    When the staff user searches Map Printing with no herd number
+    Then the staff user should see the validation error "Herd number required."
+    When the staff user is searching by parcel
+    And the staff user searches Map Printing with no parcel number
+    Then the staff user should see the validation error "Parcel number required."
