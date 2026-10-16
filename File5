@@ -1,35 +1,58 @@
-Feature: TC_18_STAFF - Active Farmer and Admin Process History Notes E2E Regression Pack
+Feature: TC_13_STAFF - Active Farmer System Notes E2E Regression Pack
 
   # --------------------------------------------------------------------------------------------------------------------
-  # Legacy  : "Regression Pack for Active Farmer and Admin Process History Notes - In Progress to be cleared"
-  #           (BISSAGL-7779, AT-TC-01, tmslink BISSAGL-14837)
-  # Rewritten 15-10-2026 in the StaffSteps vocabulary (the wording the MAPS features run with).
+  # Legacy  : "Regression Pack for Active Farmer History Notes" (BISSAGL-7777, AT-TC-01 to 03,
+  #           tmslinks BISSAGL-14850 / 14842 / 14840)
+  # Rewritten 16-10-2026 in the StaffSteps vocabulary (the wording the MAPS features run with). One end-to-end
+  # scenario; # SECTION markers show where each legacy scenario starts.
   #
   # Purpose:
-  #   The Active Farmer screen opens from the side menu of a submitted application.
+  #   Every Active Farmer admin check action writes a system note to the History tab, word for word:
+  #     - starting the check applies the "Admin Check in Progress" stop
+  #     - approving the check lifts the stop, with the admin note as the comment
+  #     - rejecting, appealing with evidence and then approving lifts the stop with the appeal note
+  #   Each note must be dated today, so a note left by an earlier run on the same herd does not count.
   #
   # Legacy coverage notes carried forward:
-  #   - Legacy stopped after opening the screen; the rest (start admin check, send, result REJECTED with a note,
-  #     save, start appeal, upload and approve) was commented out while the workflow was not enabled. Those actions
-  #     already exist as steps ("starts the active farmer admin check", "completes the admin check with the following
-  #     result", "raises an appeal with supporting evidence") and run in the Active Farmer packs (TC_13, TC_16); add
-  #     them here once this herd's workflow is enabled.
+  #   - AT-TC-02 approved the check that AT-TC-01 had started on the same herd (row 2); Section 2 returns to that herd
+  #     explicitly instead of relying on scenario order.
+  #   - The appeal evidence is Test_Data/Cover_Letter.pdf (legacy uploaded a file from a local Windows folder).
   #
-  # Test data (kept as literals, as in legacy):
-  #   Herd A1220864 / 2024. Nothing is changed on it.
+  # Test data:
+  #   Herds from the database, as in legacy ("Herds with Admin Check Not Started", scheme year 2024) - each run
+  #   needs herds whose admin check has not started, which a fixed herd cannot give twice.
   #   Login agr4442 (BISS Co-ordination 1). Password: TD:Password from the TestData row of this test case.
   #
-  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (Active Farmer)
+  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (Active Farmer, History)
   # Author: Aniket Pathare | aniket.pathare@government.ie
   # --------------------------------------------------------------------------------------------------------------------
 
   Background:
     Given the staff user is logged in to the BISS internal portal as "agr4442"
 
-  @regression @staff @active-farmer @e2e
-  Scenario: AT-STAFF-ACTIVE-FARMER-NAV-E2E-01 - Staff opens the Active Farmer screen of a submitted application
+  @regression @staff @active-farmer @admin-check @appeals @e2e
+  Scenario: AT-STAFF-ADMIN-NOTES-E2E-01 - Staff runs the Active Farmer admin check and appeal and checks each system note
 
-    # SECTION 1 : Open the Active Farmer screen - AT-TC-01 (BISSAGL-14837)
-    When the staff user opens the application for herd "A1220864" for scheme year "2024"
-    And the staff user opens the "Active Farmer" screen
-    Then the Active Farmer screen should be displayed
+    # SECTION 1 : Start the admin check - the stop is applied - AT-TC-01 (BISSAGL-14850)
+    When the staff user opens the Active Farmer screen for the next admin-check herd for scheme year "2024"
+    And the staff user starts the active farmer admin check
+    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Applied with comment: Admin check started manually" today
+
+    # SECTION 2 : Approve the same check - the stop is lifted - AT-TC-02 (BISSAGL-14842)
+    When the staff user returns to the Active Farmer screen for the same admin-check herd for scheme year "2024"
+    And the staff user completes the admin check with the following result
+      | result | APPROVED  |
+      | notes  | Test Note |
+    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Test Note" today
+
+    # SECTION 3 : Reject, appeal with evidence, approve - the stop is lifted - AT-TC-03 (BISSAGL-14840)
+    When the staff user opens the Active Farmer screen for the next admin-check herd for scheme year "2024"
+    And the staff user starts the active farmer admin check
+    And the staff user completes the admin check with the following result
+      | result | REJECTED  |
+      | notes  | Test Note |
+    And the staff user raises an appeal with supporting evidence
+    And the staff user completes the admin check with the following result
+      | result | APPROVED        |
+      | notes  | Appeal Approved |
+    Then the application history should record "Active Farmer Admin Check in Progress Stop has been Lifted with comment: Appeal Approved" today
