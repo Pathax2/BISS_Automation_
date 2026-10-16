@@ -1,163 +1,65 @@
-// ===================================================================================================================================
-// File          : pipeline/Jenkinsfile
-// Project       : DAFM AUTOMATION_Playwright (GitLab biss/biss-automation/dafm-automation_playwright)
-// Description   : Runs the BISS / ENTS Playwright BDD framework on the DAFM OpenShift Jenkins (multibranch pipeline).
-//                 Built from the DAFM Playwright template (podTemplate on the 'openshift' cloud, Playwright Java image,
-//                 Artifactory settings in pipeline/settings.xml, Maven proxy arguments). Changes versus the template:
-//                   - parameters: test case IDs, application environment, timeout
-//                   - timeout in minutes is a parameter (the template's timeout(1) stops after 1 minute)
-//                   - db.properties and TestData.xlsx come from the OpenShift secret 'biss-playwright-credentials'
-//                     (mounted read-only into the pod), never from Git
-//                   - run-tests.sh returns the real Maven exit code; failed tests mark the build UNSTABLE, a broken run FAILURE
-//                   - JUnit XML published; HTML report, Word evidence and logs archived (Playwright traces are NOT archived -
-//                     they hold typed passwords and cookies)
-//                   - GITLAB_OBJECT_KIND read safely (env. prefix) so a manual "Build with Parameters" does not fail
-//
-// Prerequisites (one-off):
-//   1. The Jenkins GitLab organization folder scans this project (done: biss group, Jenkins reads pipeline/Jenkinsfile).
-//   2. OpenShift secret 'biss-playwright-credentials' in namespace biss-cicd (created by the OpenShift platform team),
-//      two keys named exactly like the files:
-//        db.properties   -> the db.properties file
-//        TestData.xlsx   -> the TestData.xlsx file
-//      oc create secret generic biss-playwright-credentials -n biss-cicd
-//         --from-file=db.properties=<path to db.properties> --from-file=TestData.xlsx=<path to TestData.xlsx>
-//   3. The image tag below exists in the internal registry. The pom uses Playwright 1.61.0; the pipeline passes
-//      -Dplaywright.version to match the image so the bundled browsers are used (no download).
-//
-// Author        : Aniket Pathare | aniket.pathare@government.ie
-// Date Created  : 09-10-2026
-// Updated       : 15-10-2026 - moved to pipeline/Jenkinsfile; secrets from Jenkins "Secret file" credentials instead of the
-//                              OpenShift secret volume (a missing secret volume kept the agent pod from starting)
-// Updated       : 16-10-2026 - back to the OpenShift secret, named biss-playwright-credentials by the platform team (Jenkins
-//                              credentials are not changed per team); the volume is optional, so a missing secret no
-//                              longer keeps the pod offline - run-tests.sh stops with a clear message instead
-// ===================================================================================================================================
+#!/usr/bin/env bash
+# ===================================================================================================================================
+# File          : run-tests.sh
+# Description   : Called by the Jenkinsfile inside the Playwright Java container.
+#                   1. copies db.properties and TestData.xlsx from BISS_SECRETS_DIR (the OpenShift secret
+#                      'biss-playwright-credentials', mounted read-only by the Jenkinsfile)
+#                   2. runs the framework once with the docker profile (headless bundled Chromium, no Excel write-back)
+#                 Exit codes: 0 = all passed, 1 = Maven/test failure, 2 = setup problem (missing secret file)
+#
+# Inputs (environment variables set by the Jenkinsfile):
+#   MAVEN_ARGS         Artifactory settings, proxy and local repository
+#   PLAYWRIGHT_VERSION must equal the image tag, so the browsers in the image are used
+#   TESTCASE_IDS       e.g. TC_00_DATA,TC_01_Login (blank = Execution=Y rows of ExecutionControl.xlsx)
+#   APP_ENVIRONMENT    blank = Environment column of ExecutionControl.xlsx
+#   BISS_SECRETS_DIR   folder of the mounted secret
+#
+# Author        : Aniket Pathare | aniket.pathare@government.ie
+# Date Created  : 09-10-2026
+# Updated       : 16-10-2026 - secret files come from the OpenShift secret 'biss-playwright-credentials', messages updated
+# ===================================================================================================================================
 
-//Project Specific
-// no spaces allowed in app name
-def APP = "BISS-Playwright"
-def BUILD_REF = "${APP}-${BUILD_ID}"
+set -u
 
-//Environment Specific
-def JENKINS_AGENT_IMAGE = "registry.redhat.io/ocp-tools-4/jenkins-agent-base-rhel9:v4.18.0"
-def JENKINS_HOME = "/home/jenkins"
+SECRETS_DIR="${BISS_SECRETS_DIR:-/home/jenkins/biss-secrets}"
+RESOURCES="src/test/resources"
 
-// Keep PLAYWRIGHT_VERSION equal to the image tag (java-v<version>-noble)
-def PLAYWRIGHT_VERSION = "1.60.0"
-def PLAYWRIGHT_IMAGE = "registry.apps.services1.agriculture.gov.ie/openshift/playwright:java-v${PLAYWRIGHT_VERSION}-noble"
-def MAVEN_ARGS = "-Dmaven.repo.local=${JENKINS_HOME}/.m2/repository -DproxySet=true -DproxyHost=vsdbahlprxy1 -DproxyPort=8080 -s ./pipeline/settings.xml"
+echo "=== BISS Playwright run ==="
+echo "Test cases : ${TESTCASE_IDS:-<Execution=Y rows>}"
+echo "Environment: ${APP_ENVIRONMENT:-<ExecutionControl.xlsx column>}"
+echo "Playwright : ${PLAYWRIGHT_VERSION:-<pom default>}"
+java -version 2>&1 | head -1
+mvn -v 2>&1 | head -1
 
-// db.properties and TestData.xlsx are mounted here from the OpenShift secret; run-tests.sh copies them into the framework
-def SECRETS_SECRET_NAME = "biss-playwright-credentials"
-def SECRETS_DIR = "${JENKINS_HOME}/biss-secrets"
+# --- 1. Secret files ---------------------------------------------------------------------------------------------------------------
+if [ ! -f "${SECRETS_DIR}/db.properties" ]; then
+    echo "ERROR: ${SECRETS_DIR}/db.properties not found - is the OpenShift secret 'biss-playwright-credentials' created with the key db.properties?"
+    exit 2
+fi
+if [ ! -f "${SECRETS_DIR}/TestData.xlsx" ]; then
+    echo "ERROR: ${SECRETS_DIR}/TestData.xlsx not found - add the key TestData.xlsx to the OpenShift secret 'biss-playwright-credentials'."
+    exit 2
+fi
+mkdir -p "${RESOURCES}/Test_Data"
+cp "${SECRETS_DIR}/db.properties" "${RESOURCES}/db.properties"
+cp "${SECRETS_DIR}/TestData.xlsx" "${RESOURCES}/Test_Data/TestData.xlsx"
+echo "Secret files copied (db.properties, TestData.xlsx)."
 
-properties([
-    buildDiscarder(logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '5', daysToKeepStr: '', numToKeepStr: '10')),
-    parameters([
-        string(name: 'TESTCASE_IDS', defaultValue: 'TC_00_DATA,TC_01_Login',
-               description: 'Comma-separated TestCase_IDs from ExecutionControl.xlsx. Keep TC_00_DATA first so the Test Data Vault is filled.'),
-        string(name: 'APP_ENVIRONMENT', defaultValue: '',
-               description: 'Blank = the Environment column of ExecutionControl.xlsx. Otherwise the value passed as -Denvironment (e.g. QA).'),
-        string(name: 'TIMEOUT_MINUTES', defaultValue: '180',
-               description: 'Stop the whole build after this many minutes.')
-    ]),
-    disableConcurrentBuilds(),
-])
+# --- 2. Run -----------------------------------------------------------------------------------------------------------------------
+ARGS=( -B -ntp -Pdocker )
+[ -n "${PLAYWRIGHT_VERSION:-}" ] && ARGS+=( "-Dplaywright.version=${PLAYWRIGHT_VERSION}" )
+[ -n "${TESTCASE_IDS:-}" ]       && ARGS+=( "-Dtestcase.ids=${TESTCASE_IDS}" )
+[ -n "${APP_ENVIRONMENT:-}" ]    && ARGS+=( "-Denvironment=${APP_ENVIRONMENT}" )
+ARGS+=( "-Dbamboo.buildNumber=${BUILD_NUMBER:-LOCAL}" "-Dbamboo.buildPlanKey=${JOB_NAME:-BISS-PW}" )
 
-podTemplate(
-    cloud: 'openshift',
-    label: BUILD_REF,
-    serviceAccount: 'jenkins',
-    containers: [
+# MAVEN_ARGS is split on purpose (several -D options and -s <file>)
+# shellcheck disable=SC2086
+mvn ${MAVEN_ARGS:-} "${ARGS[@]}" test
+RC=$?
 
-        containerTemplate(
-                name: "playwright-java", workingDir: JENKINS_HOME,
-                envVars: [
-                    envVar(key: 'https_proxy', value: "http://vsdbahlprxy1:8080"),
-                    // Internal hosts (application, Keycloak, Oracle, Artifactory) must not go through the proxy
-                    envVar(key: 'no_proxy', value: "localhost,127.0.0.1,.agriculture.gov.ie,.svc,.cluster.local"),
-                    // Use the browsers bundled in the image; never download at run time
-                    envVar(key: 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD', value: "1"),
-                    envVar(key: 'BISS_SECRETS_DIR', value: SECRETS_DIR),
-                    secretEnvVar(key: 'username', secretName: 'mvn-repo-secret', secretKey: 'username'),
-                    secretEnvVar(key: 'password', secretName: 'mvn-repo-secret', secretKey: 'password')
-                ],
-                image: PLAYWRIGHT_IMAGE, ttyEnabled: true, command: 'cat'),
-        containerTemplate(
-                name: "jnlp", workingDir: JENKINS_HOME,
-                image: JENKINS_AGENT_IMAGE)
-    ],
-    volumes: [
-        // optional: the pod still starts when the secret is missing; run-tests.sh then stops with exit code 2
-        secretVolume(secretName: SECRETS_SECRET_NAME, mountPath: SECRETS_DIR, optional: true)
-    ]) {
+# Remove the copied secret files from the workspace
+rm -f "${RESOURCES}/db.properties" "${RESOURCES}/Test_Data/TestData.xlsx"
 
-    def timeoutMinutes = (params.TIMEOUT_MINUTES ?: '180').toString().trim().isInteger() ? params.TIMEOUT_MINUTES.toString().trim().toInteger() : 180
-
-    timeout(time: timeoutMinutes, unit: 'MINUTES') {
-        node(BUILD_REF) {
-
-            // Same rule as the template: do not run the tests on every push / merge request event, only on demand
-            def objectKind = env.GITLAB_OBJECT_KIND ?: ""
-            if (objectKind && ["push", "tag_push", "merge_request"].contains(objectKind)) {
-                echo "Ran due to a GitLab ${objectKind} event - tests are started manually with Build with Parameters. Aborting."
-                currentBuild.result = 'SUCCESS'
-                return
-            }
-
-            try {
-
-                container("jnlp") {
-                    stage('Clone source') {
-                        checkout scm
-                    }
-                }
-
-                container("playwright-java") {
-                    stage('Run tests') {
-                        env.MAVEN_ARGS = MAVEN_ARGS
-                        env.PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
-                        env.TESTCASE_IDS = (params.TESTCASE_IDS ?: '').trim()
-                        env.APP_ENVIRONMENT = (params.APP_ENVIRONMENT ?: '').trim()
-
-                        echo "Test cases : ${env.TESTCASE_IDS}"
-                        echo "Environment: ${env.APP_ENVIRONMENT ?: '(ExecutionControl.xlsx column)'}"
-
-                        def exitCode = sh(script: 'bash run-tests.sh', returnStatus: true)
-                        echo "Exit code from tests is: ${exitCode}"
-
-                        if (exitCode == 2) {
-                            currentBuild.result = 'FAILURE'
-                            error("Setup problem (see the run-tests.sh messages above) - the tests did not start.")
-                        } else if (exitCode != 0) {
-                            // Tests ran and some failed: UNSTABLE when a results file exists, FAILURE otherwise
-                            currentBuild.result = fileExists('target/surefire-reports') ? 'UNSTABLE' : 'FAILURE'
-                        }
-                    }
-                }
-            }
-            catch (e) {
-                echo "Pipeline Failed: ${e}"
-                if (!currentBuild.result || currentBuild.result == 'SUCCESS') {
-                    currentBuild.result = 'FAILURE'
-                }
-            }
-            finally {
-                stage('Publish results') {
-                    junit(testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true)
-
-                    // HTML/PDF reports, Word evidence, failure screenshots (the dashboard links to them) and logs.
-                    // Test_Report/traces is left out on purpose (passwords, cookies).
-                    archiveArtifacts(artifacts: 'Test_Report/html/**, Test_Report/docs/**, Test_Report/screenshots/**, target/logs/**',
-                                     allowEmptyArchive: true, fingerprint: false)
-                }
-
-                def currentResult = currentBuild.result ?: 'SUCCESS'
-                def previousResult = currentBuild.previousBuild?.result
-                if (previousResult != null && previousResult != currentResult) {
-                    echo "Result changed: ${previousResult} -> ${currentResult}"
-                }
-            }
-        }
-    }
-}
+echo "Maven exit code: ${RC}"
+[ "${RC}" -eq 0 ] && exit 0
+exit 1
