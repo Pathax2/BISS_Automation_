@@ -1,34 +1,172 @@
-Feature: TC_23_STAFF - AMS Internal Screen Filter and Search E2E Regression Pack
+Feature: TC_12_STAFF - Scheme Selection BISS CRISS Protein Eco MSSM RCSM Regression Pack
 
   # --------------------------------------------------------------------------------------------------------------------
-  # Legacy  : "Regression Pack for AMS Internal Screen - Filter and Search Option" (BISSAGL-7482, AT-TC-01,
-  #           tmslink BISSAGL-14725)
-  # Rewritten 16-10-2026 in the StaffSteps vocabulary (the wording the MAPS features run with).
+  # Legacy  : "Regression Pack for Scheme Selection - Add BISS, CRISS" (BISSAGL-5919, AT-TC-01 to 04,
+  #           tmslinks BISSAGL-14880 / 14879 / 14877 / 14876)
+  #           "Regression Pack for Scheme Selection - Add MSSM, RCSM" (BISSAGL-7582, AT-TC-01 to 05,
+  #           tmslinks BISSAGL-14893 / 14889 / 14885 / 14891 / 14890)
+  # Rewritten 15-10-2026 in the StaffSteps vocabulary. Modernised 21-10-2026: the repeated journeys are merged, so each
+  # check runs once. Three scenarios, so a failing card check does not stop the submit check and the report shows which
+  # part broke.
   #
-  # Purpose:
-  #   The AMS screen (Inspections > AMS) of a partnership herd opens with its results table.
+  # Scenario 01 - Cards and abandoned selections (nothing is submitted)          BISSAGL-14880, 14877, 14893
+  #   - BISS and CRISS cards: position, acronym, full name, View Details dialog, toggle
+  #   - CRISS and Protein Aid Scheme selected, Next, Back, deselected: the application is as it was
+  #   - MSSM and RCSM cards (2024): acronym and full name; selected and deselected: as they were
+  # Scenario 02 - One amendment changes CRISS, Protein Aid Scheme and Eco        BISSAGL-14879, 14891, 14890
+  #   - submitted, recorded in the history today, all three flipped; reset in one submit, all three back
+  # Scenario 03 - Other herds report a selection state                           BISSAGL-14889, 14885, 14876
+  #   - A1211644 and P1461522: MSSM and RCSM report a state (legacy only opened them - "Need MSSM and RCSM disabled herd")
+  #   - inactive herd N1041714: all ten schemes report a state
   #
-  # Legacy coverage notes carried forward:
-  #   - Legacy stopped once the AMS tab was open; its note says the filter dropdowns were still to be automated
-  #     ("Change the multi-select Dropdown to suit the dropdowns so value can be passed from Feature"), and AT-TC-02 was
-  #     commented out. The filter and search options are therefore not automated yet - send the AMS filter panel HTML
-  #     and they can be added here.
-  #   - The AMS columns, partner herd tabs, pagination and status icons are covered by TC_15_STAFF.
+  # What was merged (legacy -> here):
+  #   - Select-then-deselect was done three times (CRISS, Protein with Next / Back, MSSM / RCSM). It is now one CRISS +
+  #     Protein Aid Scheme pass through Next / Back, and one MSSM / RCSM pass on 2024, where those cards are shown.
+  #     The selection is now checked as flipped after the click, before it is undone (legacy never checked it).
+  #   - Change, submit, check and reset was done twice (CRISS + Protein, then Eco; BISSAGL-7582 AT-TC-04 and 05 were the
+  #     same clicks). It is now one amendment with all three schemes and one reset: 2 submits instead of 4.
+  #   - "the selection state should be readable" on J1400098 is covered by "notes the selection state" (it fails when a
+  #     card shows no state), so it is not repeated before a change.
+  #   - The amendment of J1400098 2026 is opened 3 times instead of 7.
+  #   - The MSSM / RCSM card text uses the same card table as BISS / CRISS (blank position = found by acronym).
+  #
+  # Protein Aid Scheme: when Submit Changes reports that the Protein Scheme has no eligible crop, the submit step clicks
+  # OK, gives the first tillage parcel the crop staff.protein.crop (Beans - Spring) and submits again; the reset submit
+  # puts that parcel's old Parcel Use back first (StaffSteps 21-10-2026).
   #
   # Test data (kept as literals, as in legacy):
-  #   Partnership herd IFP10100 / 2024.
+  #   J1400098 / 2026 (amended and reset; left as it was found) and J1400098 / 2024 (MSSM / RCSM cards),
+  #   A1211644 / 2024, P1461522 / 2024, N1041714 / 2024 (inactive).
   #   Login agr4442 (BISS Co-ordination 1). Password: TD:Password from the TestData row of this test case.
   #
-  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (AMS)
+  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (Scheme selection and amendments, History)
   # Author: Aniket Pathare | aniket.pathare@government.ie
   # --------------------------------------------------------------------------------------------------------------------
 
   Background:
     Given the staff user is logged in to the BISS internal portal as "agr4442"
 
-  @regression @staff @ams @inspections @e2e
-  Scenario: AT-STAFF-AMS-FILTER-E2E-01 - Staff opens the AMS screen of a partnership herd
+  @regression @staff @scheme-selection
+  Scenario: AT-STAFF-SCHEME-01 - Scheme cards are presented correctly and an abandoned selection changes nothing
 
-    # SECTION 1 : Open the AMS screen - AT-TC-01 (BISSAGL-14725)
-    When the staff user opens the AMS screen for herd "IFP10100" for scheme year "2024"
-    Then the AMS results should be displayed
+    # BISS and CRISS cards - BISSAGL-5919 AT-TC-01 (BISSAGL-14880)
+    When the staff user amends the application for herd "J1400098" for scheme year "2026"
+    Then the scheme cards should be presented as follows
+      | position | acronym | title                                                          |
+      | 1        | BISS    | Basic Income Support for Sustainability                        |
+      | 2        | CRISS   | Complementary Redistributive Income Support for Sustainability |
+    And the following scheme details dialogs should be readable
+      | scheme | title                                                          |
+      | BISS   | Basic Income Support for Sustainability                        |
+      | CRISS  | Complementary Redistributive Income Support for Sustainability |
+    And the following schemes should offer a selection toggle
+      | BISS  |
+      | CRISS |
+
+    # Select, Next, Back, deselect - nothing changes - BISSAGL-5919 AT-TC-01 and AT-TC-03 (BISSAGL-14880, 14877)
+    When the staff user notes the selection state of the following schemes
+      | BISS               |
+      | CRISS              |
+      | Protein Aid Scheme |
+    And the staff user selects the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+    Then the following schemes should have the opposite selection
+      | CRISS              |
+      | Protein Aid Scheme |
+    When the staff user proceeds to the next step
+    And the staff user goes back and deselects the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+    Then the following schemes should have their noted selection
+      | BISS               |
+      | CRISS              |
+      | Protein Aid Scheme |
+
+    # MSSM and RCSM cards on 2024, selected and deselected - BISSAGL-7582 AT-TC-01 (BISSAGL-14893)
+    When the staff user amends the application for herd "J1400098" for scheme year "2024"
+    Then the scheme cards should be presented as follows
+      | position | acronym | title                       |
+      |          | MSSM    | Multi Species Sward Measure |
+      |          | RCSM    | Red Clover Silage Measure   |
+    When the staff user notes the selection state of the following schemes
+      | MSSM |
+      | RCSM |
+      | Eco  |
+    And the staff user selects the following schemes
+      | MSSM |
+      | RCSM |
+    Then the following schemes should have the opposite selection
+      | MSSM |
+      | RCSM |
+    When the staff user deselects the following schemes
+      | MSSM |
+      | RCSM |
+    Then the following schemes should have their noted selection
+      | MSSM |
+      | RCSM |
+      | Eco  |
+
+  @regression @staff @scheme-selection @e2e
+  Scenario: AT-STAFF-SCHEME-02 - One amendment of CRISS, Protein Aid Scheme and Eco is submitted, recorded and reset
+
+    # Change and submit - BISSAGL-5919 AT-TC-02 (BISSAGL-14879), BISSAGL-7582 AT-TC-04 / 05 (BISSAGL-14891, 14890)
+    When the staff user amends the application for herd "J1400098" for scheme year "2026"
+    And the staff user notes the selection state of the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+    And the staff user selects the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+    And the staff user submits the amendment and confirms
+    Then the application history should record "Amendment Submitted" today
+    When the staff user opens the "BISS Amendments" screen
+    Then the following schemes should have the opposite selection
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+
+    # Post-test reset - all three in one submit, then checked from a fresh search
+    When the staff user deselects the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+    And the staff user submits the amendment and confirms
+    And the staff user amends the application for herd "J1400098" for scheme year "2026"
+    Then the following schemes should have their noted selection
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+
+  @regression @staff @scheme-selection
+  Scenario: AT-STAFF-SCHEME-03 - Other herds report a selection state for their schemes
+
+    # A1211644 - BISSAGL-7582 AT-TC-02 (BISSAGL-14889)
+    When the staff user amends the application for herd "A1211644" for scheme year "2024"
+    Then the scheme selection screen should be displayed
+    And the selection state should be readable for the following schemes
+      | MSSM |
+      | RCSM |
+
+    # P1461522 - BISSAGL-7582 AT-TC-03 (BISSAGL-14885)
+    When the staff user amends the application for herd "P1461522" for scheme year "2024"
+    Then the scheme selection screen should be displayed
+    And the selection state should be readable for the following schemes
+      | MSSM |
+      | RCSM |
+
+    # Inactive herd, every scheme - BISSAGL-5919 AT-TC-04 (BISSAGL-14876)
+    When the staff user amends the application for herd "N1041714" for scheme year "2024"
+    Then the selection state should be readable for the following schemes
+      | BISS               |
+      | CRISS              |
+      | ANC                |
+      | Eco                |
+      | Organics           |
+      | SIM                |
+      | Protein Aid Scheme |
+      | CISYF              |
+      | MSSM               |
+      | RCSM               |
