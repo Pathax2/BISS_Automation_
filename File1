@@ -68,6 +68,11 @@
 // Updated       : 20-10-2026 - Land Details paging: before fixing a table (each partner herd tab, or the single table) the
 //                              Items per page box is set to its largest option (100), then every page is fixed in turn
 //                              (Next page until it is disabled). Error rows were only looked for on the first 10 rows.
+// Updated       : 22-10-2026 - Land Details paging fix: on this screen a disabled Next page button carries disabled="true"
+//                              (not aria-disabled), so the old key matched it on the last page, the step "opened" page 2
+//                              of a 10-row table and never reached the next partner herd tab. The key now excludes every
+//                              disabled form, and the step also stops when Next page does not change the page. Each tab
+//                              logs its error row count before fixing; after the last tab every tab is checked once more.
 // ===================================================================================================================================
 
 package stepdefinitions;
@@ -1984,6 +1989,27 @@ public class TC_03 {
             iTotalFixed += resolveAllLandDetailsPages(iWhere);
         }
 
+        // Check every tab once more: a save on one tab can raise an error on another. Tabs with errors are fixed again.
+        for (int iTab = 1; iTab <= iTabCount; iTab++)
+        {
+            String iTabXpath = ObjReader.getLocator("iPartnerHerdTabByIndex").replace("{INDEX}", String.valueOf(iTab));
+            String iHerd     = textOf(iTabXpath);
+            String iWhere    = "[LAND " + iHerd + " - check " + iTab + "/" + iTabCount + "]";
+
+            openPartnerHerdTab(iTabXpath, iHerd, iWhere);
+            showLargestLandDetailsPage(iWhere);
+            int iLeft = countOf(ObjReader.getLocator("iLandTableErrorRows"));
+            if (iLeft > 0)
+            {
+                log.warning(iWhere + " " + iLeft + " error row(s) found again - fixing them.");
+                iTotalFixed += resolveAllLandDetailsPages(iWhere);
+            }
+            else
+            {
+                log.info(iWhere + " No error rows.");
+            }
+        }
+
         log.info("[LAND] All " + iTabCount + " partner herd tab(s) resolved. Total rows fixed: " + iTotalFixed);
     }
 
@@ -2044,17 +2070,28 @@ public class TC_03 {
         for (int iPage = 1; iPage <= iMaxPages; iPage++)
         {
             String iWherePage = iPage == 1 ? pWhere : pWhere + "[page " + iPage + "]";
+            log.info(iWherePage + " Error rows on this page: " + countOf(ObjReader.getLocator("iLandTableErrorRows"))
+                    + " (" + landDetailsRange() + ").");
             iFixed += resolveLandDetailsErrorRows(iWherePage);
 
-            // Next page is aria-disabled on the last page; the key matches only an enabled button
+            // The key matches only an enabled Next page button (disabled="true", aria-disabled="true" and the
+            // mat-mdc-button-disabled class are all excluded) - on the last page there is none
             if (!isVisible(iNextPage, 1))
             {
                 log.info(pWhere + " Last page reached (" + landDetailsRange() + ").");
                 return iFixed;
             }
 
+            String iRangeBefore = landDetailsRange();
             iAction("CLICK", "XPATH", iNextPage, null);
             pause(1000);
+
+            // Safety net: if the page did not change, this was the last page after all
+            if (landDetailsRange().equals(iRangeBefore))
+            {
+                log.warning(pWhere + " Next page did not change the page (" + iRangeBefore + ") - treated as the last page.");
+                return iFixed;
+            }
             log.info(pWhere + " Next page opened (" + landDetailsRange() + ").");
         }
 
