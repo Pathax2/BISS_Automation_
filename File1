@@ -1,159 +1,30 @@
-Feature: TC_12_STAFF - Scheme Selection BISS CRISS Protein Eco MSSM RCSM E2E Regression Pack
+Subject: ENTS Playwright automation - October update
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Legacy  : "Regression Pack for Scheme Selection - Add BISS, CRISS" (BISSAGL-5919, AT-TC-01 to 04,
-  #           tmslinks BISSAGL-14880 / 14879 / 14877 / 14876)
-  #           "Regression Pack for Scheme Selection - Add MSSM, RCSM" (BISSAGL-7582, AT-TC-01 to 05,
-  #           tmslinks BISSAGL-14893 / 14889 / 14885 / 14891 / 14890)
-  # Rewritten 15-10-2026 in the StaffSteps vocabulary. Modernised 22-10-2026: one end-to-end scenario in which every
-  # check runs once; # SECTION markers show which legacy scenarios each part covers.
-  #
-  # Flow:
-  #   SECTION 1 : J1400098 / 2026 - BISS and CRISS cards: position, acronym, full name, View Details dialog, toggle
-  #   SECTION 2 : same screen - CRISS and Protein Aid Scheme selected, Next, Back, deselected: nothing changes
-  #   SECTION 3 : same screen - CRISS, Protein Aid Scheme and Eco changed in one amendment, submitted, recorded in the
-  #               history today, all three flipped; reset in one submit, all three back
-  #   SECTION 4 : J1400098 / 2024 - MSSM and RCSM cards (shown on 2024 only); selected and deselected: as they were
-  #   SECTION 5 : A1211644 and P1461522 - MSSM and RCSM report a state (legacy only opened them)
-  #   SECTION 6 : inactive herd N1041714 - all ten schemes report a state
-  #
-  # What was merged (legacy -> here):
-  #   - Select-then-deselect was done three times (CRISS, Protein with Next / Back, MSSM / RCSM). It is now one CRISS +
-  #     Protein Aid Scheme pass through Next / Back (Section 2) and one MSSM / RCSM pass on 2024 (Section 4).
-  #     The selection is now checked as flipped after the click, before it is undone (legacy never checked it).
-  #   - Change, submit, check and reset was done twice (CRISS + Protein, then Eco; BISSAGL-7582 AT-TC-04 and 05 were the
-  #     same clicks). It is now one amendment with all three schemes and one reset: 2 submits instead of 4.
-  #   - Section 3 starts on the screen Section 2 leaves (back at the noted state), so the amendment is not searched for
-  #     again; the states noted in Section 2 are the ones Section 3 checks against.
-  #   - "the selection state should be readable" on J1400098 is covered by "notes the selection state" (it fails when a
-  #     card shows no state), so it is not repeated before a change.
-  #   - One staff login, and the J1400098 / 2026 amendment is searched for twice instead of 7 times.
-  #   - The MSSM / RCSM card text uses the same card table as BISS / CRISS (blank position = found by acronym).
-  #
-  # Protein Aid Scheme: when Submit Changes reports that the Protein Scheme has no eligible crop, the submit step clicks
-  # OK, gives the first tillage parcel the crop staff.protein.crop (Beans - Spring) and submits again; the reset submit
-  # puts that parcel's old Parcel Use back first (StaffSteps 21-10-2026).
-  #
-  # Test data (kept as literals, as in legacy):
-  #   J1400098 / 2026 (amended and reset; left as it was found) and J1400098 / 2024 (MSSM / RCSM cards),
-  #   A1211644 / 2024, P1461522 / 2024, N1041714 / 2024 (inactive).
-  #   Login agr4442 (BISS Co-ordination 1). Password: TD:Password from the TestData row of this test case.
-  #
-  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (Scheme selection and amendments, History)
-  # Author: Aniket Pathare | aniket.pathare@government.ie
-  # --------------------------------------------------------------------------------------------------------------------
+Hi Gurpreet,
 
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+Here's a quick summary of what we got done on the Playwright migration in October, with the ENTS parts first.
 
-  @regression @staff @scheme-selection @e2e
-  Scenario: AT-STAFF-SCHEME-E2E-01 - Staff verifies the scheme cards, abandons a selection and submits and resets an amendment
+ENTS
+- The ENTS test cases (TC_01_ENTS to TC_25_ENTS) are running on the new Playwright framework, with test data pulled from Oracle into the Test Data Vault at the start of each run (TC_00_DATA).
+- TC_01_ENTS now copes with a transferor that has no entitlements to select: it marks that herd as not usable and picks a new transferor/transferee pair automatically (up to 3 times). Fixed-data runs stop with a clear message instead. TC_08_ENTS also reports this case clearly.
+- ENTS now has its own daily Jenkins run, Monday to Friday at about 07:00. The first scheduled run on 19 October completed all 26 test cases in about 70 minutes. It found some failures, which I'm working through now.
 
-    # SECTION 1 : BISS and CRISS cards, details dialogs and toggles - BISSAGL-5919 AT-TC-01 (BISSAGL-14880)
-    When the staff user amends the application for herd "J1400098" for scheme year "2026"
-    Then the scheme cards should be presented as follows
-      | position | acronym | title                                                          |
-      | 1        | BISS    | Basic Income Support for Sustainability                        |
-      | 2        | CRISS   | Complementary Redistributive Income Support for Sustainability |
-    And the following scheme details dialogs should be readable
-      | scheme | title                                                          |
-      | BISS   | Basic Income Support for Sustainability                        |
-      | CRISS  | Complementary Redistributive Income Support for Sustainability |
-    And the following schemes should offer a selection toggle
-      | BISS  |
-      | CRISS |
+Jenkins / CI (shared with BISS)
+- The framework now runs on the DAFM OpenShift Jenkins, with the DB and test data files held in an OpenShift secret set up by the platform team, so nothing sensitive sits in GitLab.
+- First fully green pipeline run on 16 October, after fixing a Chromium start-up issue in the OpenShift pod.
+- Build with Parameters now has a SUITE option (BISS, ENTS or a custom list of test cases), and BISS also runs daily at about 05:00.
+- Each build shows its pass/fail counts in the build history, and has a "Test Dashboard" link with the team report and a masked stakeholder report (the PDF version is under Build Artifacts). The dashboard currently looks plain because of Jenkins' security settings. I've asked the platform team about the setting that fixes it.
 
-    # SECTION 2 : Select, Next, Back, deselect - nothing changes - BISSAGL-5919 AT-TC-01 and AT-TC-03 (BISSAGL-14880, 14877)
-    When the staff user notes the selection state of the following schemes
-      | BISS               |
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
-    And the staff user selects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-    Then the following schemes should have the opposite selection
-      | CRISS              |
-      | Protein Aid Scheme |
-    When the staff user proceeds to the next step
-    And the staff user goes back and deselects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-    Then the following schemes should have their noted selection
-      | BISS               |
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
+BISS (for context)
+- Migrated the staff test cases in four batches, plus fixes for partnership herds in TC_03_PART (the partnership popup, partner herd tabs and paging in Land Details).
+- Reworked TC_12 so the same journeys aren't repeated, and added handling for the Protein Aid Scheme "no eligible crop" popup.
 
-    # SECTION 3 : CRISS, Protein Aid Scheme and Eco in one amendment, submitted, checked and reset
-    #             BISSAGL-5919 AT-TC-02 (BISSAGL-14879), BISSAGL-7582 AT-TC-04 / 05 (BISSAGL-14891, 14890)
-    When the staff user selects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
-    And the staff user submits the amendment and confirms
-    Then the application history should record "Amendment Submitted" today
-    When the staff user opens the "BISS Amendments" screen
-    Then the following schemes should have the opposite selection
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
-    # Post-test reset - all three in one submit, then checked from a fresh search
-    When the staff user deselects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
-    And the staff user submits the amendment and confirms
-    And the staff user amends the application for herd "J1400098" for scheme year "2026"
-    Then the following schemes should have their noted selection
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
+Next steps
+- Triage and fix the ENTS daily-run failures.
+- Get the Jenkins report styling sorted with the platform team.
+- Carry on migrating the remaining staff test cases.
 
-    # SECTION 4 : MSSM and RCSM cards on 2024, selected and deselected - BISSAGL-7582 AT-TC-01 (BISSAGL-14893)
-    When the staff user amends the application for herd "J1400098" for scheme year "2024"
-    Then the scheme cards should be presented as follows
-      | position | acronym | title                       |
-      |          | MSSM    | Multi Species Sward Measure |
-      |          | RCSM    | Red Clover Silage Measure   |
-    When the staff user notes the selection state of the following schemes
-      | MSSM |
-      | RCSM |
-    And the staff user selects the following schemes
-      | MSSM |
-      | RCSM |
-    Then the following schemes should have the opposite selection
-      | MSSM |
-      | RCSM |
-    When the staff user deselects the following schemes
-      | MSSM |
-      | RCSM |
-    Then the following schemes should have their noted selection
-      | MSSM |
-      | RCSM |
+Happy to go through any of this, or show you the Jenkins jobs, if that's useful.
 
-    # SECTION 5 : A1211644 and P1461522 report a state for MSSM and RCSM - BISSAGL-7582 AT-TC-02 / 03 (BISSAGL-14889, 14885)
-    When the staff user amends the application for herd "A1211644" for scheme year "2024"
-    Then the scheme selection screen should be displayed
-    And the selection state should be readable for the following schemes
-      | MSSM |
-      | RCSM |
-    When the staff user amends the application for herd "P1461522" for scheme year "2024"
-    Then the scheme selection screen should be displayed
-    And the selection state should be readable for the following schemes
-      | MSSM |
-      | RCSM |
-
-    # SECTION 6 : Inactive herd, every scheme reports a state - BISSAGL-5919 AT-TC-04 (BISSAGL-14876)
-    When the staff user amends the application for herd "N1041714" for scheme year "2024"
-    Then the selection state should be readable for the following schemes
-      | BISS               |
-      | CRISS              |
-      | ANC                |
-      | Eco                |
-      | Organics           |
-      | SIM                |
-      | Protein Aid Scheme |
-      | CISYF              |
-      | MSSM               |
-      | RCSM               |
+Thanks,
+Aniket
