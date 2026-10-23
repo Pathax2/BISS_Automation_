@@ -1,18 +1,221 @@
-SELECT app_herd_no FROM (
-  SELECT ta.app_herd_no
-  FROM   tdbs_application ta
-  WHERE  ta.app_year = 2026
-  AND    ta.app_mde_code = 4
-  AND    ta.app_dct_code != 7
-  AND    REGEXP_LIKE(ta.app_herd_no, '^[A-Z]')
-  AND    NOT EXISTS (SELECT 1 FROM tdbs_admin_check tac WHERE tac.adc_app_id = ta.app_id)
-  AND    NOT EXISTS (SELECT 1 FROM vwbs_application d
-                     WHERE d.app_herd_no = ta.app_herd_no AND d.app_year = ta.app_year
-                     AND d.app_mde_code IN (3, 6, 8))
-  AND    EXISTS (SELECT 1 FROM tdbs_application_land x1
-                 WHERE x1.apl_app_id = ta.app_id AND x1.apl_year = ta.app_year AND x1.apl_deleted_ind = 'N'
-                 AND EXISTS (SELECT 1 FROM tdbs_application_land x2
-                             WHERE x2.apl_app_id = x1.apl_app_id AND x2.apl_year = x1.apl_year
-                             AND x2.apl_deleted_ind = 'N' AND x2.ROWID <> x1.ROWID))
-  ORDER BY DBMS_RANDOM.VALUE
-) WHERE ROWNUM <= 20;
+// ===================================================================================================================================
+// File          : StaffTestData.java
+// Package       : utilities
+// Description   : Runtime data pools for the BISS internal (staff) portal features - the Playwright replacement for the
+//                 Hooks.STAFF_* lists that the Selenium @staffdata hook filled.
+//
+//                 Pools (DBRouter labels on the DATA connection, all already in DBRouter):
+//                   SUBMITTED   - "Get Submitted Herds"                    (year)  -> APP_HERD_NO
+//                   PENALTY     - "Get Submitted Herds With Penalty"       (year)  -> APP_HERD_NO
+//                   NOAMEND     - "Get Submitted Herds With No Amendment"  (year)  -> APP_HERD_NO
+//                   ADMINCHECK  - "Get Herds With Admin Check Not Started" (year)  -> APP_HERD_NO
+//                   QUERYLETTER - "Get Herds With Query Letter Not Started"(year)  -> APP_HERD_NO
+//                   SIMOPTED    - "Get Submitted Herds With SIM Opted In"  (year)  -> APP_HERD_NO
+//                   PAYMENTS    - "Get Herds With Payments"                (year)  -> PHD_HERD_NO
+//                   REFERENCES  - "Get Reference Numbers"                  (year)  -> APP_HERD_NO
+//                   PARCELS     - "Get LPIS Parcels"                       (no year) -> LPS_PARCEL_LABEL
+//                   AMENDABLE   - "Get Amendable Submitted Herds"          (year)  -> APP_HERD_NO   (23-10-2026, TC_12)
+//
+//                 Change from Selenium (05-10-2026):
+//                   - A pool is loaded the first time a step asks for it (lazy), not by a hook before the scenario.
+//                     No @staffdata tag is needed, and a scenario only queries the pools it really uses.
+//                   - Herd pools are kept per scheme year: "the next submitted herd for scheme year 2024" reads the
+//                     2024 pool. The Selenium hook filled one pool and the step's year was only used on screen.
+//                   - Pools are kept for the whole run (a second scenario does not query again). Each StaffSteps
+//                     instance (one per scenario) keeps its own cursors, exactly as in Selenium, so every scenario
+//                     starts from the first row of the pool.
+//                   - Pool size: staff.pool.size (default 20). A feature or scenario tag can ask for more, using the
+//                     Selenium tag form: @parcels:10, @herds:10:submitted, @refs:15, @herds:5:admincheck. When a tag
+//                     asks for more rows than the cached pool holds, the pool is queried again with the larger size.
+//
+//                 23-10-2026: AMENDABLE pool for TC_12_STAFF (scheme selection amendments). Submitted herds a staff user
+//                 can open with Amend: no admin check, no Draft / Helpdesk / Draft Dept application in the same year,
+//                 no amendment (dct code 7) and at least two land parcels. Tag form: @herds:10:amendable.
+//
+//                 No browser code here.
+//
+// Author        : Aniket Pathare | aniket.pathare@government.ie
+// Date Created  : 05-10-2026 | Updated: 23-10-2026 (AMENDABLE pool)
+// ===================================================================================================================================
+
+package utilities;
+
+import commonFunctions.CommonFunctions;
+import database.DBRouter;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class StaffTestData
+{
+    private static final String LOG = "[STAFF-DATA] ";
+
+    // Pool kinds - each one maps to a DBRouter label and says whether the query takes a scheme year
+    public enum Pool
+    {
+        SUBMITTED  ("Get Submitted Herds",                     true,  "submitted herds"),
+        PENALTY    ("Get Submitted Herds With Penalty",        true,  "penalty herds"),
+        NOAMEND    ("Get Submitted Herds With No Amendment",   true,  "no-amendment herds"),
+        ADMINCHECK ("Get Herds With Admin Check Not Started",  true,  "admin-check herds"),
+        QUERYLETTER("Get Herds With Query Letter Not Started", true,  "query-letter herds"),
+        SIMOPTED   ("Get Submitted Herds With SIM Opted In",   true,  "SIM-opted herds"),
+        PAYMENTS   ("Get Herds With Payments",                 true,  "payment herds"),
+        REFERENCES ("Get Reference Numbers",                   true,  "reference numbers"),
+        PARCELS    ("Get LPIS Parcels",                        false, "LPIS parcels"),
+        AMENDABLE  ("Get Amendable Submitted Herds",           true,  "amendable herds");
+
+        final String  label;
+        final boolean usesYear;
+        final String  description;
+
+        Pool(String pLabel, boolean pUsesYear, String pDescription)
+        {
+            label       = pLabel;
+            usesYear    = pUsesYear;
+            description = pDescription;
+        }
+
+        public String description() { return description; }
+    }
+
+    // Loaded pools for the run: key "SUBMITTED|2024" (or "PARCELS|") -> values in query order
+    private static final Map<String, List<String>> POOLS = new HashMap<>();
+
+    // Row limit each pool was queried with - a later request for more rows queries again
+    private static final Map<String, Integer> LOADED_LIMIT = new HashMap<>();
+
+    // Sizes asked for by tags of the current scenario: pool -> rows
+    private static final Map<Pool, Integer> REQUESTED = new HashMap<>();
+
+    // Selenium tag forms: @parcels:10 | @refs:15 | @herds:10:submitted | @herds:5:admincheck
+    private static final Pattern TAG_PARCELS = Pattern.compile("^@?parcels:(\\d+)$",                 Pattern.CASE_INSENSITIVE);
+    private static final Pattern TAG_REFS    = Pattern.compile("^@?(?:refs|references):(\\d+)$",     Pattern.CASE_INSENSITIVE);
+    private static final Pattern TAG_HERDS   = Pattern.compile("^@?herds:(\\d+)(?::([a-z\\-]+))?$",  Pattern.CASE_INSENSITIVE);
+
+    private StaffTestData() { }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : applyTags
+    // Description   : Reads the pool-size tags of the scenario about to run (feature tags are inherited by Cucumber).
+    //                 Called by the StaffSteps @Before hook. Unknown tags are ignored.
+    //                   @parcels:10           -> PARCELS 10
+    //                   @refs:15              -> REFERENCES 15
+    //                   @herds:10             -> SUBMITTED 10
+    //                   @herds:5:admincheck   -> ADMINCHECK 5   (submitted, penalty, noamend, admincheck, queryletter,
+    //                                                              simopted, payments, amendable)
+    // Parameters    : pTags (Collection<String>) - scenario tags, e.g. ["@maps", "@parcels:10"]
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 05-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized void applyTags(Collection<String> pTags)
+    {
+        REQUESTED.clear();
+        if (pTags == null) return;
+
+        for (String iTag : pTags)
+        {
+            String  iClean = iTag == null ? "" : iTag.trim();
+            Matcher iM;
+
+            if ((iM = TAG_PARCELS.matcher(iClean)).matches())
+            {
+                REQUESTED.merge(Pool.PARCELS, Integer.parseInt(iM.group(1)), Math::max);
+            }
+            else if ((iM = TAG_REFS.matcher(iClean)).matches())
+            {
+                REQUESTED.merge(Pool.REFERENCES, Integer.parseInt(iM.group(1)), Math::max);
+            }
+            else if ((iM = TAG_HERDS.matcher(iClean)).matches())
+            {
+                Pool iPool = poolForTagKind(iM.group(2));
+                if (iPool != null) REQUESTED.merge(iPool, Integer.parseInt(iM.group(1)), Math::max);
+            }
+        }
+
+        if (!REQUESTED.isEmpty())
+        {
+            CommonFunctions.log.info(LOG + "Pool sizes asked for by tags: " + REQUESTED);
+        }
+    }
+
+    // Tag kind ("admincheck", "sim-opted", ...) -> pool; no kind means submitted herds
+    private static Pool poolForTagKind(String pKind)
+    {
+        if (pKind == null || pKind.isBlank()) return Pool.SUBMITTED;
+        switch (pKind.toLowerCase(Locale.ROOT).replace("-", ""))
+        {
+            case "submitted":   return Pool.SUBMITTED;
+            case "penalty":     return Pool.PENALTY;
+            case "noamend":
+            case "noamendment": return Pool.NOAMEND;
+            case "admincheck":  return Pool.ADMINCHECK;
+            case "queryletter": return Pool.QUERYLETTER;
+            case "simopted":
+            case "sim":         return Pool.SIMOPTED;
+            case "payments":
+            case "payment":     return Pool.PAYMENTS;
+            case "amendable":
+            case "amend":       return Pool.AMENDABLE;
+            default:            return null;
+        }
+    }
+
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : pool
+    // Description   : The values of a pool for a scheme year, querying the DATA database the first time (or again when a
+    //                 tag asks for more rows than are cached). Never null; an empty list when the query found nothing,
+    //                 so StaffSteps can fail with its own clear message.
+    // Parameters    : pPool (Pool) - which pool | pYear (String) - scheme year, ignored by PARCELS
+    // Returns       : List<String> - read-only list of values in query order
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 05-10-2026
+    // ***************************************************************************************************************************************************************************************
+    public static synchronized List<String> pool(Pool pPool, String pYear)
+    {
+        String       iYear   = pPool.usesYear ? (pYear == null ? "" : pYear.trim()) : "";
+        String       iKey    = pPool.name() + "|" + iYear;
+        int          iSize   = Math.max(ConfigManager.getInt("staff.pool.size", 20), REQUESTED.getOrDefault(pPool, 0));
+        List<String> iCached = POOLS.get(iKey);
+
+        if (iCached != null && LOADED_LIMIT.getOrDefault(iKey, 0) >= iSize)
+        {
+            return iCached;
+        }
+
+        if (pPool.usesYear && iYear.isEmpty())
+        {
+            throw new IllegalArgumentException(LOG + "Pool " + pPool.description + " needs a scheme year.");
+        }
+
+        long iStart = System.currentTimeMillis();
+        List<Map<String, Object>> iRows = pPool.usesYear
+                ? DBRouter.query("DATA", pPool.label, iYear, String.valueOf(iSize))
+                : DBRouter.query("DATA", pPool.label, String.valueOf(iSize));
+
+        List<String> iValues = new ArrayList<>();
+        for (Map<String, Object> iRow : iRows)
+        {
+            // Every staff query projects exactly one column (APP_HERD_NO / PHD_HERD_NO / LPS_PARCEL_LABEL)
+            Object iValue = iRow.isEmpty() ? null : iRow.values().iterator().next();
+            String iText  = iValue == null ? "" : iValue.toString().trim();
+            if (!iText.isEmpty() && !iValues.contains(iText)) iValues.add(iText);
+        }
+
+        List<String> iPool = Collections.unmodifiableList(iValues);
+        POOLS.put(iKey, iPool);
+        LOADED_LIMIT.put(iKey, iSize);
+        CommonFunctions.log.info(LOG + "Loaded " + iPool.size() + " " + pPool.description
+                + (iYear.isEmpty() ? "" : " for " + iYear) + " (asked for " + iSize + ") in "
+                + (System.currentTimeMillis() - iStart) + " ms.");
+        return iPool;
+    }
+}
