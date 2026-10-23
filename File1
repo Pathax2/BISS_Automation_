@@ -1,19 +1,18 @@
 SELECT app_herd_no FROM (
   SELECT ta.app_herd_no
   FROM   tdbs_application ta
-  WHERE  ta.app_year     = 2026
-  AND    ta.app_mde_code = 4                                   -- submitted
-  AND    ta.app_dct_code != 7                                  -- original submission, not an amendment (legacy rule)
-  AND    REGEXP_LIKE(ta.app_herd_no, '^[A-Z]')                 -- real herds, A-herds kept, TRNs out
-  AND    NOT EXISTS (SELECT 1 FROM tdbs_admin_check tac
-                     WHERE tac.adc_app_id = ta.app_id)         -- admin check not started
+  WHERE  ta.app_year = 2026
+  AND    ta.app_mde_code = 4
+  AND    ta.app_dct_code != 7
+  AND    REGEXP_LIKE(ta.app_herd_no, '^[A-Z]')
+  AND    NOT EXISTS (SELECT 1 FROM tdbs_admin_check tac WHERE tac.adc_app_id = ta.app_id)
   AND    NOT EXISTS (SELECT 1 FROM vwbs_application d
-                     WHERE d.app_herd_no = ta.app_herd_no
-                     AND   d.app_year    = ta.app_year
-                     AND   d.app_mde_code IN (3, 6, 8))        -- no Draft / Helpdesk / Draft Dept left open
-  AND    (SELECT COUNT(*) FROM tdbs_application_land x
-          WHERE x.apl_app_id = ta.app_id
-          AND   x.apl_year   = ta.app_year
-          AND   x.apl_deleted_ind = 'N') >= 2                  -- at least 2 parcels
+                     WHERE d.app_herd_no = ta.app_herd_no AND d.app_year = ta.app_year
+                     AND d.app_mde_code IN (3, 6, 8))
+  AND    EXISTS (SELECT 1 FROM tdbs_application_land x1
+                 WHERE x1.apl_app_id = ta.app_id AND x1.apl_year = ta.app_year AND x1.apl_deleted_ind = 'N'
+                 AND EXISTS (SELECT 1 FROM tdbs_application_land x2
+                             WHERE x2.apl_app_id = x1.apl_app_id AND x2.apl_year = x1.apl_year
+                             AND x2.apl_deleted_ind = 'N' AND x2.ROWID <> x1.ROWID))
   ORDER BY DBMS_RANDOM.VALUE
 ) WHERE ROWNUM <= 20;
