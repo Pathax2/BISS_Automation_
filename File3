@@ -1,172 +1,1658 @@
-Feature: TC_12_STAFF - Scheme Selection BISS CRISS Protein Eco MSSM RCSM Regression Pack
+package com.pages;
 
-  # --------------------------------------------------------------------------------------------------------------------
-  # Legacy  : "Regression Pack for Scheme Selection - Add BISS, CRISS" (BISSAGL-5919, AT-TC-01 to 04,
-  #           tmslinks BISSAGL-14880 / 14879 / 14877 / 14876)
-  #           "Regression Pack for Scheme Selection - Add MSSM, RCSM" (BISSAGL-7582, AT-TC-01 to 05,
-  #           tmslinks BISSAGL-14893 / 14889 / 14885 / 14891 / 14890)
-  # Rewritten 15-10-2026 in the StaffSteps vocabulary. Modernised 21-10-2026: the repeated journeys are merged, so each
-  # check runs once. Three scenarios, so a failing card check does not stop the submit check and the report shows which
-  # part broke.
-  #
-  # Scenario 01 - Cards and abandoned selections (nothing is submitted)          BISSAGL-14880, 14877, 14893
-  #   - BISS and CRISS cards: position, acronym, full name, View Details dialog, toggle
-  #   - CRISS and Protein Aid Scheme selected, Next, Back, deselected: the application is as it was
-  #   - MSSM and RCSM cards (2024): acronym and full name; selected and deselected: as they were
-  # Scenario 02 - One amendment changes CRISS, Protein Aid Scheme and Eco        BISSAGL-14879, 14891, 14890
-  #   - submitted, recorded in the history today, all three flipped; reset in one submit, all three back
-  # Scenario 03 - Other herds report a selection state                           BISSAGL-14889, 14885, 14876
-  #   - A1211644 and P1461522: MSSM and RCSM report a state (legacy only opened them - "Need MSSM and RCSM disabled herd")
-  #   - inactive herd N1041714: all ten schemes report a state
-  #
-  # What was merged (legacy -> here):
-  #   - Select-then-deselect was done three times (CRISS, Protein with Next / Back, MSSM / RCSM). It is now one CRISS +
-  #     Protein Aid Scheme pass through Next / Back, and one MSSM / RCSM pass on 2024, where those cards are shown.
-  #     The selection is now checked as flipped after the click, before it is undone (legacy never checked it).
-  #   - Change, submit, check and reset was done twice (CRISS + Protein, then Eco; BISSAGL-7582 AT-TC-04 and 05 were the
-  #     same clicks). It is now one amendment with all three schemes and one reset: 2 submits instead of 4.
-  #   - "the selection state should be readable" on J1400098 is covered by "notes the selection state" (it fails when a
-  #     card shows no state), so it is not repeated before a change.
-  #   - The amendment of J1400098 2026 is opened 3 times instead of 7.
-  #   - The MSSM / RCSM card text uses the same card table as BISS / CRISS (blank position = found by acronym).
-  #
-  # Protein Aid Scheme: when Submit Changes reports that the Protein Scheme has no eligible crop, the submit step clicks
-  # OK, gives the first tillage parcel the crop staff.protein.crop (Beans - Spring) and submits again; the reset submit
-  # puts that parcel's old Parcel Use back first (StaffSteps 21-10-2026).
-  #
-  # Test data (kept as literals, as in legacy):
-  #   J1400098 / 2026 (amended and reset; left as it was found) and J1400098 / 2024 (MSSM / RCSM cards),
-  #   A1211644 / 2024, P1461522 / 2024, N1041714 / 2024 (inactive).
-  #   Login agr4442 (BISS Co-ordination 1). Password: TD:Password from the TestData row of this test case.
-  #
-  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (Scheme selection and amendments, History)
-  # Author: Aniket Pathare | aniket.pathare@government.ie
-  # --------------------------------------------------------------------------------------------------------------------
+import com.base.ActionClass;
+import com.base.DriverManager;
+import io.qameta.allure.Allure;
+import org.apache.poi.ss.formula.functions.T;
+import org.openqa.selenium.*;
+import org.openqa.selenium.interactions.Actions;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import java.awt.AWTException;
+import io.cucumber.java.Scenario;
+import java.awt.Robot;
+import java.awt.event.KeyEvent;
 
-  Background:
-    Given the staff user is logged in to the BISS internal portal as "agr4442"
+import java.io.ByteArrayInputStream;
+import java.util.ArrayList;
+import java.util.List;
 
-  @regression @staff @scheme-selection
-  Scenario: AT-STAFF-SCHEME-01 - Scheme cards are presented correctly and an abandoned selection changes nothing
+import static org.openqa.selenium.support.locators.RelativeLocator.with;
 
-    # BISS and CRISS cards - BISSAGL-5919 AT-TC-01 (BISSAGL-14880)
-    When the staff user amends the application for herd "J1400098" for scheme year "2026"
-    Then the scheme cards should be presented as follows
-      | position | acronym | title                                                          |
-      | 1        | BISS    | Basic Income Support for Sustainability                        |
-      | 2        | CRISS   | Complementary Redistributive Income Support for Sustainability |
-    And the following scheme details dialogs should be readable
-      | scheme | title                                                          |
-      | BISS   | Basic Income Support for Sustainability                        |
-      | CRISS  | Complementary Redistributive Income Support for Sustainability |
-    And the following schemes should offer a selection toggle
-      | BISS  |
-      | CRISS |
+public class BPSdashboardPage {
 
-    # Select, Next, Back, deselect - nothing changes - BISSAGL-5919 AT-TC-01 and AT-TC-03 (BISSAGL-14880, 14877)
-    When the staff user notes the selection state of the following schemes
-      | BISS               |
-      | CRISS              |
-      | Protein Aid Scheme |
-    And the staff user selects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-    Then the following schemes should have the opposite selection
-      | CRISS              |
-      | Protein Aid Scheme |
-    When the staff user proceeds to the next step
-    And the staff user goes back and deselects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-    Then the following schemes should have their noted selection
-      | BISS               |
-      | CRISS              |
-      | Protein Aid Scheme |
+    WebDriver driver;
+    ActionClass actions;
+    MyClientsPage myClientsPage;
 
-    # MSSM and RCSM cards on 2024, selected and deselected - BISSAGL-7582 AT-TC-01 (BISSAGL-14893)
-    When the staff user amends the application for herd "J1400098" for scheme year "2024"
-    Then the scheme cards should be presented as follows
-      | position | acronym | title                       |
-      |          | MSSM    | Multi Species Sward Measure |
-      |          | RCSM    | Red Clover Silage Measure   |
-    When the staff user notes the selection state of the following schemes
-      | MSSM |
-      | RCSM |
-      | Eco  |
-    And the staff user selects the following schemes
-      | MSSM |
-      | RCSM |
-    Then the following schemes should have the opposite selection
-      | MSSM |
-      | RCSM |
-    When the staff user deselects the following schemes
-      | MSSM |
-      | RCSM |
-    Then the following schemes should have their noted selection
-      | MSSM |
-      | RCSM |
-      | Eco  |
+    // region Agent Dashboard Locators
 
-  @regression @staff @scheme-selection @e2e
-  Scenario: AT-STAFF-SCHEME-02 - One amendment of CRISS, Protein Aid Scheme and Eco is submitted, recorded and reset
+    By BPSHomeScreen = By.xpath("//a//descendant::span[contains(text(),'Home')]");
+    // This Tab is a Dropdown
+    By AgentToolsDropDownTab = By.id("agentToolsNavLink");
+    By MyClientsTab = By.id("agentToolsNavLinkMyClients");
+    By MyClientsWithNoHerdNumberTab = By.id("agentToolsNavLinkMyClientNoHerdNumber");
+    By ChecksByMonitoringTab = By.id("agentToolsNavLinkoutstandingChecksByMonitoring");
+    By BPSApplicationsTab = By.id("agentToolsNavLinkBPSApplication");
+    By AgentDashboardTab = By.id("agentToolsEmsAgentDashboard");
+    By OutstandingBPSErrorsTab = By.id("agentToolsNavLinkOutstandingSPSErrors");
+    By StaffExitBPSApp = By.xpath("//a[contains(text(),'Exit BPS')]");
+    By HomeDropdownButton = By.xpath("//body[1]/nav[1]/div[1]/div[1]/div[2]/ul[1]/li[1]/a[1]");
+    By ClientOption = By.xpath("//body[1]/nav[1]/div[1]/div[1]/div[2]/ul[1]/li[1]/ul[1]/li[1]/a[1]");
+    By AgentOption = By.xpath("//body[1]/nav[1]/div[1]/div[1]/div[2]/ul[1]/li[1]/ul[1]/li[2]/a[1]");
+    By NewsSectionHeading = By.xpath("//span[@id='newsExplanation']//parent::h3[contains(text(),'News')]");
+    By ViewAgentNewsPageLink = By.xpath("//a[@id='newsPortletViewLink' and contains(text(),'View >>')]");
+    By SearchHerdField = By.xpath("//input[@id='herdNumberSelected']");
+    By SearchHerdButton = By.xpath("//button[@id='searchHerdSearchButton']");
+    By ViewSearchedHerd = By.xpath("//input[@id='clientSearchViewSelectedResultButton']");
+    By HelpLink = By.xpath("//a[contains(text(),'Help')]");
+    By ContactUsLink = By.xpath("//a[contains(text(),'Contact Us')]");
 
-    # Change and submit - BISSAGL-5919 AT-TC-02 (BISSAGL-14879), BISSAGL-7582 AT-TC-04 / 05 (BISSAGL-14891, 14890)
-    When the staff user amends the application for herd "J1400098" for scheme year "2026"
-    And the staff user notes the selection state of the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
-    And the staff user selects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
-    And the staff user submits the amendment and confirms
-    Then the application history should record "Amendment Submitted" today
-    When the staff user opens the "BISS Amendments" screen
-    Then the following schemes should have the opposite selection
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
+    // endregion
 
-    # Post-test reset - all three in one submit, then checked from a fresh search
-    When the staff user deselects the following schemes
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
-    And the staff user submits the amendment and confirms
-    And the staff user amends the application for herd "J1400098" for scheme year "2026"
-    Then the following schemes should have their noted selection
-      | CRISS              |
-      | Protein Aid Scheme |
-      | Eco                |
 
-  @regression @staff @scheme-selection
-  Scenario: AT-STAFF-SCHEME-03 - Other herds report a selection state for their schemes
+    // region Help Window Locators
 
-    # A1211644 - BISSAGL-7582 AT-TC-02 (BISSAGL-14889)
-    When the staff user amends the application for herd "A1211644" for scheme year "2024"
-    Then the scheme selection screen should be displayed
-    And the selection state should be readable for the following schemes
-      | MSSM |
-      | RCSM |
+    // Help Tab Locators
+    By FilingYourBPSApplicationLink = By.xpath("//a[contains(text(),'Filing') and contains(text(),'Your') and contains(text(),'BPS') and contains(text(),'Application')]");
+    By PartnerShipInformationHeading = By.xpath("//b[contains(text(),'Partnership Information')]");
+    By ANC2021Content = By.xpath("html//body/p[8]/b/span[1]/font/b[1]");
+    By YFSContent2021Para = By.xpath("/html/body/p[9]");
+    By YFSContent2022Para = By.xpath("/html/body/p[10]");
+    By GLAS2ndPara = By.xpath("/html/body/p[13]");
+    By GLAS3rdPara = By.xpath("/html/body/p[14]");
+    By SubmittingANoChangeCase = By.xpath("//a[contains(text(),'Submitting') and contains(text(),'a') and contains(text(),'No') and contains(text(),'Change') and contains(text(),'Case')]");
+    By SubmittingNoChangeCaseText = By.xpath("/html/body/p[4]/span[2]/font");
+    By LandParcelDetails = By.xpath("//a[contains(text(),'Land') and contains(text(),'Parcel') and contains(text(),'Details')]");
+    By LandParcelDetailsPopUpSection = By.xpath("//h2[contains(text(),\"Pop Up's\")]");
+    By AddPlot = By.xpath("//a[contains(text(),'Add') and contains(text(),'Plot')]");
+    By AddPlotContent = By.xpath("/html/body");
+    By IslandDetails = By.xpath("//a[contains(text(),'Island') and contains(text(),'Details')]");
+    By IslandDetailsContent = By.xpath("/html/body");
+    By OrganicLandDetails = By.xpath("//a[contains(text(),'Organic') and contains(text(),'Land') and contains(text(),'Details')]");
+    By Greening = By.xpath("//a[@id='I_19']");
+    By GreeningTabProvisionalStatusHeading = By.xpath("//h2/span/span/font/b[contains(text(),'Provisional Status Table')]");
+    By SIMTab = By.xpath("//a[@id='I_20']");
+    By SIMTabText = By.xpath("/html/body/p[20]");
+    By ApplicationSummary = By.xpath("//a[@id='I_23']");
+    By ApplicationSummaryContent = By.xpath("/html/body");
 
-    # P1461522 - BISSAGL-7582 AT-TC-03 (BISSAGL-14885)
-    When the staff user amends the application for herd "P1461522" for scheme year "2024"
-    Then the scheme selection screen should be displayed
-    And the selection state should be readable for the following schemes
-      | MSSM |
-      | RCSM |
 
-    # Inactive herd, every scheme - BISSAGL-5919 AT-TC-04 (BISSAGL-14876)
-    When the staff user amends the application for herd "N1041714" for scheme year "2024"
-    Then the selection state should be readable for the following schemes
-      | BISS               |
-      | CRISS              |
-      | ANC                |
-      | Eco                |
-      | Organics           |
-      | SIM                |
-      | Protein Aid Scheme |
-      | CISYF              |
-      | MSSM               |
-      | RCSM               |
+    // Help Window Frames
+    By NavigationPageFrame = By.id("minibar_navpane");
+    By NavigationPageSubFrame = By.id("navpane");
+    By NavigationLinksFrame = By.id("tocIFrame");
+    By ContentPageFrame = By.id("topic");
+
+    // endregion
+
+
+    public BPSdashboardPage(WebDriver driver) {
+        this.driver = driver;
+        actions = new ActionClass(driver);
+        myClientsPage = new MyClientsPage(driver);
+    }
+
+    // region BPS Code
+
+    // region Agent Search for Herd
+
+    // Agent Enter Herd Number to be Searched
+    public void AgentEnterHerd(String Arg0) {
+        actions.waitForVisibilityOfElement(SearchHerdField,30);
+        actions.sendKeys(SearchHerdField,Arg0);
+    }
+
+    // Agent Click on the Search Herd Button
+    public void AgentClickOnSearchHerdButton() {
+        actions.waitForVisibilityOfElement(SearchHerdButton,30);
+        actions.clickUsingJS(SearchHerdButton);
+    }
+
+    // Agent Click on the Searched Herd View Button
+    public void AgentClickOnSearchedHerdViewButton() {
+        actions.waitForVisibilityOfElement(ViewSearchedHerd,30);
+        actions.clickUsingJS(ViewSearchedHerd);
+    }
+    // endregion
+
+    // region Anciliary Links
+
+    // Agent Click on the Help Link
+    public void AgentClickOnHelpLink() {
+        actions.waitForVisibilityOfElement(HelpLink,30);
+        actions.clickUsingJS(HelpLink);
+    }
+
+    // Agent Click on the Contact Us Link
+    public void AgentClickOnContactUsLink() {
+        actions.waitForVisibilityOfElement(ContactUsLink,30);
+        actions.clickUsingJS(ContactUsLink);
+    }
+
+    // endregion
+
+
+    // region Help Window Cases Implementation
+
+    // region Code to Switch Frames
+
+    public void SwitchToNavBarFrame() {
+        driver.switchTo().frame(1);
+        actions.waitForVisibilityOfFrameAndSwitch(NavigationPageFrame,30);
+        actions.waitForVisibilityOfFrameAndSwitch(NavigationPageSubFrame,30);
+        actions.waitForVisibilityOfFrameAndSwitch(NavigationLinksFrame,30);
+    }
+
+    public void SwitchToContentFrame() {
+        driver.switchTo().defaultContent();
+        driver.switchTo().frame(1);
+        actions.waitForVisibilityOfFrameAndSwitch(ContentPageFrame,30);
+    }
+
+    // endregion
+
+    // region Filing you BPS Application Online
+
+    //  Agent Navigate to Filing your BPS Application Online Tab
+    public void AgentNavigateToFilingBPSApplicationOnline() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(FilingYourBPSApplicationLink,15);
+        actions.clickUsingJS(FilingYourBPSApplicationLink);
+        Thread.sleep(2000);
+    }
+
+
+    // Verify Partnership Information Year
+    public Boolean AgentCheckPartnerShipInformationContains() {
+        SwitchToContentFrame();
+        WebElement PartnerShipInfo = driver.findElement(with(By.tagName("p"))
+                        .below(PartnerShipInformationHeading));
+        String PartnerShipInfoText= PartnerShipInfo.getText();
+        Boolean Year = (PartnerShipInfoText.contains("2022")) && (!(PartnerShipInfoText.contains("2021")));
+        return Year;
+    }
+
+    // Verify ANC Year Update to 2022
+    public Boolean AgentCheckANCContains2022() {
+        WebElement ANC2022Para = driver.findElement(ANC2021Content);
+        String ANC2022Text = ANC2022Para.getText();
+        System.out.println(ANC2022Text);
+        Boolean year2022 = (ANC2022Text.contains("2022")) && (!(ANC2022Text.contains("2021")));
+        return year2022;
+    }
+
+    // Verify YFS Year 1st Para Update to 2021
+    public Boolean AgentCheckYFS1stParaContains2021() {
+        WebElement YFS2021Para = driver.findElement(YFSContent2021Para);
+        String YFS2021ParaText = YFS2021Para.getText();
+        System.out.println(YFS2021ParaText);
+        Boolean year2021 = (YFS2021ParaText.contains("2021")) && (!(YFS2021ParaText.contains("2022")));
+        return year2021;
+    }
+
+    // Verify YFS 2nd Para Update to 2022
+    public Boolean AgentCheckYFS2ndParaContains2022() {
+        WebElement YFS2022Para = driver.findElement(YFSContent2022Para);
+        String YFS2022ParaText = YFS2022Para.getText();
+        System.out.println(YFS2022ParaText);
+        Boolean year2022 = (YFS2022ParaText.contains("2022")) && (!(YFS2022ParaText.contains("2021")));
+        return year2022;
+    }
+
+    // Verify GLAS 2nd Para Update to 2022
+    public Boolean AgentCheckGLAS2ndParaContains2022() {
+        WebElement GLAS2022Para = driver.findElement(GLAS2ndPara);
+        String GLAS2022ParaText = GLAS2022Para.getText();
+        System.out.println(GLAS2022ParaText);
+        Boolean year12022 = (GLAS2022ParaText.contains("2022")) && (!(GLAS2022ParaText.contains("2021")));
+        return year12022;
+    }
+
+    // Verify GLAS 3rd Para Update to 2022
+    public Boolean AgentCheckGLAS3rdParaContains2022() {
+        WebElement GLAS2022Para = driver.findElement(GLAS3rdPara);
+        String GLAS2022ParaText = GLAS2022Para.getText();
+        System.out.println(GLAS2022ParaText);
+        Boolean year22022 = (GLAS2022ParaText.contains("2022")) && (!(GLAS2022ParaText.contains("2021")));
+        return year22022;
+    }
+
+    //endregion
+
+    // region Submitting a No Change Case
+
+    //  Agent Navigate to Submitting A No Change Case Tab
+    public void AgentNavigateToSubmittingANoChangeCase() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(SubmittingANoChangeCase,15);
+        actions.clickUsingJS(SubmittingANoChangeCase);
+        Thread.sleep(2000);
+    }
+
+    // Verify Submitting A No Change Case Content Update to 2022
+    public Boolean AgentCheckSubmittingANoChangeCaseContentUpdateTo2022() {
+        SwitchToContentFrame();
+        WebElement NoChange2022Para = driver.findElement(SubmittingNoChangeCaseText);
+        String NoChange2022ParaParaText = NoChange2022Para.getText();
+        Boolean year2022 = (NoChange2022ParaParaText.contains("2022")) && (!(NoChange2022ParaParaText.contains("2021")));
+        return year2022;
+    }
+
+    // endregion
+
+    // region Land Parcel
+
+    //  Agent Navigate to Land Parel Details Tab
+    public void AgentNavigateToLandParcelDetails() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(LandParcelDetails,15);
+        actions.clickUsingJS(LandParcelDetails);
+        Thread.sleep(2000);
+    }
+
+    // Check if the Pop Up Section is present
+    public void AgentCheckPopUpSection() {
+        SwitchToContentFrame();
+        actions.waitForVisibilityOfElement(LandParcelDetailsPopUpSection,30);
+        actions.clickUsingJS(LandParcelDetailsPopUpSection);
+    }
+
+    // endregion
+
+    // region Add Plot
+
+    //  Agent Navigate to Add Plot Tab
+    public void AgentNavigateToAddPlot() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(AddPlot,15);
+        actions.clickUsingJS(AddPlot);
+        Thread.sleep(2000);
+    }
+
+    // Check if the Content Section of Add Plot updated to 2022
+    public Boolean AgentCheckAddPlotSectionYearUpdate() {
+        SwitchToContentFrame();
+        WebElement AddPlot2022 = driver.findElement(IslandDetailsContent);
+        String AddPlot2022Text = AddPlot2022.getText();
+        Boolean year2022 = (AddPlot2022Text.contains("2022")) && (!(AddPlot2022Text.contains("2021")));
+        return year2022;
+    }
+
+    // endregion
+
+    // region Island Details
+
+    //  Agent Navigate to Add Plot Tab
+    public void AgentNavigateToIslandDetails() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(IslandDetails,15);
+        actions.clickUsingJS(IslandDetails);
+        Thread.sleep(2000);
+    }
+
+    // Check if the Content Section of Island Details updated to 2022
+    public Boolean AgentCheckIslandDetailsSectionYearUpdate() {
+        SwitchToContentFrame();
+        WebElement IslandDetails2022 = driver.findElement(AddPlotContent);
+        String IslandDetails2022Text = IslandDetails2022.getText();
+        Boolean year2022 = (IslandDetails2022Text.contains("2022")) && (!(IslandDetails2022Text.contains("2021")));
+        return year2022;
+    }
+
+    // endregion
+
+    // region Organic Land Details
+
+    //  Agent Navigate to Organic Land Details Tab
+    public void AgentNavigateToOrganicLandDetails() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(OrganicLandDetails,15);
+        actions.clickUsingJS(OrganicLandDetails);
+        Thread.sleep(2000);
+    }
+
+    // Check if the Content Section of Organic Land Details updated to 2022
+    public Boolean AgentCheckOrganicLandDetailsSectionYearUpdate() {
+        SwitchToContentFrame();
+        WebElement OrganicLandDetails2022 = driver.findElement(AddPlotContent);
+        String OrganicLandDetails2022Text = OrganicLandDetails2022.getText();
+        Boolean year2022 = (OrganicLandDetails2022Text.contains("2022")) && (!(OrganicLandDetails2022Text.contains("2021")));
+        return year2022;
+    }
+
+    // endregion
+
+    // region Greening
+
+    //  Agent Navigate to Greening Tab
+    public void AgentNavigateToGreening() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(Greening,15);
+        actions.clickUsingJS(Greening);
+        Thread.sleep(2000);
+    }
+
+    // Verify Provisional Status Table Year
+    public Boolean AgentCheckProvisionalStatusTableContains2022() {
+        SwitchToContentFrame();
+        WebElement ProvisionalStatusTableYear = driver.findElement(with(By.tagName("span"))
+                .below(GreeningTabProvisionalStatusHeading));
+        String ProvisionalStatusTableYearText= ProvisionalStatusTableYear.getText();
+        Boolean Year = (ProvisionalStatusTableYearText.contains("2022")) && (!(ProvisionalStatusTableYearText.contains("2021")));
+        return Year;
+    }
+
+    // endregion
+
+
+    // region Straw Incorporation Measure (SIM)
+
+    //  Agent Navigate to SIM Tab
+    public void AgentNavigateToSIM() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(SIMTab,15);
+        actions.clickUsingJS(SIMTab);
+        Thread.sleep(2000);
+    }
+
+    // Check if the Content Section of SIM contains specified Heading
+    public String AgentCheckSIMSectionText() {
+        SwitchToContentFrame();
+        String SIMSectionText = driver.findElement(SIMTabText).getText();
+        return SIMSectionText;
+    }
+    // endregion
+
+    // region Application Summary
+
+    //  Agent Navigate to Application Summary Tab
+    public void AgentNavigateToApplicationSummary() throws InterruptedException {
+        SwitchToNavBarFrame();
+        actions.waitForVisibilityOfElement(ApplicationSummary,15);
+        actions.clickUsingJS(ApplicationSummary);
+        Thread.sleep(2000);
+    }
+
+    // Check if the Content Section of Application Summary updated to 2022
+    public Boolean AgentCheckApplicationSummarySectionYearUpdate() {
+        SwitchToContentFrame();
+        WebElement ApplicationSummary2022 = driver.findElement(ApplicationSummaryContent);
+        String ApplicationSummary2022Text = ApplicationSummary2022.getText();
+        Boolean year2022 = (ApplicationSummary2022Text.contains("2022")) && (!(ApplicationSummary2022Text.contains("2021")));
+        return year2022;
+    }
+
+    // endregion
+
+    // endregion
+
+
+    // region Click on Agent Tools Dropdown Links
+
+    // Clicking on the My Clients Tab
+    public void AgentClickOnMyClientsTab() {
+        actions.waitForVisibilityOfElement(AgentToolsDropDownTab, 30);
+        actions.click(AgentToolsDropDownTab);
+        actions.waitForVisibilityOfElement(MyClientsTab, 30);
+        actions.click(MyClientsTab);
+    }
+
+    // Clicking on the My Clients With No Herd Number Tab
+    public void AgentClickOnMyClientsWithNoHerdNumberTab() {
+        actions.waitForVisibilityOfElement(AgentToolsDropDownTab, 30);
+        actions.click(AgentToolsDropDownTab);
+        actions.waitForVisibilityOfElement(MyClientsWithNoHerdNumberTab, 30);
+        actions.click(MyClientsWithNoHerdNumberTab);
+    }
+
+    // Clicking on the Checks By Monitoring Tab
+    public void AgentClickOnChecksByMonitoringTab() {
+        actions.waitForVisibilityOfElement(AgentToolsDropDownTab, 30);
+        driver.findElement(AgentToolsDropDownTab).click();
+        actions.waitForVisibilityOfElement(ChecksByMonitoringTab, 30);
+        driver.findElement(ChecksByMonitoringTab).click();
+    }
+
+    // Clicking on the BPS Applications Tab
+    public void AgentClickOnBPSApplicationsTab() {
+        actions.waitForVisibilityOfElement(AgentToolsDropDownTab, 30);
+        driver.findElement(AgentToolsDropDownTab).click();
+        actions.waitForVisibilityOfElement(BPSApplicationsTab, 30);
+        driver.findElement(BPSApplicationsTab).click();
+    }
+
+    // Clicking on the Agent Dashboard Tab
+    public void AgentClickOnAgentDashboardTab() {
+        actions.waitForVisibilityOfElement(AgentToolsDropDownTab, 30);
+        driver.findElement(AgentToolsDropDownTab).click();
+        actions.waitForVisibilityOfElement(AgentDashboardTab, 30);
+        driver.findElement(AgentDashboardTab).click();
+    }
+
+    // Clicking on the Outstanding BPS Errors Tab
+    public void AgentClickOnOutstandingBPSErrorsTab() {
+        actions.waitForVisibilityOfElement(AgentToolsDropDownTab, 30);
+        driver.findElement(AgentToolsDropDownTab).click();
+        actions.waitForVisibilityOfElement(OutstandingBPSErrorsTab, 30);
+        driver.findElement(OutstandingBPSErrorsTab).click();
+    }
+
+    // endregion
+
+
+    // region Click on other Agent Dashboard NavBar Links
+
+    // Navigate to Client Homepage
+    public void AgentNavigateToClientHomePage() {
+        actions.waitForVisibilityOfElement(HomeDropdownButton, 30);
+        driver.findElement(HomeDropdownButton).click();
+        actions.waitForVisibilityOfElement(ClientOption, 30);
+        driver.findElement(ClientOption).click();
+    }
+
+    // Navigate to Agent Homepage
+    public void AgentNavigateToAgentHomePage() {
+        actions.waitForVisibilityOfElement(HomeDropdownButton, 30);
+        driver.findElement(HomeDropdownButton).click();
+        actions.waitForVisibilityOfElement(AgentOption, 30);
+        driver.findElement(AgentOption).click();
+    }
+
+    // Clicking on the BPS Agent Home Screen Tab
+    public void StaffClickOnBPSAgentHomeScreenTab() {
+        actions.waitForVisibilityOfElement(BPSHomeScreen, 30);
+        driver.findElement(BPSHomeScreen).click();
+    }
+
+    // Clicking on the Logout Link
+    public void StaffClickOnExtBPSAppLink() {
+        actions.waitForVisibilityOfElement(StaffExitBPSApp, 30);
+        actions.clickUsingJS(StaffExitBPSApp);
+    }
+
+    // endregion
+
+
+    // region Check on Agent Dashboard page Elements
+
+    // Agent Check if the News Section present
+    public Boolean AgentCheckNewsSection() {
+        actions.waitForVisibilityOfElement(NewsSectionHeading,30);
+        Boolean NewsHeadingVisibility = driver.findElement(NewsSectionHeading).isDisplayed();
+        return NewsHeadingVisibility;
+    }
+
+    // Agent Navigate to News Page
+    public void AgentClickOnViewInNewsSection() {
+        actions.waitForVisibilityOfElement(ViewAgentNewsPageLink,30);
+        actions.clickUsingJS(ViewAgentNewsPageLink);
+    }
+    // endregion
+
+// endregion
+
+    // region BISS Dashboard Page
+
+    // region Common Elements
+    // Staff switch dashboardss in internal dashboard
+    public void StaffClickOnTabInDashboard(String TabName) {
+        By TabLocator = By.xpath("//mat-tab-header/descendant::span[contains(text(),'"+TabName+"')]"); //updated xpath to biss-correspondence-header from mat-icon-header
+        actions.clickUsingJS(TabLocator);
+    }
+
+    public void StaffClickOnTabInCorrespondanceHeader(String TabName) {
+        By TabLocator = By.xpath("//biss-correspondence-header/descendant::span[contains(text(),'"+TabName+"')]"); //updated xpath to biss-correspondence-header from mat-icon-header
+        actions.clickUsingJS(TabLocator);
+    }
+
+    // Staff Click on the Tabs in Documents
+
+
+    // Staff Check Tab not Present in Dashboard
+    public Boolean StaffCheckTabInDashboard(String TabName) {
+        By TabLocator = By.xpath("//mat-tab-header/descendant::div[contains(text(),'"+TabName+"')]");
+        Boolean TabVisibility = driver.findElements(TabLocator).isEmpty();
+        return TabVisibility;
+    }
+    // endregion
+
+
+    // region Map Printing
+    // Staff Enter Value in Map Printing Tab TextBox
+    public void StaffEnterValueInTextBox(String FieldName, String Value) throws InterruptedException {
+        By FieldLocator = By.xpath("//input[@formcontrolname='"+FieldName+"']");
+        driver.findElement(FieldLocator).clear();
+        actions.sendKeys(FieldLocator, Value);
+        Thread.sleep(3000);
+    }
+
+
+//placeholder changed from 'Address, Name or Herd Number' to 'Name or Herd Number'
+    By HerdSearchField = By.xpath("//input[@placeholder='Name or Herd Number']");
+
+    // Agent Search for a particular herd
+    public void AgentSearchForHerdField(String Arg0) {
+        actions.sendKeys(HerdSearchField,Arg0);
+    }
+
+    // Staff Select the Map Printing Type
+    public void StaffSelectMapPrintingType(String Type) {
+        By PrintingType = By.xpath("//mat-radio-group[@formcontrolname='selectOption']/descendant::label[contains(text(),'"+Type+"')]");
+        actions.clickUsingJS(PrintingType);
+    }
+
+    // Staff Select the Search By Type
+    public void StaffSelectTheSearchByType(String Type) {
+        By PrintingType = By.xpath("//mat-radio-button/descendant::label[contains(text(),'"+Type+"')]");
+        actions.clickUsingJS(PrintingType);
+    }
+
+    // Staff Check the No Parcels found warning
+    public Boolean StaffCheckNoParcelsWarning() {
+        By ParcelsWarning = By.xpath("//mat-card-title[contains(text(),'Generate Map Settings')]/parent::mat-card/descendant::strong[contains(text(),'No results found')]");
+        Boolean NoResults = driver.findElement(ParcelsWarning).isDisplayed();
+        return NoResults;
+    }
+
+    // Staff Check if Generate Map Settings Section visible
+    public void StaffCheckIfGenerateMapSettingsPresent() {
+        By GenerateMapSettingsSection = By.xpath("//biss-map-generation");
+        boolean GenerateSectionStatus = driver.findElements(GenerateMapSettingsSection).isEmpty();
+        if (!GenerateSectionStatus) {
+            System.out.println("Generate Map Settings Section Visible");
+        }
+        else {
+            System.out.println("Wrong Parcel format & Generate Map Settings Section not Visible");
+        }
+    }
+    // endregion
+
+    // region Application Search Page
+    // Staff Scroll to the Documents Section
+    public void StaffScrollToDocumentSection() throws InterruptedException {
+        By DocSection = By.xpath("//biss-search-herd-document");
+        actions.scrollByUsingJS(DocSection);
+    }
+    // endregion
+
+    // region Main Elements
+
+    // Agent Click on Agent Number on Top Right Corner
+    public void AgentClickOnMyAccountButton() {
+        By MyAccountButton = By.xpath("//button[@aria-label='My account']");
+        actions.waitForVisibilityOfElement(MyAccountButton,30);
+        actions.clickUsingJS(MyAccountButton);
+    }
+
+    // Agent Click on Exit Button in My Account Menu
+    public void AgentClickOnExitButton() {
+        By MyAccountButton = By.xpath("//button[@aria-label='Exit BISS']");
+        actions.waitForVisibilityOfElement(MyAccountButton,30);
+        actions.clickUsingJS(MyAccountButton);
+    }
+
+    // Agent Click on the Contact Us Button in Top Right Corner
+    public void AgentClickOnContactUsButton() {
+        By MyAccountButton = By.xpath("//button[@aria-label='Contact']");
+        actions.waitForVisibilityOfElement(MyAccountButton,30);
+        actions.clickUsingJS(MyAccountButton);
+    }
+
+    // Agent Click on the Side Navbar Elements
+    // Locator Arg Home, My Clients
+    public void AgentClickOnDashboardSidenavElements(String Arg0) {
+        By SidenavButtons = By.xpath("//a/descendant::mat-icon[@aria-label='"+Arg0+"']");
+        actions.waitForVisibilityOfElement(SidenavButtons,30);
+        actions.clickUsingJS(SidenavButtons);
+    }
+
+    // endregion
+
+    //region Applications Section
+
+//    // Locators
+    By ViewTotalClients = By.xpath("//mat-card-title[contains(text(),'BISS Applications 2023')]/parent::mat-card/descendant::a[contains(text(),'View clients')]");
+
+    // Click on the Total Clients Button
+    public void AgentClickOnTotalClientsButton() {
+        actions.waitForVisibilityOfElement(ViewTotalClients,30);
+        actions.clickUsingJS(ViewTotalClients);
+    }
+
+    // endregion
+
+    // region News Section
+
+    // Agent Click on the Read More Link in News section
+    // Locator Arg "Read More"
+    public void AgentClickOnReadMoreNewsButton() {
+        By ReadMoreLink = By.xpath("//a[contains(text(),'Read More')]");
+        actions.waitForVisibilityOfElement(ReadMoreLink,30);
+        actions.clickUsingJS(ReadMoreLink);
+    }
+
+    // Click on the News View Button
+    // Use the method in MyClients Page
+    // Locators Arg "Next page" , "Previous Page"
+    public void AgentClickOnNewsNextAndPreviousButton(String Arg0) {
+        By NewsNextAndPreviousButton = By.xpath("//button[@aria-label='"+Arg0+"']");
+        actions.waitForVisibilityOfElement(NewsNextAndPreviousButton,30);
+        actions.clickUsingJS(NewsNextAndPreviousButton);
+    }
+
+    // endregion
+
+    // region Quick Links Section
+
+    // Agent Click on View Client Button in Quick Links Section
+    // Locators Arg "Transfer of Entitlements" , "CISYF"
+    public void AgentClickOnQuickLinksViewClientsLink(String Arg0) {
+        By TransferOfEntitlementsViewClientsLink = By.xpath("//div[contains(text(),'"+Arg0+"')]/parent::div/descendant::a[contains(text(),'View clients')]");
+        actions.waitForVisibilityOfElement(TransferOfEntitlementsViewClientsLink,30);
+        actions.clickUsingJS(TransferOfEntitlementsViewClientsLink);
+    }
+    // endregion
+
+
+
+    // endregion
+
+    // region Staff BISS Code
+
+    // Locators
+    // By CheckPaymentLink = By.xpath("//a[contains(text(),'Check Payment')]");
+
+
+
+    // region Common Elements
+
+    // Staff Click on Button in Application
+    public void StaffClickOnButton(String Button) {
+        By ButtonName = By.xpath("//button/descendant::span[contains(text(),'"+Button+"')]");
+//        actions.waitForVisibilityOfElement(ButtonName,40);
+        actions.clickUsingJS(ButtonName);
+    }
+
+    // Staff Click on the Card in Scheme Selection Page
+    public void StaffClickOnSchemeSelectionCard(String Scheme) {
+        By SchemeSelectionCard = By.xpath("//mat-card-title/descendant::span[contains(text(),'"+Scheme+"')]");
+        actions.clickUsingJS(SchemeSelectionCard);
+    }
+
+    // Staff Check for card title and abbreviation
+    public void StaffCheckCardTitleAndAbbreviation(String Title, String Abbreviation) {
+        By TitleLocator = By.xpath("//biss-scheme-card/descendant::mat-card-title/descendant::span[contains(text(),'"+Title+"')]");
+        By AbbreviationLocator = By.xpath("//biss-scheme-card/descendant::mat-card-content/descendant::div[contains(text(),'"+Abbreviation+"')]");
+        boolean TitlePresence = driver.findElements(TitleLocator).isEmpty();
+        boolean AbbreviationPresence = driver.findElements(AbbreviationLocator).isEmpty();
+        if((!TitlePresence) && (!AbbreviationPresence)) {
+            System.out.println("Card with "+Title+" is present");
+            System.out.println("The card with "+Title+" has the abbreviation as "+Abbreviation);
+        }
+        else if ((TitlePresence) && (AbbreviationPresence)) {
+            System.out.println("Card Title or Card missing");
+            System.out.println("Card Abbreviation Missing");
+        }
+    }
+
+    // Staff Check if Scheme Selected or not
+    public void StaffCheckIfSchemeCardSelected(String Scheme) {
+        By SelectedScheme = By.xpath("//mat-card-title/descendant::span[contains(text(),'"+Scheme+"')]/ancestor::mat-card[contains(@class,'scheme-selected')]");
+        By NotSelectedScheme = By.xpath("//mat-card-title/descendant::span[contains(text(),'"+Scheme+"')]/ancestor::mat-card[contains(@class,'scheme-not-selected')]");
+        if(driver.findElements(SelectedScheme).isEmpty()){
+            System.out.println("The scheme "+Scheme+" is not selected");
+        }
+        else if(driver.findElements(NotSelectedScheme).isEmpty()){
+            System.out.println("The scheme "+Scheme+" is not selected");
+        }
+    }
+
+    // Staff Check if Element present
+    // Arg : ElementName
+    public boolean StaffCheckIfElementPresent(String ElementName) {
+        By ElementLocator = By.xpath("//input[@formcontrolname='"+ElementName+"']");
+        boolean ElementCheck = driver.findElements(ElementLocator).isEmpty();
+        return ElementCheck;
+    }
+
+    public boolean StaffCheckIfDropdownPresent(String ElementName) {
+        By ElementLocator = By.xpath("//mat-select[@formcontrolname='"+ElementName+"']");
+        boolean ElementCheck = driver.findElements(ElementLocator).isEmpty();
+        return ElementCheck;
+    }
+
+    // Staff Click On the QuickLinks in Side Nav Bar
+    // Linkname : Home, Coordination, Payment QA, SIM
+    public void StaffClickOnQuickLinks(String LinkName) {
+        By QuickLinks = By.xpath("//mat-icon[@aria-label='"+LinkName+"']");
+        actions.waitForVisibilityOfElement(QuickLinks,40);
+        actions.clickUsingJS(QuickLinks);
+    }
+
+    ////mat-icon[//contains(@aria-label,'Coordination')]
+
+    public void StaffClickOnSideNavQuickLink(String MenuItem) {
+        By QuickLinks = By.xpath("//mat-icon[@aria-label='"+MenuItem+"']");
+//        actions.waitForVisibilityOfElement(QuickLinks,40);
+        actions.clickUsingJS(QuickLinks);
+    }
+
+    public void staffChecksIfAdminInspectionIsCompletedError(String table, String viewOrAmend, int num) {
+
+          //  StaffClickOnSideNavQuickLink("BISS Amendments");
+            List<WebElement> adminInspectionIsCompletedError = driver.findElements(By.xpath("//div[contains(text(),'Admin Inspection is Completed.')]"));
+            if(adminInspectionIsCompletedError.isEmpty()){
+                System.out.println("No Admin Inspection Completed error");
+                StaffClickOnViewButton(table, viewOrAmend, num);
+                actions.waitforSeconds(5);
+            }
+            else{
+                StaffClickOnViewButton(table, "View", num);
+                StaffClickOnSideNavQuickLink("Inspections");
+                StaffClickOnTabInDashboard("Admin Inspections");
+                actions.clickUsingJS(By.xpath("//button/preceding::span[contains(text(),' Delete all ')]"));
+                actions.waitForVisibilityOfElement(By.xpath("//button/preceding::span[contains(text(),'Delete all')]"),5);
+                driver.findElement(By.xpath("//lib-biss-dialog/div/div[3]/div/button[2]/span[2]")).click();
+                StaffClickOnSideNavQuickLink("BISS Amendments");
+            }
+
+    }
+
+    public void staffClickOnCoordinationOrCoordinationAmendmentLinkInNavbar() {
+        By Coordination = By.xpath("//mat-icon[@aria-label='Coordination']");
+        actions.waitForVisibilityOfElement(Coordination,4);
+        List<WebElement> CoordinationVisibilityCheck = driver.findElements(Coordination);
+        if (CoordinationVisibilityCheck.isEmpty()) {
+            By EditButton = By.xpath("//mat-icon[@aria-label='Coordination Amendments']");
+            actions.clickUsingJS(EditButton);
+        }
+        else {
+            //    By StartApplication = By.xpath("//button/descendant::span[contains(text(),' Start Application ')]");
+            actions.clickUsingJS(Coordination);
+        }
+    }
+
+
+    // Staff Click on Parcels Header in Inspections Page
+    public void StaffClickOnParcelNoHeader() {
+        By ParcelNoHeader = By.xpath("//div[contains(text(),'Parcel no.')]");
+        actions.clickUsingJS(ParcelNoHeader);
+    }
+
+    // Staff Verify if Quick Link is Not Present in SidenavBar
+    public boolean StaffCheckIfSideNavLinkIsNotPresent(String MenuItem) {
+        By SideNavElements = By.xpath("//mat-icon[contains(@aria-label,'"+MenuItem+"')]");
+        return driver.findElements(SideNavElements).isEmpty();
+    }
+
+    // endregion
+
+    // region Scheme Selection
+    // Staff get Title of card in the Scheme Selection Screen
+    public String StaffGetSchemeSelectionCardTitle(String CardNum) {
+        By SchemeCardtitle = By.xpath("(//biss-scheme-card/descendant::mat-card-title/span)["+CardNum+"]");
+        return driver.findElement(SchemeCardtitle).getText();
+    }
+
+    // Staff get Acronym Expansion of card in the Scheme Selection Screen
+    public String StaffGetSchemeSelectionCardAcronymExpansion(String CardNum) {
+        By SchemeCardContent = By.xpath("(//biss-scheme-card/descendant::mat-card-content/div)["+CardNum+"]");
+        return driver.findElement(SchemeCardContent).getText();
+    }
+
+    // Staff Click on View Details Link for a Scheme Card
+    public void StaffClickOnViewDetailsLinkForSchemeCard(String Scheme) {
+        By ViewDetailsLink = By.xpath("//biss-scheme-card/descendant::mat-card-title/descendant::span[contains(text(),'"+Scheme+"')]/ancestor::biss-scheme-card/descendant::a");
+        actions.clickUsingJS(ViewDetailsLink);
+    }
+
+    // Staff get details from the View Details Dialog for Schemes
+    public void StaffGetViewDetailsDialogContent(String Scheme) {
+        By FirstPara = By.xpath("//span[contains(text(),'"+Scheme+"')]/parent::div/parent::div/parent::div/following-sibling::div[1]/descendant::p");
+        System.out.println(driver.findElement(FirstPara).getText());
+        By Pointers = By.xpath("//span[contains(text(),'"+Scheme+"')]/parent::div/parent::div/parent::div/following-sibling::div[1]/descendant::ul/li");
+        List<WebElement> SchemeDetails = driver.findElements(Pointers);
+        int PointerCount = SchemeDetails.size();
+        System.out.println(PointerCount);
+        for (int i=0; i<=PointerCount-1;i++) {
+            System.out.println(SchemeDetails.get(i).getText());
+        }
+    }
+
+    // Staff Check the switch exists for scheme cards
+    public void StaffCheckSwitchToggleForSchemeCards(String Scheme) {
+        By SchemeToggle = By.xpath("//biss-scheme-card/descendant::mat-card-title/descendant::span[contains(text(),'"+Scheme+"')]/ancestor::mat-card-title/descendant::button[@role='switch']");
+        if(!driver.findElements(SchemeToggle).isEmpty()) {
+            System.out.println("Toggle present for "+Scheme+" scheme");
+        }
+        else {
+            System.out.println("Toggle not present for "+Scheme+" scheme");
+        }
+    }
+
+    // Staff Check if Scheme is Selected
+    public void StaffCheckIfSchemeSelected(String Scheme) {
+        By SchemeSelected = By.xpath("//mat-card-title/span[text()='"+Scheme+"']/ancestor::mat-card[contains(@class,'scheme-selected')]");
+        By SchemeNotSelected = By.xpath("//mat-card-title/span[text()='"+Scheme+"']/ancestor::mat-card[contains(@class,'scheme-not-selected')]");
+        if(!driver.findElements(SchemeSelected).isEmpty()){
+            System.out.println("The "+Scheme+" Scheme toggle is selected and opted in");
+        } else if (!driver.findElements(SchemeNotSelected).isEmpty()) {
+            System.out.println("The "+Scheme+" Scheme toggle is not selected and not opted in");
+        }
+    }
+
+    // Staff Check if Scheme is not Selected
+    public void StaffCheckIfSchemeNotSelected(String Scheme) {
+        By SchemeSelection = By.xpath("//mat-card-title/span[text()='"+Scheme+"']/ancestor::mat-card[contains(@class,'scheme-not-selected')]");
+        if(!driver.findElements(SchemeSelection).isEmpty()){
+            System.out.println("The "+Scheme+" Scheme toggle is not selected and not opted in");
+        }
+        else {
+            System.out.println("The "+Scheme+" Scheme toggle is selected and opted in");
+        }
+    }
+
+    // Staff take screenshot of the Details for Scheme Card
+    public void StaffCaptureScreenshotOfScenario(Scenario scenario) {
+        Allure.addAttachment("screenshot", new ByteArrayInputStream(((TakesScreenshot) driver).getScreenshotAs(OutputType.BYTES)));
+        byte[] img=(byte[]) ((TakesScreenshot)driver).getScreenshotAs(OutputType.BYTES);
+        scenario.attach(img,"image/jpeg",scenario.getName());
+    }
+    // endregion
+
+    // region Active Farmer
+
+    // Staff Select Admin Check Result
+    public void StaffSelectAdminCheckResult(String Option) {
+        By ResultOption = By.xpath("//mat-radio-button[@value='"+Option+"']/descendant::input");
+        actions.clickUsingJS(ResultOption);
+    }
+
+    // Staff Enter Text in Admin Notes Text Area
+    public void StaffEnterTextInAdminNotes(String Note) {
+        By AdminNotesTextArea = By.xpath("//biss-active-farmer-admin-notes/descendant::textarea");
+        actions.sendKeys(AdminNotesTextArea,Note);
+    }
+
+    // endregion
+
+    // region Payments
+
+    // Staff Check for Headings in Payment Summary Table
+    public void StaffCheckPaymentSummaryHeadings(String Header) {
+        By PaymentSummaryHeaders = By.xpath("//mat-card-title[contains(text(),'Payment Summary')]/ancestor::mat-card/descendant::th[contains(text(),'"+Header+"')]");
+        if (driver.findElements(PaymentSummaryHeaders).isEmpty()) {
+            System.out.println(Header + " Header doesn't exist");
+        }
+        else {
+            System.out.println(Header + " Header exists");
+        }
+    }
+
+    // Staff Check if the Euro symbol exists below headers
+    public void StaffCheckHeaderAmountEuroSymbols(String AmountHeader) {
+        By AmountHeaderLoc = By.xpath("//th[contains(@class,'cdk-column-"+AmountHeader+"')]");
+        if(driver.findElements(AmountHeaderLoc).isEmpty()) {
+            System.out.println("The "+AmountHeaderLoc+" heading doesn't exist");
+        }
+        else {
+            System.out.println(AmountHeader+" heading exists");
+        }
+    }
+
+    // Staff Check for Reduction Type Header
+    public void StaffCheckPaymentSummaryInternalRowHeaders(int Order) {
+        By PaymentSummaryRowHeaders = By.xpath("(//th[contains(@class,'cdk-column-reductionType')])["+Order+"]");
+        if (driver.findElements(PaymentSummaryRowHeaders).isEmpty()) {
+            if(Order == 1){
+                System.out.println("First Reduction Type Header doesn't exist");
+            }
+            else if (Order == 2){
+                System.out.println("Second Reduction Type Header doesn't exist");
+            }
+        }
+        else {
+            if(Order == 1) {
+                System.out.println("First Reduction Type Header exists");
+            }
+            else if (Order == 2){
+                System.out.println("Second Reduction Type Header exists");
+            }
+        }
+    }
+
+
+    // Staff Check for Reduction Type Headings 1
+    public void StaffCheckReductionTypeHeadings(String Header) {
+        By HeadingLocator = By.xpath("//mat-card-title[contains(text(), 'Payment Summary')]/ancestor::mat-card//td[contains(@class,'mat-column-reductionType')]/descendant::p[text()='"+Header+"']");
+        if (driver.findElements(HeadingLocator).isEmpty()) {
+            System.out.println(Header + " Header doesn't exist");
+        }
+        else {
+            System.out.println(Header + " Header exists");
+            // Print the amounts
+            By BissAmountLoc = By.xpath("//p[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-bissAmount')]");
+            By CrissAmountLoc = By.xpath("//p[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-crissAmount')]");
+            By CisyfAmountLoc = By.xpath("//p[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-cisyfAmount')]");
+            String BissAmount = driver.findElement(BissAmountLoc).getText();
+            String CrissAmount = driver.findElement(CrissAmountLoc).getText();
+            String CisyfAmount = driver.findElement(CisyfAmountLoc).getText();
+            System.out.println("The "+Header+" for BISS is : "+BissAmount);
+            System.out.println("The "+Header+" for CRISS is : "+CrissAmount);
+            System.out.println("The "+Header+" for CISYF is : "+CisyfAmount);
+        }
+    }
+
+    // Staff Check for Reduction Type Headings 2
+    public void StaffCheckReductionTypeHeadings2(String Header) {
+        By HeadingLocator2 = By.xpath("//mat-card-title[contains(text(), 'Payment Summary')]/ancestor::mat-card//td[contains(@class,'mat-column-reductionType')]/descendant::p/b[text()='"+Header+"']");
+        if(driver.findElements(HeadingLocator2).isEmpty()) {
+            System.out.println(Header + " Header doesn't exist");
+        }
+        else {
+            System.out.println(Header + " Header exists");
+            // Print the amounts
+            By BissAmountLoc = By.xpath("//p/b[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-bissAmount')]");
+            By CrissAmountLoc = By.xpath("//p/b[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-crissAmount')]");
+            By CisyfAmountLoc = By.xpath("//p/b[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-cisyfAmount')]");
+            String BissAmount = driver.findElement(BissAmountLoc).getText();
+            String CrissAmount = driver.findElement(CrissAmountLoc).getText();
+            String CisyfAmount = driver.findElement(CisyfAmountLoc).getText();
+            System.out.println("The "+Header+" for BISS is : "+BissAmount);
+            System.out.println("The "+Header+" for CRISS is : "+CrissAmount);
+            System.out.println("The "+Header+" for CISYF is : "+CisyfAmount);
+        }
+    }
+
+    // Staff Check for Reduction Type Headings 3
+    public void StaffCheckReductionTypeHeadings3(String Header) {
+        By HeadingLocator3 = By.xpath("//mat-card-title[contains(text(), 'Payment Summary')]/ancestor::mat-card//td[contains(@class,'mat-column-reductionType')]/descendant::p[contains(text(),'"+Header+"')]");
+        if (driver.findElements(HeadingLocator3).isEmpty()) {
+            System.out.println(Header + " Header doesn't exist");
+        }
+        else {
+            System.out.println(Header + " Header exists");
+            // Print the amounts
+            By BissAmountLoc = By.xpath("//p[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-bissAmount')]");
+            By CrissAmountLoc = By.xpath("//p[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-crissAmount')]");
+            By CisyfAmountLoc = By.xpath("//p[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-cisyfAmount')]");
+            String BissAmount = driver.findElement(BissAmountLoc).getText();
+            String CrissAmount = driver.findElement(CrissAmountLoc).getText();
+            String CisyfAmount = driver.findElement(CisyfAmountLoc).getText();
+            System.out.println("The "+Header+" for BISS is : "+BissAmount);
+            System.out.println("The "+Header+" for CRISS is : "+CrissAmount);
+            System.out.println("The "+Header+" for CISYF is : "+CisyfAmount);
+        }
+    }
+
+    // Staff Check for Reduction Type Headings 4
+    public void StaffCheckReductionTypeHeadings4(String Header) {
+        By HeadingLocator3 = By.xpath("//mat-card-title[contains(text(), 'Payment Summary')]/ancestor::mat-card//td[contains(@class,'mat-column-reductionType')]/descendant::b[contains(text(),'"+Header+"')]");
+        if (driver.findElements(HeadingLocator3).isEmpty()) {
+            System.out.println(Header + " Header doesn't exist");
+        }
+        else {
+            System.out.println(Header + " Header exists");
+            // Print the amounts
+            By BissAmountLoc = By.xpath("//b[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-bissAmount')]");
+            By CrissAmountLoc = By.xpath("//b[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-crissAmount')]");
+            By CisyfAmountLoc = By.xpath("//b[contains(text(),'"+Header+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-cisyfAmount')]");
+            String BissAmount = driver.findElement(BissAmountLoc).getText();
+            String CrissAmount = driver.findElement(CrissAmountLoc).getText();
+            String CisyfAmount = driver.findElement(CisyfAmountLoc).getText();
+            System.out.println("The "+Header+" for BISS is : "+BissAmount);
+            System.out.println("The "+Header+" for CRISS is : "+CrissAmount);
+            System.out.println("The "+Header+" for CISYF is : "+CisyfAmount);
+        }
+    }
+
+    // Staff Check Total DPS Payment Amount
+    public Double StaffCheckTotalDPSPayment() {
+        By PaymentDPS = By.xpath("//td[text()=' Total DPS Payment ']/parent::tr/child::td[contains(@class,'mat-column-total')]");
+        String TotalPayment = driver.findElement(PaymentDPS).getText();
+        TotalPayment = TotalPayment.replaceAll(",","");
+        Double DPSTotal = Double.parseDouble(TotalPayment);
+        System.out.println(DPSTotal);
+        return DPSTotal;
+    }
+
+    // Staff Check Sum of Net Payment Amounts
+    public Double StaffCalculateTotalNetPayments() {
+        By BissNetAmount = By.xpath("//p[contains(text(),'Net Payment Amount')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-bissAmount')]");
+        By CrissNetAmount = By.xpath("//p[contains(text(),'Net Payment Amount')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-crissAmount')]");
+        By CisyfNetAmount = By.xpath("//p[contains(text(),'Net Payment Amount')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-cisyfAmount')]");
+        String Biss = driver.findElement(BissNetAmount).getText();
+        Biss = Biss.replaceAll(",","");
+        String Criss = driver.findElement(CrissNetAmount).getText();
+        Criss = Criss.replaceAll(",","");
+        String Cisyf = driver.findElement(CisyfNetAmount).getText();
+        Cisyf = Cisyf.replaceAll(",","");
+        Double NetPaymentTotal = Double.parseDouble(Biss) + Double.parseDouble(Criss) + Double.parseDouble(Cisyf);
+        System.out.println(NetPaymentTotal);
+        return NetPaymentTotal;
+    }
+
+    // endregion
+
+    // region AMS
+    // Staff switch between two partner herds
+    public void StaffSwitchBetweenPartnerHerdTabs(String Herd) {
+        By HerdTab = By.xpath("//a/descendant::span[contains(text(),'"+Herd+"')]");
+        actions.clickUsingJS(HerdTab);
+    }
+
+    // Staff Check if Headers Present for AMS
+    public void StaffCheckHeadersInAMSTab (String Header) {
+        By HeaderLocator = By.xpath("//biss-ams-details-table/descendant::th[contains(text(),'"+Header+"')]");
+        if (Header.equals("Parcel no.")) {
+            By ParcelNoHeaderLocator = By.xpath("//biss-ams-details-table/descendant::th/descendant::div[contains(text(),'"+Header+"')]");
+            if (driver.findElements(ParcelNoHeaderLocator).isEmpty()) {
+                System.out.println(Header + " Header doesn't exist");
+            }
+            else {
+                System.out.println(Header + " Header exists");
+            }
+        }
+        else {
+            if (driver.findElements(HeaderLocator).isEmpty()) {
+                System.out.println(Header + " Header doesn't exist");
+            }
+            else {
+                System.out.println(Header + " Header exists");
+            }
+        }
+    }
+
+    // Staff Check for Client Details in the top right corner of AMS screen
+    public void StaffCheckClientDetails(String Detail) {
+        By ClientDetails = By.xpath("//span[contains(text(),'"+Detail+"')]/following-sibling::span[@class='client-value']");
+        String ClientInfo = driver.findElement(ClientDetails).getText();
+        System.out.println(ClientInfo);
+        if (driver.findElements(ClientDetails).isEmpty()) {
+            System.out.println(Detail + " Value doesn't exist");
+        }
+        else {
+            System.out.println(Detail + " Value displayed as "+ClientInfo);
+        }
+    }
+
+    // Staff get value of dropdown in AMS page
+    public String StaffGetAMSSchemeYearDropdwownValue() {
+        By AMSschemeYear = By.xpath("//mat-select[@id='schemeYear']");
+        String SchemeYear = driver.findElement(AMSschemeYear).getAttribute("value");
+        System.out.println(SchemeYear);
+        return SchemeYear;
+    }
+
+    // Staff Check if Pagination is present and switch between pages
+    public void StaffCheckAndNavigateAMSPagination() {
+        By PaginatorPageSize = By.xpath("//div[contains(@class,'mat-mdc-paginator-page-size ')]");
+        By PaginatorRangeActions = By.xpath("//div[contains(@class,'mat-mdc-paginator-range-actions')]");
+        if((!driver.findElements(PaginatorPageSize).isEmpty())&&(!(driver.findElements(PaginatorRangeActions).isEmpty()))){
+            System.out.println("Pagination Section Working Fine");
+            By NextButton = By.xpath("//button[@aria-label='Next page']");
+            By BackButton = By.xpath("//button[@aria-label='Previous page']");
+            actions.clickUsingJS(NextButton);
+            actions.clickUsingJS(BackButton);
+        }
+        else {
+            System.out.println("Issue with Pagination Section");
+        }
+    }
+    // endregion
+
+
+    // region Code to refactor
+
+    // Staff Check Applied Tickmark for Scheme
+    public boolean StaffCheckAppliedTickMarkForScheme(String Scheme) {
+        By SchemeTick = By.xpath("//td[contains(text(),'"+Scheme+"')]/preceding-sibling::td/mat-icon");
+        boolean SchemeTickPresence = driver.findElements(SchemeTick).isEmpty();
+        return SchemeTickPresence;
+    }
+
+    // Staff navigate between tabs in the Dashboard Page
+    // Tabs : Application, Farmer, Parcels, Declaration of Undertaking, Reference No, Online Response, Events/AMS
+    // Tabs : Pattern Matching, News, Application Dates
+    public void StaffSwitchDashboardTabs(String Tab) throws InterruptedException {
+        By TabLinks = By.xpath("//div[contains(text(),'"+Tab+"')]");
+//        actions.waitForVisibilityOfElement(TabLinks,40);
+        Thread.sleep(2000);
+        actions.clickUsingJS(TabLinks);
+    }
+
+    // Staff click on Check Payment Link in Payment QA
+    public void StaffClickOnLinkInList(String LinkName) {
+        By CheckPaymentLink = By.xpath("(//a[contains(text(),'"+LinkName+"')])[1]");
+        actions.waitForVisibilityOfElement(CheckPaymentLink,40);
+        actions.clickUsingJS(CheckPaymentLink);
+    }
+
+    public void StaffEnterValue(String FieldName, String Value) {
+        By InputField = By.xpath("//input[@formcontrolname='"+FieldName+"']");
+        actions.waitForVisibilityOfElement(InputField,40);
+        actions.sendKeys(InputField,Value);
+    }
+
+    // Staff click on First View Link In List
+    public void StaffClickOnViewLinkInList() {
+        By ViewLink = By.xpath("(//a[contains(text(),'View')])[1]");
+        actions.waitForVisibilityOfElement(ViewLink, 40);
+        actions.clickUsingJS(ViewLink);
+    }
+
+    // Staff Click on First Link in the Application List
+    // Argument : application-search-table, View
+    public void StaffClickOnViewButton(String Table, String Link, int LinkNo) {
+        By LinkInTable = By.xpath("(//table[contains(@class,'"+Table+"')]/descendant::a[contains(text(),'"+Link+"')])["+LinkNo+"]");
+        if (driver.findElements(LinkInTable).isEmpty()) {
+            System.out.println("No Application for searched Herd");
+        }
+        else {
+            actions.clickUsingJS(LinkInTable);
+        }
+    }
+
+    // Click on the Parcel Search Actions Button
+    // Arguments : View Claimants, View Commonage, Parcel History, View Map
+    public void StaffClickOnParcelSearchAction(String Action) {
+        By ActionButtons = By.xpath("(//button[@aria-label='"+Action+"'])[1]");
+        actions.clickUsingJS(ActionButtons);
+    }
+
+
+    // Staff Scroll Info Icon into View
+    public void StaffScrollDownToInfoIcon(String Icon) {
+        By InfoIconLocator = By.xpath("");
+    }
+
+    // Staff hover over to the Info Icon
+    // Determined area with Compensation
+    public void StaffMoveCursorToInfoIcon(String Icon) {
+        By InfoIconLocator = By.xpath("//span[contains(text(),'"+Icon+"')]/parent::div/mat-icon");
+        Actions act = new Actions(driver);
+        act.moveToElement(driver.findElement(InfoIconLocator));
+    }
+
+    // Staff change option in Dropdown without formcontrolname
+    public void StaffChangeNoFormcontrolDropdownValue(String DropdownLabel, String Value) {
+        actions.clickUsingJS(By.xpath("//label/b[contains(text(),'"+DropdownLabel+"')]/ancestor::form/descendant::mat-select"));
+        By DropdownValueValue = By.xpath("//span[contains(text(),'"+Value+"')]/ancestor::mat-option");
+        actions.waitForVisibilityOfElement(DropdownValueValue, 30);
+        actions.clickUsingJS(DropdownValueValue);
+    }
+
+
+    // Staff Change value in Dropdown
+    // Argument : dropdown, value
+    public void StaffChangeDropdownValue(String DropdownName, String Value) {
+        actions.clickUsingJS(By.xpath("//mat-select[@formcontrolname='"+DropdownName+"']"));
+        By DropdownValueValue = By.xpath("//span[contains(text(),'"+Value+"')]/ancestor::mat-option");
+        actions.waitForVisibilityOfElement(DropdownValueValue, 30);
+        actions.clickUsingJS(DropdownValueValue);
+    }
+
+    // Staff Change value in Dropdown (Temp for Correspondence Page)
+    // Argument : dropdown, value
+    public void StaffChangeQueryLetterDropdownValue(String DropdownName, String Value) {
+        actions.clickUsingJS(By.xpath("//mat-select[@id='"+DropdownName+"']"));
+        By DropdownValueValue = By.xpath("//span[contains(text(),'"+Value+"')]/ancestor::mat-option");
+        actions.waitForVisibilityOfElement(DropdownValueValue, 30);
+        actions.clickUsingJS(DropdownValueValue);
+    }
+
+    // Staff Change value in Multi Option Dropdown
+    // Argument : dropdown, Value
+    public void StaffChangeValueForMultiOptionDropdown(String DropdownName) throws InterruptedException {
+        Thread.sleep(2000);
+        By DropdownLocator = By.xpath("//mat-select[@formcontrolname='"+DropdownName+"']");
+        actions.clickUsingJS(DropdownLocator);
+        Thread.sleep(2000);
+        List<WebElement> DropdownValues = driver.findElements(By.xpath("//mat-option"));
+        int n = DropdownValues.size();
+        String TargetValue = DropdownValues.get(n-1).getText();
+        System.out.println(TargetValue);
+        By ParcelValue = By.xpath("//span[contains(text(),'"+TargetValue+"')]/ancestor::mat-option");
+        actions.clickUsingJS(ParcelValue);
+        driver.switchTo().activeElement();
+        driver.findElement(DropdownLocator).sendKeys(Keys.ESCAPE);
+        Thread.sleep(4000);
+    }
+
+    // Staff Open and Close Multi Option Dropdown
+    public void StaffOpenAndCloseMultiSelectDropdown(String DropdownName) throws InterruptedException {
+        Thread.sleep(2000);
+        By DropdownLocator = By.xpath("//mat-select[@formcontrolname='"+DropdownName+"']");
+        actions.clickUsingJS(DropdownLocator);
+        Thread.sleep(2000);
+        driver.switchTo().activeElement();
+        driver.findElement(DropdownLocator).sendKeys(Keys.ESCAPE);
+        Thread.sleep(2000);
+    }
+
+    // Staff Select All Parcels in Multiselect Dropddown
+    public void StaffSelectAllOptionsForMultiOptionDropdown(String DropdownName) throws InterruptedException {
+        Thread.sleep(2000);
+        By DropdownLocator = By.xpath("//mat-select[@formcontrolname='"+DropdownName+"']");
+        actions.clickUsingJS(DropdownLocator);
+        Thread.sleep(4000);
+//        actions.clickUsingJS(DropdownLocator);
+        List<WebElement> DropdownValues = driver.findElements(By.xpath("//mat-option"));
+        int n = DropdownValues.size();
+        String TargetValue = DropdownValues.get(0).getText();
+        System.out.println(TargetValue);
+        By YearValue = By.xpath("//span[contains(text(),'"+TargetValue+"')]/ancestor::mat-option");
+        //actions.waitForVisibilityOfElement(YearValue, 30);
+        actions.clickUsingJS(YearValue);
+        driver.findElement(DropdownLocator).sendKeys(Keys.ESCAPE);
+        Thread.sleep(2000);
+    }
+
+    // Staff Click On the Print Legend CheckBox
+    public void StaffClickOnPrintLegendCheckBox() throws InterruptedException {
+        By LegendIndicator = By.xpath("//mat-checkbox[@formcontrolname='legendIndicator']/descendant::input[@type='checkbox']");
+//        actions.scrollByUsingJS(SIMIndicator);
+//        Thread.sleep(2000);
+        actions.clickUsingJS(LegendIndicator);
+    }
+
+    // Herd Number Required Error Message
+    public Boolean StaffCheckHerdRequiredError(String Warning) {
+        By ErrorMessage = By.xpath("//mat-error/span[contains(text(),'"+Warning+"')]");
+        Boolean ErrorMessageVisibility = driver.findElement(ErrorMessage).isDisplayed();
+        return ErrorMessageVisibility;
+    }
+
+    // Error Message without Span
+    public Boolean StaffCheckErrorWithNoSpan(String Warning) {
+        By ErrorMessage = By.xpath("//mat-error[contains(text(),'"+Warning+"')]");
+        Boolean ErrorMessageVisibility = driver.findElement(ErrorMessage).isDisplayed();
+        return ErrorMessageVisibility;
+    }
+
+    // Staff Check Herd Details being populated
+    public String StaffCheckHerdDetails(String Detail) {
+        By DetailLocator = By.xpath("//mat-card-title[contains(text(),'Generate Map Settings')]/parent::mat-card/descendant::td[contains(@class,'cdk-column-"+Detail+"')]");
+        return driver.findElement(DetailLocator).getText();
+    }
+
+
+    // Staff Check Generated Map Details
+    public String StaffCheckGeneratedMapDetails(String Detail) {
+        By DetailLocator = By.xpath("(//biss-map-generation-status/descendant::td[contains(@class,'cdk-column-"+Detail+"')])[1]");
+        return driver.findElement(DetailLocator).getText();
+    }
+
+    // Staff Check Ready to Download Status
+    public String StaffCheckReadyToDownloadStatus() {
+        By StatusLocator = By.xpath("(//biss-map-generation-status/descendant::tr/descendant::td[contains(@class,'cdk-column-status')]/a)[1]");
+        System.out.println(driver.findElement(StatusLocator).getText());
+        return driver.findElement(StatusLocator).getText();
+    }
+
+    // Staff Click on the Pagination Buttons
+    public void StaffClickOnPaginationButtons(String ButtonName) {
+        By PaginationButton = By.xpath("//button[contains(@aria-label,'"+ButtonName+"')]");
+        if(driver.findElement(PaginationButton).isEnabled()) {
+            driver.findElement(PaginationButton).click();
+        }
+        else {
+            System.out.println("Pagination Button not Present");
+        }
+    }
+
+    // Staff Click On the Ready to Download Link
+    public void StaffClickOnReadytoDownload() {
+        By DownloadButton = By.xpath("(//td/a[contains(text(),'Ready to download')])[1]");
+        actions.clickUsingJS(DownloadButton);
+    }
+
+
+    // Staff tick a CheckBox
+    public void StaffTickCheckBox(String CheckBox) {
+        By CheckBoxLocator = By.xpath("//input[@id='"+CheckBox+"']");
+        actions.clickUsingJS(CheckBoxLocator);
+    }
+
+
+    // endregion
+
+    // region Application Search Page
+    // Application Tab
+    // Staff Enter Value in Field
+    // Locator : herdNumber
+//    public void StaffEnterValue(String FieldName, String Value) {
+//        By InputField = By.xpath("//input[@formcontrolname='"+FieldName+"']");
+//        actions.waitForVisibilityOfElement(InputField,40);
+//        actions.sendKeys(InputField,Value);
+//    }
+
+
+    // Staff Enter Text in TextArea
+    public void StaffTypeRejectionReason(String Value) {
+        By ReasonBox = By.xpath("//textarea");
+        actions.waitForVisibilityOfElement(ReasonBox,40);
+        actions.sendKeys(ReasonBox,Value);
+    }
+
+    // Staff Enter Text in TextArea
+    public void StaffTypeQueryLetterComments(String Box, String Value) {
+        By TextArea = By.xpath("//textarea[@formcontrolname='"+Box+"']");
+        actions.sendKeys(TextArea, Value);
+    }
+    // endregion
+
+    // region Payment QA Batch Page
+    // Staff Select various Quick Filters
+    public void StaffSelectQuickFilters(String Filters) {
+        By QuickFilters = By.xpath("//mat-button-toggle[@value='"+Filters+"']/button");
+//        actions.waitForVisibilityOfElement(QuickFilters,50);
+        actions.clickUsingJS(QuickFilters);
+    }
+
+    // Staff Select Value in the Payment QA Search Dropdowns
+    // Agent Select Dropdown Values in Parcel and Plot Modals
+    public void StaffSelectDropdownValue(String Dropdown, String Value) {
+        By PaymentQADropdowns = By.xpath("//mat-select[@formcontrolname='"+Dropdown+"']");
+        actions.waitForVisibilityOfElement(PaymentQADropdowns,30);
+        actions.clickUsingJS(PaymentQADropdowns);
+        By DropdownValue = By.xpath("//span[contains(text(),'"+Value+"')]/ancestor::mat-option");
+        actions.waitForVisibilityOfElement(DropdownValue, 30);
+        actions.clickUsingJS(DropdownValue);
+        actions.waitforSeconds(3);
+    }
+    //endregion
+
+    // region Admin Inspections
+
+    // Staff Check Application Status
+    public String StaffCheckInspectionApplicationStatus() {
+        By StatusLocator = By.xpath("//span[contains(@class,'application-status-chip')]");
+        String Status = driver.findElement(StatusLocator).getText();
+        return Status;
+    }
+
+    // Staff click on Panel in the Errors/Stops Screen
+    public void StaffClickOnErrorsPanel(String PanelName) {
+        By Panel = By.xpath("//mat-panel-title/descendant::span[contains(text(),'"+PanelName+"')]");
+        actions.clickUsingJS(Panel);
+    }
+
+    private static List<String> ParcelNumber = new ArrayList<>();
+
+    // Staff get Error Parcel Numbers
+    public void StaffGetErrorParcelNumber() throws InterruptedException {
+        ParcelNumber.clear();
+        By ParcelNumbers = By.xpath("//td[contains(@class,'cdk-column-parcelLabel')]");
+        List<WebElement> Parcels = driver.findElements(ParcelNumbers);
+        int ParcelCount = Parcels.size();
+        System.out.println("Parcel count : "+ParcelCount);
+        for(int i=1; i<=ParcelCount; i++) {
+            By ParcelLocator = By.xpath("(//td[contains(@class,'cdk-column-parcelLabel')])["+i+"]");
+            Thread.sleep(3000);
+            String ParcelLabel = driver.findElement(ParcelLocator).getText();
+            //String ParcelLabel = Parcels.get(ParcelCount-1).getText();
+            System.out.println("Parcel label : "+ParcelLabel);
+            ParcelNumber.add(i-1, ParcelLabel);
+            //System.out.println(ParcelNumber);
+        }
+        System.out.println("Parcel List is : "+ParcelNumber);
+    }
+
+    // Change Reason for Reduction with captured
+    public void StaffSelectReasonforReduction(String ReductionReason) throws InterruptedException {
+        Thread.sleep(15000);
+        for(int i=0; i<ParcelNumber.size(); i++) {
+            String ParcelRef = ParcelNumber.get(i);
+            By ReductionReasonLocator = By.xpath("//td[contains(text(),'"+ParcelRef+"')]/ancestor::tr/descendant::td[contains(@class,'cdk-column-reductionReason')]");
+//            driver.findElement(ReductionReasonLocator).click();
+            Thread.sleep(2000);
+            actions.scrollByUsingJS(ReductionReasonLocator);
+//            actions.scrolltoRight();
+            //Thread.sleep(5000);
+            driver.findElement(ReductionReasonLocator).click();
+           // actions.clickUsingJS(ReductionReasonLocator);
+            Thread.sleep(2000);
+            //actions.clickUsingJS(ReductionReasonLocator);
+//            driver.findElement(ReductionReasonLocator).click();
+//            Thread.sleep(2000);
+            By ReductionReasonOptionsLocator = By.xpath("//mat-option/descendant::span[text()='"+ReductionReason+"']");
+            actions.clickUsingJS(ReductionReasonOptionsLocator);
+        }
+        Thread.sleep(10000);
+    }
+
+    // Staff minimize resolution of screen
+    public void StaffReduceResolutionOfScreen() throws AWTException, InterruptedException {
+        Robot robot = new Robot();
+        for(int i=0; i<4; i++) {
+            //driver.findElement(By.tagName("html")).sendKeys(Keys.chord(Keys.CONTROL,Keys.SUBTRACT));
+            robot.keyPress(KeyEvent.VK_CONTROL);
+            robot.keyPress(KeyEvent.VK_SUBTRACT);
+            robot.keyRelease(KeyEvent.VK_SUBTRACT);
+            robot.keyRelease(KeyEvent.VK_CONTROL);
+            Thread.sleep(4000);
+        }
+    }
+
+    // Staff minimize resolution of screen
+    public void StaffReduceResolutionOfScreenNumberOfTimes(String times) throws AWTException, InterruptedException {
+        Robot robot = new Robot();
+        int j = Integer.parseInt(times);
+        for(int i=0; i<j; i++) {
+            //driver.findElement(By.tagName("html")).sendKeys(Keys.chord(Keys.CONTROL,Keys.SUBTRACT));
+            robot.keyPress(KeyEvent.VK_CONTROL);
+            robot.keyPress(KeyEvent.VK_SUBTRACT);
+            robot.keyRelease(KeyEvent.VK_SUBTRACT);
+            robot.keyRelease(KeyEvent.VK_CONTROL);
+            Thread.sleep(4000);
+        }
+    }
+
+    // Click on button in dialog box
+    // Arg : Create Transfer Application, View
+    public void AgentClickOnButtonInDialog(String Button) {
+        By ButtonName = By.xpath("//mat-dialog-container/descendant::button/span[contains(text(),'"+Button+"')]");
+        actions.clickUsingJS(ButtonName);
+    }
+
+    // endregion
+
+    // region SSO Admin
+    // Staff Click on Row in SSO Admin page
+    public void StaffClickOnRowInSSOAdminPage() {
+        By AgentRow = By.xpath("//tbody/tr[contains(@class,'cursor-pointer')]");
+        actions.clickUsingJS(AgentRow);
+    }
+
+    // Staff Switch Tabs for a User
+    public void SwitchTabsForUser(String TabName) {
+        By TabLocator = By.xpath("//a[@mat-tab-link and @id='"+TabName+"']");
+        actions.clickUsingJS(TabLocator);
+    }
+
+    // Staff Switch Autorisation Tabs
+    public void SwitchAuthorisationTabs(String TabName) {
+        By TabLocator = By.xpath("//div[@role='tab']/descendant::span[contains(text(),'"+TabName+"')]");
+        actions.clickUsingJS(TabLocator);
+    }
+
+    // Staff Select Application from dropdown
+    public void StaffSelectApplication(String TargetValue) throws InterruptedException {
+        Thread.sleep(2000);
+        //By DropdownLocator = By.xpath("//mat-select[@placeholder='Select Application.']");
+        By DropdownLocator = By.xpath("//mat-select[@aria-haspopup='listbox']");
+        actions.clickUsingJS(DropdownLocator);
+        Thread.sleep(3000);
+        By DropdownValue = By.xpath("//span[contains(text(),'"+TargetValue+"')]/ancestor::mat-option");
+        actions.clickUsingJS(DropdownValue);
+    }
+
+    // Staff filter User Role
+    public void StaffFilterUserRole(String Role) {
+        By FilterFieldLocator = By.xpath("//input[@placeholder='Search / Filter.']");
+        actions.clear(FilterFieldLocator);
+        actions.sendKeys(FilterFieldLocator,Role);
+    }
+
+    // Staff Select User Role
+    public void StaffSelectUserRole(String Role) {
+        By RoleLocator = By.xpath("//mat-list-option/descendant::span[contains(text(),'"+Role+"')]");
+        actions.clickUsingJS(RoleLocator);
+    }
+
+    // Staff Select All Roles to Reset
+    public void StaffSelectAllRoles(String Side) {
+        By AllRolesCheckbox = By.xpath("//mat-selection-list[@id='select-all-"+Side+"-list']/mat-list-option[@aria-label='Select all.']");
+        if(driver.findElements(AllRolesCheckbox).isEmpty()) {
+            System.out.println("No Roles Assigned");
+        }
+        else {
+            actions.clickUsingJS(AllRolesCheckbox);
+        }
+    }
+
+    // Staff Move Roles between Available and Assigned User
+    // Args : arrow_forward, arrow_back
+    public void StaffMoveRolesBetweenAvailableAndAssigned(String Button) {
+        By ButtonLocator = By.xpath("//button/descendant::mat-icon[contains(text(),'"+Button+"')]");
+        actions.clickUsingJS(ButtonLocator);
+        By FilterFieldLocator = By.xpath("//input[@placeholder='Search / Filter.']");
+        driver.findElement(FilterFieldLocator).clear();
+    }
+
+    // Staff Click On Link for Helpdesk User
+    public void StaffClickOnExitApplicationLink(String Link) {
+        //changed xpath from //a[contains(text(),'"+Link+"')] to //button/descendant::span[contains(text(),'"+Arg0+"')]
+        By LinkLocator = By.xpath("//a[contains(text(),'"+Link+"')]");
+        actions.clickUsingJS(LinkLocator);
+    }
+
+    // Staff Click on Sign Out Button
+    public void StaffClickOnSignOutButton() {
+        By SignOut = By.xpath("//button[@aria-label='Sign Out Button']");
+        actions.waitForVisibilityOfElement(SignOut,5);
+        actions.clickUsingJS(SignOut);
+        By exit = By.xpath("//button[@id='app-menu-logout-button']");
+        actions.waitforSeconds(5);
+        actions.click(exit);
+        actions.waitforSeconds(5);
+    }
+    // endregion
+
+
+    // region Payments
+    // Find the Penalty Amount on Payments Page
+
+    // endregion
+
+
+    // region SIM
+    // Staff Click on Parcel to open side drawer
+    public void StafClickSIMParcelToOpenSideDrawer(String Parcel) {
+        By ParcelLocator = By.xpath("//td[contains(text(),'"+Parcel+"')]");
+        actions.clickUsingJS(ParcelLocator);
+    }
+
+    // Staff Enter value in the SIM Edit Drawer Field
+    public void StaffEnterValueInSIMEditDrawerField(String Value, String Field) {
+        By FieldLocator = By.xpath("//input[@formcontrolname='"+Field+"']");
+        driver.findElement(FieldLocator).clear();
+        actions.sendKeys(FieldLocator,Value);
+    }
+
+    // Staff Check Original Application Total in SIM Page
+    public void StaffCheckOriginalApplicationTotal() {
+        By ApplicationTotal = By.xpath("//td[contains(@class,'cdk-column-originalClaimedAreaValue')]");
+        String ApplicationTotalValue = driver.findElement(ApplicationTotal).getText();
+        System.out.println("Original Application Total Value is : "+ApplicationTotalValue);
+    }
+
+    // Staff Click on the  CheckBox in SIM Edit Drawer
+    public void AgentClickOnSIMEditDrawerCheckBox(String CheckBox) {
+        By CheckboxLocator = By.xpath("//mat-dialog-container/descendant::div/mat-checkbox[@formcontrolname='"+CheckBox+"']/descendant::input");
+        actions.clickUsingJS(CheckboxLocator);
+    }
+
+    // Staff Toggle SIM Opt-in Opt-Out
+    public void StaffToggleSIMOption() {
+        By SimToggle = By.xpath("//mat-card/descendant::span[contains(text(),'SIM')]");
+        actions.clickUsingJS(SimToggle);
+    }
+
+
+    // Staff Enter SIM Notes before submitting
+    public void StaffChangeSimNotesBeforeSubmitting(String Note) {
+        By SimNoteTextBox = By.xpath("//mat-dialog-container/descendant::textarea[@formcontrolname='simNotes']");
+        actions.sendKeys(SimNoteTextBox,Note);
+    }
+
+    // Staff Check Values in the Land Details Table
+    public void StaffCheckClaimedAreaValueInSIMScreen() {
+
+    }
+
+    // Staff check SIM tick visibility in Summary screen
+    public boolean StaffCheckSIMtick() {
+        By SimTick = By.xpath("(//td[contains(text(),'SIM')])[1]/parent::tr/td[1]/mat-icon");
+        boolean SIMTickVisibility = driver.findElements(SimTick).isEmpty();
+        return SIMTickVisibility;
+    }
+
+    // Staff Check Calculated Payable Area
+    public void StaffCheckCalculatedPayableArea() {
+        By CalculatedPayableArea = By.xpath("(//td[contains(@class,'cdk-column-calculatedPayableArea')])[1]");
+        String CalculatedPayableAreaValue = driver.findElement(CalculatedPayableArea).getText();
+        System.out.println("Calculated Payable Area : " + CalculatedPayableAreaValue);
+    }
+
+    // Staff Check Amended Claimed Area
+    public void StaffCheckAmendedClaimedArea(String AmendedValue) {
+
+    }
+
+    // endregion
+
+    // region Notes/ History
+    // Staff Check Entry Created in History Tab
+    public String StaffCheckEntryInHistoryTab() {
+        By FirstEntry = By.xpath("(//td[contains(@class,'cdk-column-comments')])[1]");
+        return driver.findElement(FirstEntry).getText();
+    }
+
+    // Staff Check and Get Entry in History Tab for Admin Check
+    public String StaffCheckAdminCheckEntry(String Messsage) {
+        By AdminCheckEntry = By.xpath("(//td[contains(@class,'cdk-column-comments') and contains(text(),'"+Messsage+"')])[1]");
+        return driver.findElement(AdminCheckEntry).getText();
+    }
+    //endregion
+
+    // region Active Farmer
+
+    // Staff Select the Admin Check Result Radio Button
+    public void StaffSelectAdminCheckResultRadio(String Result) {
+        By CheckResult = By.xpath("//mat-radio-button[@value='"+Result+"']");
+        actions.clickUsingJS(CheckResult);
+    }
+
+    // Staff Click on Admin Check Upload Doc Button
+    public void StaffClickOnAdminCheckUploadDoc() {
+        By AdminCheckUpload = By.xpath("");
+    }
+
+
+    // endregion
+
+    // endregion
+
+}
+
+
+// Dummy Test Code
+//        WebDriverWait wait = new WebDriverWait(driver,60);
+//        wait.until(ExpectedConditions.frameToBeAvailableAndSwitchToIt("content"));
+//        actions.waitForVisibilityOfFrame(NavigationPageFrame,30);
+//        Actions action = new Actions(driver);
+//        WebElement FilingLink = driver.findElement(FilingYourBPSApplicationLink);
+//        action.moveToElement(FilingLink).click();
