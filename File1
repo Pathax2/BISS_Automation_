@@ -1,67 +1,164 @@
-Here's a more technical version. Both months are still merged into one section, and the tone is still conversational:
+Feature: TC_12_STAFF - Scheme Selection BISS CRISS Protein Eco MSSM RCSM E2E Regression Pack
 
----
+  # --------------------------------------------------------------------------------------------------------------------
+  # Legacy  : "Regression Pack for Scheme Selection - Add BISS, CRISS" (BISSAGL-5919, AT-TC-01 to 04,
+  #           tmslinks BISSAGL-14880 / 14879 / 14877 / 14876)
+  #           "Regression Pack for Scheme Selection - Add MSSM, RCSM" (BISSAGL-7582, AT-TC-01 to 05,
+  #           tmslinks BISSAGL-14893 / 14889 / 14885 / 14891 / 14890)
+  # Rewritten 15-10-2026 in the StaffSteps vocabulary. Modernised 22-10-2026: one end-to-end scenario in which every
+  # check runs once; # SECTION markers show which legacy scenarios each part covers.
+  #
+  # Flow:
+  #   SECTION 1 : amendable herd / 2026 - BISS and CRISS cards: position, acronym, full name, View Details dialog, toggle
+  #   SECTION 2 : same screen - CRISS and Protein Aid Scheme selected, Next, Back, deselected: nothing changes
+  #   SECTION 3 : same screen - CRISS, Protein Aid Scheme and Eco changed in one amendment, submitted, recorded in the
+  #               history today, all three flipped; reset in one submit, all three back (same herd, fresh search)
+  #   SECTION 4 : amendable herd / 2024 - MSSM and RCSM cards (shown on 2024 only); selected and deselected: as they were
+  #   SECTION 5 : two more amendable herds / 2024 - MSSM and RCSM report a state (legacy only opened them)
+  #   SECTION 6 : inactive herd (TestData column InactiveHerd) - all ten schemes report a state
+  #
+  # What was merged (legacy -> here):
+  #   - Select-then-deselect was done three times (CRISS, Protein with Next / Back, MSSM / RCSM). It is now one CRISS +
+  #     Protein Aid Scheme pass through Next / Back (Section 2) and one MSSM / RCSM pass on 2024 (Section 4).
+  #     The selection is now checked as flipped after the click, before it is undone (legacy never checked it).
+  #   - Change, submit, check and reset was done twice (CRISS + Protein, then Eco; BISSAGL-7582 AT-TC-04 and 05 were the
+  #     same clicks). It is now one amendment with all three schemes and one reset: 2 submits instead of 4.
+  #   - Section 3 starts on the screen Section 2 leaves (back at the noted state), so the amendment is not searched for
+  #     again; the states noted in Section 2 are the ones Section 3 checks against.
+  #   - "the selection state should be readable" on the 2026 herd is covered by "notes the selection state" (it fails when a
+  #     card shows no state), so it is not repeated before a change.
+  #   - One staff login, and the 2026 amendment is searched for twice instead of 7 times.
+  #   - The MSSM / RCSM card text uses the same card table as BISS / CRISS (blank position = found by acronym).
+  #
+  # Protein Aid Scheme: when Submit Changes reports that the Protein Scheme has no eligible crop, the submit step clicks
+  # OK, gives the first tillage parcel the crop staff.protein.crop (Beans - Spring) and submits again; the reset submit
+  # puts that parcel's old Parcel Use back first (StaffSteps 21-10-2026).
+  #
+  # Test data (23-10-2026 - was fixed herds in legacy and in the 22-10-2026 version):
+  #   Sections 1 to 5 : "the next amendable herd" - DBRouter "Get Amendable Submitted Herds" (StaffTestData AMENDABLE):
+  #                     submitted, no admin check, no Draft / Helpdesk / Draft Dept application, no amendment, two or
+  #                     more land parcels, random order. One pool per scheme year. A herd whose search shows no Amend
+  #                     link is skipped and the next one tried (staff.amendable.tries, default 5).
+  #                     The 2026 herd is amended and reset, so it is left as it was found.
+  #   Section 6       : TD:InactiveHerd - the inactive herd comes from the TestData row of TC_12_STAFF (column
+  #                     InactiveHerd), so no herd number is written in this file. No query finds inactive herds yet.
+  #   Login agr4442 (BISS Co-ordination 1). Password: TD:Password from the TestData row of this test case.
+  #
+  # Step definitions: stepdefinitions.BISS.STAFF.StaffSteps (Scheme selection and amendments, History)
+  # Author: Aniket Pathare | aniket.pathare@government.ie
+  # --------------------------------------------------------------------------------------------------------------------
 
-**Subject:** Automation update: Playwright migration, CI/CD and test data
+  Background:
+    Given the staff user is logged in to the BISS internal portal as "agr4442"
 
-Hi Patrick,
+  @regression @staff @scheme-selection @e2e
+  Scenario: AT-STAFF-SCHEME-E2E-01 - Staff verifies the scheme cards, abandons a selection and submits and resets an amendment
 
-Here's a quick technical rundown of where the automation work stands and what's planned for this week.
+    # SECTION 1 : BISS and CRISS cards, details dialogs and toggles - BISSAGL-5919 AT-TC-01 (BISSAGL-14880)
+    When the staff user amends the application for the next amendable herd for scheme year "2026"
+    Then the scheme cards should be presented as follows
+      | position | acronym | title                                                          |
+      | 1        | BISS    | Basic Income Support for Sustainability                        |
+      | 2        | CRISS   | Complementary Redistributive Income Support for Sustainability |
+    And the following scheme details dialogs should be readable
+      | scheme | title                                                          |
+      | BISS   | Basic Income Support for Sustainability                        |
+      | CRISS  | Complementary Redistributive Income Support for Sustainability |
+    And the following schemes should offer a selection toggle
+      | BISS  |
+      | CRISS |
 
-**What we've delivered**
+    # SECTION 2 : Select, Next, Back, deselect - nothing changes - BISSAGL-5919 AT-TC-01 and AT-TC-03 (BISSAGL-14880, 14877)
+    When the staff user notes the selection state of the following schemes
+      | BISS               |
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+    And the staff user selects the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+    Then the following schemes should have the opposite selection
+      | CRISS              |
+      | Protein Aid Scheme |
+    When the staff user proceeds to the next step
+    And the staff user goes back and deselects the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+    Then the following schemes should have their noted selection
+      | BISS               |
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
 
-**Framework**
-- Built a new Playwright (Java) + Cucumber 7 framework as a separate project, so the Selenium suite stays untouched while we migrate.
-- Ported the core layer: the `iAction` engine, ObjReader, hooks, the retry analyser and login handling. Step texts and Object Repository keys are unchanged, so the feature files migrate one-to-one.
-- Added Angular Material handling that Playwright doesn't give us out of the box:
-  - `mat-select` dropdowns
-  - paginator buttons, whose disabled state can show up three different ways
-  - an invisibility check for the MDC spinner, which stays in the DOM at opacity 0
-- Capture a Playwright trace only for failed tests, to keep artefacts small.
+    # SECTION 3 : CRISS, Protein Aid Scheme and Eco in one amendment, submitted, checked and reset
+    #             BISSAGL-5919 AT-TC-02 (BISSAGL-14879), BISSAGL-7582 AT-TC-04 / 05 (BISSAGL-14891, 14890)
+    When the staff user selects the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+    And the staff user submits the amendment and confirms
+    Then the application history should record "Amendment Submitted" today
+    When the staff user opens the "BISS Amendments" screen
+    Then the following schemes should have the opposite selection
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+    # Post-test reset - all three in one submit, then checked from a fresh search
+    When the staff user deselects the following schemes
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
+    And the staff user submits the amendment and confirms
+    And the staff user amends the application for the same herd for scheme year "2026"
+    Then the following schemes should have their noted selection
+      | CRISS              |
+      | Protein Aid Scheme |
+      | Eco                |
 
-**Coverage**
-- BISS application E2E (Land Details, GAEC, ACRES, Eco, Review & Submit), plus the individual CISYF and partnership herd flows. The partnership flows cover the partner herd tabs and resolving Land Details errors across paginated pages.
-- All 25 ENTS test cases.
-- Most Staff portal packs, consolidated into one declarative step library. Repeated legacy scenarios are merged into end-to-end flows, e.g. 4 submissions down to 2 in Scheme Selection.
-- Self-healing for known portal behaviours:
-  - adds an eligible protein crop when the Protein Aid Scheme blocks submission, and restores the original Parcel Use afterwards
-  - lease expiry date calculated from the validation rule
-  - herds the portal can't open (no Amend link, or a backend 500 on the amendment) are skipped and the next herd is tried
+    # SECTION 4 : MSSM and RCSM cards on 2024, selected and deselected - BISSAGL-7582 AT-TC-01 (BISSAGL-14893)
+    When the staff user amends the application for the next amendable herd for scheme year "2024"
+    Then the scheme cards should be presented as follows
+      | position | acronym | title                       |
+      |          | MSSM    | Multi Species Sward Measure |
+      |          | RCSM    | Red Clover Silage Measure   |
+    When the staff user notes the selection state of the following schemes
+      | MSSM |
+      | RCSM |
+    And the staff user selects the following schemes
+      | MSSM |
+      | RCSM |
+    Then the following schemes should have the opposite selection
+      | MSSM |
+      | RCSM |
+    When the staff user deselects the following schemes
+      | MSSM |
+      | RCSM |
+    Then the following schemes should have their noted selection
+      | MSSM |
+      | RCSM |
 
-**Test data**
-- Replaced the Excel row references with runtime Oracle data through a label-based query router (DBRouter) covering three schemas: BISS_DATA, BISS_INET and ENTS_DATA.
-- Added thread-safe query methods, so a Test Data Vault can harvest every pool in parallel before the first browser opens. Rows are tracked as available, reserved or used, spot-checked before use, and refreshed weekly in line with the CENTEST refresh.
-- Query fixes:
-  - Replaced a legacy `LIKE '[A-Z]%'` filter, which is SQL Server syntax and silently does nothing in Oracle, with `REGEXP_LIKE`.
-  - Rewrote the parcel-count subquery as a pair of `EXISTS` checks.
-  - Capped the candidate set before the `DBMS_RANDOM` shuffle.
-  - Together these cut the amendable-herds query from about 45 s to a few seconds.
-- Added a fixed-data mode for the pre-live E2E. The router refuses any database call while it's running, so data from another environment can't leak in.
+    # SECTION 5 : two more 2024 herds report a state for MSSM and RCSM - BISSAGL-7582 AT-TC-02 / 03 (BISSAGL-14889, 14885)
+    When the staff user amends the application for the next amendable herd for scheme year "2024"
+    Then the scheme selection screen should be displayed
+    And the selection state should be readable for the following schemes
+      | MSSM |
+      | RCSM |
+    When the staff user amends the application for the next amendable herd for scheme year "2024"
+    Then the scheme selection screen should be displayed
+    And the selection state should be readable for the following schemes
+      | MSSM |
+      | RCSM |
 
-**CI/CD**
-- Moved the project to the department GitLab, on feature branches with merge requests for review.
-- Jenkins multibranch pipeline on OpenShift: a `podTemplate` agent on the Playwright image, with credentials mounted from an OpenShift secret, never stored in the Jenkinsfile or the repo.
-- Fixed the Chromium crashpad start-up failure in the container by setting `HOME` / `XDG` paths.
-- Weekday cron schedules (Europe/Dublin) for separate BISS and ENTS daily runs. The run detects the timer trigger, so the same job also supports on-demand runs with a SUITE parameter.
-- JUnit publishing scoped to the framework's results file, so the test trend is accurate, and pass/fail counts are written into the build name and description.
-
-**Reporting**
-- Execution dashboard generated per run, from timing and DB query metrics plus SVG charts: a team HTML report and a stakeholder PDF with herds masked and logins hidden.
-- Published on every Jenkins build. Jenkins' Content Security Policy (CSP) strips inline styles, so we've asked the platform team for a Resource Root URL route to fix that.
-
-**This week**
-
-- Stabilise the Scheme Selection E2E on the new amendable-herds pool for the current and previous scheme year.
-- Migrate the remaining Staff portal test cases.
-- Triage the failures in the daily ENTS run.
-- Follow up on the Resource Root URL route so the dashboard renders fully in Jenkins.
-- Raise merge requests for the above.
-
-Happy to go through any of this in more detail or show a live run.
-
-Thanks,
-Aniket
-
----
-
-The CSP line only makes sense if Patrick knows about the report styling problem. If he doesn't, you can cut it down to "dashboard published on every Jenkins build".
+    # SECTION 6 : Inactive herd, every scheme reports a state - BISSAGL-5919 AT-TC-04 (BISSAGL-14876)
+    When the staff user amends the application for herd "TD:InactiveHerd" for scheme year "2024"
+    Then the selection state should be readable for the following schemes
+      | BISS               |
+      | CRISS              |
+      | ANC                |
+      | Eco                |
+      | Organics           |
+      | SIM                |
+      | Protein Aid Scheme |
+      | CISYF              |
+      | MSSM               |
+      | RCSM               |
