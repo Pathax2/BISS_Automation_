@@ -1,10 +1,67 @@
-            if (isVisible(ObjReader.getLocator("iRentalExpiryDateInput"), 2))
-            {
-                // The portal only accepts an expiry date on or after 31 May of the year after the scheme year
-                // (scheme year 2026 -> 31/05/2027), so the date is 31 May of next year
-                String iExpiryDate = LocalDate.of(LocalDate.now().getYear() + 1, 5, 31)
-                        .format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
-                iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iRentalExpiryDateInput"), iExpiryDate);
-                log.info("Set Rental/Lease Expiry Date to: " + iExpiryDate);
-                iAnyFieldFixed = true;
-            }
+Here's a more technical version. Both months are still merged into one section, and the tone is still conversational:
+
+---
+
+**Subject:** Automation update: Playwright migration, CI/CD and test data
+
+Hi Patrick,
+
+Here's a quick technical rundown of where the automation work stands and what's planned for this week.
+
+**What we've delivered**
+
+**Framework**
+- Built a new Playwright (Java) + Cucumber 7 framework as a separate project, so the Selenium suite stays untouched while we migrate.
+- Ported the core layer: the `iAction` engine, ObjReader, hooks, the retry analyser and login handling. Step texts and Object Repository keys are unchanged, so the feature files migrate one-to-one.
+- Added Angular Material handling that Playwright doesn't give us out of the box:
+  - `mat-select` dropdowns
+  - paginator buttons, whose disabled state can show up three different ways
+  - an invisibility check for the MDC spinner, which stays in the DOM at opacity 0
+- Capture a Playwright trace only for failed tests, to keep artefacts small.
+
+**Coverage**
+- BISS application E2E (Land Details, GAEC, ACRES, Eco, Review & Submit), plus the individual CISYF and partnership herd flows. The partnership flows cover the partner herd tabs and resolving Land Details errors across paginated pages.
+- All 25 ENTS test cases.
+- Most Staff portal packs, consolidated into one declarative step library. Repeated legacy scenarios are merged into end-to-end flows, e.g. 4 submissions down to 2 in Scheme Selection.
+- Self-healing for known portal behaviours:
+  - adds an eligible protein crop when the Protein Aid Scheme blocks submission, and restores the original Parcel Use afterwards
+  - lease expiry date calculated from the validation rule
+  - herds the portal can't open (no Amend link, or a backend 500 on the amendment) are skipped and the next herd is tried
+
+**Test data**
+- Replaced the Excel row references with runtime Oracle data through a label-based query router (DBRouter) covering three schemas: BISS_DATA, BISS_INET and ENTS_DATA.
+- Added thread-safe query methods, so a Test Data Vault can harvest every pool in parallel before the first browser opens. Rows are tracked as available, reserved or used, spot-checked before use, and refreshed weekly in line with the CENTEST refresh.
+- Query fixes:
+  - Replaced a legacy `LIKE '[A-Z]%'` filter, which is SQL Server syntax and silently does nothing in Oracle, with `REGEXP_LIKE`.
+  - Rewrote the parcel-count subquery as a pair of `EXISTS` checks.
+  - Capped the candidate set before the `DBMS_RANDOM` shuffle.
+  - Together these cut the amendable-herds query from about 45 s to a few seconds.
+- Added a fixed-data mode for the pre-live E2E. The router refuses any database call while it's running, so data from another environment can't leak in.
+
+**CI/CD**
+- Moved the project to the department GitLab, on feature branches with merge requests for review.
+- Jenkins multibranch pipeline on OpenShift: a `podTemplate` agent on the Playwright image, with credentials mounted from an OpenShift secret, never stored in the Jenkinsfile or the repo.
+- Fixed the Chromium crashpad start-up failure in the container by setting `HOME` / `XDG` paths.
+- Weekday cron schedules (Europe/Dublin) for separate BISS and ENTS daily runs. The run detects the timer trigger, so the same job also supports on-demand runs with a SUITE parameter.
+- JUnit publishing scoped to the framework's results file, so the test trend is accurate, and pass/fail counts are written into the build name and description.
+
+**Reporting**
+- Execution dashboard generated per run, from timing and DB query metrics plus SVG charts: a team HTML report and a stakeholder PDF with herds masked and logins hidden.
+- Published on every Jenkins build. Jenkins' Content Security Policy (CSP) strips inline styles, so we've asked the platform team for a Resource Root URL route to fix that.
+
+**This week**
+
+- Stabilise the Scheme Selection E2E on the new amendable-herds pool for the current and previous scheme year.
+- Migrate the remaining Staff portal test cases.
+- Triage the failures in the daily ENTS run.
+- Follow up on the Resource Root URL route so the dashboard renders fully in Jenkins.
+- Raise merge requests for the above.
+
+Happy to go through any of this in more detail or show a live run.
+
+Thanks,
+Aniket
+
+---
+
+The CSP line only makes sense if Patrick knows about the report styling problem. If he doesn't, you can cut it down to "dashboard published on every Jenkins build".
