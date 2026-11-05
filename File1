@@ -1,13 +1,3 @@
-The problem is that for Individual login we've to select the list item value as Companies Registrations Office (Company Printout) instead of Transferor Signature Confirmation but since the code always stores  if (pDocType != null)=Transferor Signature Confirmation script is failing  
-
-And the agent uploads the transferor signature document
---------------------------------------------------------------------------------------------------------------------
-<div role="listbox" tabindex="-1" class="mat-mdc-select-panel mdc-menu-surface mdc-menu-surface--open mat-select-panel-animations-enabled mat-primary ng-star-inserted" id="selectedDocumentType-panel" aria-multiselectable="false" aria-labelledby="mat-mdc-form-field-label-4"><!----><mat-option _ngcontent-ng-c2142196085="" role="option" class="mat-mdc-option mdc-list-item margin-bot-dropmenu mat-mdc-option-active" id="mat-option-0" aria-selected="false" aria-disabled="false"><!----><span class="mdc-list-item__primary-text"> Dissolution of partnership agreement </span><!----><!----><div aria-hidden="true" mat-ripple="" class="mat-ripple mat-mdc-option-ripple mat-focus-indicator"></div></mat-option><mat-option _ngcontent-ng-c2142196085="" role="option" class="mat-mdc-option mdc-list-item margin-bot-dropmenu" id="mat-option-1" aria-selected="false" aria-disabled="false"><!----><span class="mdc-list-item__primary-text"> Farm partnership agreement </span><!----><!----><div aria-hidden="true" mat-ripple="" class="mat-ripple mat-mdc-option-ripple mat-focus-indicator"></div></mat-option><mat-option _ngcontent-ng-c2142196085="" role="option" class="mat-mdc-option mdc-list-item margin-bot-dropmenu" id="mat-option-2" aria-selected="false" aria-disabled="false"><!----><span class="mdc-list-item__primary-text"> Companies Registrations Office (Company Printout) </span><!----><!----><div aria-hidden="true" mat-ripple="" class="mat-ripple mat-mdc-option-ripple mat-focus-indicator"></div></mat-option><mat-option _ngcontent-ng-c2142196085="" role="option" class="mat-mdc-option mdc-list-item margin-bot-dropmenu" id="mat-option-3" aria-selected="false" aria-disabled="false"><!----><span class="mdc-list-item__primary-text"> Supporting Inheritance Documentation </span><!----><!----><div aria-hidden="true" mat-ripple="" class="mat-ripple mat-mdc-option-ripple mat-focus-indicator"></div></mat-option><mat-option _ngcontent-ng-c2142196085="" role="option" class="mat-mdc-option mdc-list-item margin-bot-dropmenu" id="mat-option-4" aria-selected="false" aria-disabled="false"><!----><span class="mdc-list-item__primary-text"> Letter Supporting transfer </span><!----><!----><div aria-hidden="true" mat-ripple="" class="mat-ripple mat-mdc-option-ripple mat-focus-indicator"></div></mat-option><mat-option _ngcontent-ng-c2142196085="" role="option" class="mat-mdc-option mdc-list-item margin-bot-dropmenu" id="mat-option-5" aria-selected="false" aria-disabled="false"><!----><span class="mdc-list-item__primary-text"> Transfer Personal and Sensitive Documentation </span><!----><!----><div aria-hidden="true" mat-ripple="" class="mat-ripple mat-mdc-option-ripple mat-focus-indicator"></div></mat-option><!----><!----></div>
----------------------------------------------------------------------------------------------------------------------------------
-
-
-
-
 // ===================================================================================================================================
 // File          : TC_01_ENTS.java
 // Package       : stepdefinitions.ENTS
@@ -61,6 +51,12 @@ And the agent uploads the transferor signature document
 //                 (Transferor Signature Confirmation + Companies Registrations Office (Company Printout)); every other type
 //                 uploads the one signature document as before. The type is set by selectTransferType and again by the
 //                 create step (after a leased-entitlements fallback); the upload step logs the type and its documents.
+//
+//                 05-11-2026: an individual login is not offered "Transferor Signature Confirmation" in the document type
+//                 list. The upload now uses that option only when the dropdown offers it, otherwise "Companies Registrations
+//                 Office (Company Printout)" (ents.upload.signature.fallback) - for a named document type too, not only for
+//                 the single-document types. A document type already uploaded in the step is not uploaded again (Change of
+//                 Legal Entity on an individual login: the fallback IS its second document, so one upload is enough).
 //
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 31-03-2026 | Updated: 22-09-2026 (Playwright + runtime ENTS data), 02-10-2026 (transferee no match),
@@ -147,6 +143,13 @@ public class TC_01_ENTS
     // Documentation, Letter Supporting transfer, Transfer Personal and Sensitive Documentation).
     private static final String DOCS_INHERITANCE = ConfigManager.getOrDefault("ents.upload.docs.inheritance", "Transferor Signature Confirmation|Supporting Inheritance Documentation");
     private static final String DOCS_LEGAL_ENTITY = ConfigManager.getOrDefault("ents.upload.docs.legal.entity", "Transferor Signature Confirmation|Companies Registrations Office (Company Printout)");
+
+    // The signature document, and the type used when the dropdown does not offer it (individual login, 05-11-2026)
+    private static final String SIGNATURE_DOC          = "Transferor Signature Confirmation";
+    private static final String SIGNATURE_FALLBACK_DOC = ConfigManager.getOrDefault("ents.upload.signature.fallback", "Companies Registrations Office (Company Printout)").trim();
+
+    // Option texts of the open document type dropdown (mat-select panel)
+    private static final String DOC_TYPE_OPTIONS_XPATH = "//div[contains(@class,'mat-mdc-select-panel')]//mat-option//span[contains(@class,'mdc-list-item__primary-text')]";
 
 
     // ===================================================================================================================================
@@ -626,11 +629,22 @@ public class TC_01_ENTS
         }
 
         log.info("[TRANSFER] '" + iLastTransferType + "' needs " + iDocTypes.size() + " documents: " + String.join(" + ", iDocTypes));
+
+        // 05-11-2026: the type really chosen for each upload - the signature document can be replaced by its fallback,
+        // and the same type is not uploaded twice
+        java.util.Set<String> iUploaded = new java.util.LinkedHashSet<>();
         for (int i = 0; i < iDocTypes.size(); i++)
         {
-            log.info("[TRANSFER] Document " + (i + 1) + "/" + iDocTypes.size() + " : " + iDocTypes.get(i));
-            uploadOneDocument(iDocTypes.get(i), iFilePath);
+            String iWanted = iDocTypes.get(i);
+            if (iUploaded.contains(iWanted))
+            {
+                log.info("[TRANSFER] Document " + (i + 1) + "/" + iDocTypes.size() + " : " + iWanted + " - already uploaded in this step, skipped.");
+                continue;
+            }
+            log.info("[TRANSFER] Document " + (i + 1) + "/" + iDocTypes.size() + " : " + iWanted);
+            iUploaded.add(uploadOneDocument(iWanted, iFilePath));
         }
+        log.info("[TRANSFER] Uploaded document types: " + String.join(" + ", iUploaded));
     }
 
     // The document types of a transfer type that needs more than the single signature document ([] = the usual one)
@@ -650,12 +664,15 @@ public class TC_01_ENTS
     // Function Name : uploadOneDocument
     // Description   : One upload: "Upload Document" on the summary card, choose the document type, attach the PDF, confirm,
     //                 wait for the dialog to close.
-    // Parameters    : pDocType (String) - exact option text; null = the signature document with its fallback (old behaviour)
+    //                 05-11-2026: the document type is chosen by chooseDocumentType - the signature document falls back to
+    //                 SIGNATURE_FALLBACK_DOC when the dropdown does not offer it (individual login), for a named type too.
+    // Parameters    : pDocType (String) - exact option text; null = the signature document with its fallback
     //                 pFilePath (String) - file to attach
+    // Returns       : String - the document type really selected
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 14-10-2026 (body moved from the step, unchanged for pDocType = null)
+    // Date Created  : 14-10-2026 (body moved from the step, unchanged for pDocType = null) | Updated: 05-11-2026
     // ***************************************************************************************************************************************************************************************
-    private static void uploadOneDocument(String pDocType, String pFilePath)
+    private static String uploadOneDocument(String pDocType, String pFilePath)
     {
         // ── Click "Upload Document" on the summary card ───────────────────────────────
         iAction("WAITVISIBLE",   "XPATH", ObjReader.getLocator("iTransferSupportingDocUploadBtn"), null);
@@ -665,30 +682,8 @@ public class TC_01_ENTS
         // ── Wait for dialog to open ───────────────────────────────────────────────────
         iAction("WAITVISIBLE", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
 
-        // ── Select document type ──────────────────────────────────────────────────────
-        String iSelectedType;
-        if (pDocType != null)
-        {
-            // A named type must be offered - the LIST action fails with the options it saw when it is not
-            iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), pDocType);
-            iSelectedType = pDocType;
-        }
-        else
-        {
-            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
-
-            String iPreferredOption = "//mat-option//span[normalize-space()='Transferor Signature Confirmation']";
-            if (isVisible(iPreferredOption, PROBE_SECONDS))
-            {
-                xp(iPreferredOption).first().click();
-                iSelectedType = "Transferor Signature Confirmation";
-            }
-            else
-            {
-                iSelectedType = "Companies Registrations Office (Company Printout)";
-                iAction("LIST", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), iSelectedType);
-            }
-        }
+        // ── Select document type (05-11-2026: the signature document falls back when it is not offered) ──
+        String iSelectedType = chooseDocumentType(pDocType);
         log.info("[TRANSFER] Document type selected: " + iSelectedType);
 
         // ── Attach PDF ────────────────────────────────────────────────────────────────
@@ -702,6 +697,58 @@ public class TC_01_ENTS
         // ── Wait for dialog to close ──────────────────────────────────────────────────
         iAction("WAITINVISIBLE", "XPATH", "//app-supporting-doc-upload-transfer-application-popup", null);
         log.info("[TRANSFER] Uploaded: " + iSelectedType);
+        return iSelectedType;
+    }
+
+    // ***************************************************************************************************************************************************************************************
+    // Function Name : chooseDocumentType
+    // Description   : Opens the document type dropdown and clicks the wanted option. "Transferor Signature Confirmation"
+    //                 (also what null means) is only offered to an agent login; when it is not in the list (individual
+    //                 login) SIGNATURE_FALLBACK_DOC is chosen instead. Any other type that is not offered fails the step,
+    //                 listing the options the dropdown showed.
+    // Parameters    : pDocType (String) - exact option text, or null for the signature document
+    // Returns       : String - the option clicked
+    // Author        : Aniket Pathare | aniket.pathare@government.ie
+    // Date Created  : 05-11-2026
+    // ***************************************************************************************************************************************************************************************
+    private static String chooseDocumentType(String pDocType)
+    {
+        String iWanted = pDocType == null ? SIGNATURE_DOC : pDocType.trim();
+        iAction("CLICK", "XPATH", ObjReader.getLocator("iTransferDocTypeDropdown"), null);
+
+        if (clickDocumentOption(iWanted))
+        {
+            return iWanted;
+        }
+
+        if (SIGNATURE_DOC.equals(iWanted) && clickDocumentOption(SIGNATURE_FALLBACK_DOC))
+        {
+            log.info("[TRANSFER] '" + SIGNATURE_DOC + "' is not offered (individual login) - '" + SIGNATURE_FALLBACK_DOC
+                    + "' used instead (ents.upload.signature.fallback).");
+            return SIGNATURE_FALLBACK_DOC;
+        }
+
+        List<String> iOffered = new java.util.ArrayList<>();
+        for (String iText : xp(DOC_TYPE_OPTIONS_XPATH).allInnerTexts())
+        {
+            if (!iText.trim().isEmpty()) iOffered.add(iText.trim());
+        }
+        UiHelpers.pressKey("Escape");
+        throw new RuntimeException("[TRANSFER] Document type '" + iWanted + "' is not offered for transfer type '" + iLastTransferType
+                + "'. Options shown: " + iOffered + ". Check ents.upload.docs.inheritance / ents.upload.docs.legal.entity.");
+    }
+
+    // Clicks the option with exactly this text in the open document type dropdown; false when it is not offered
+    // (the list is given PROBE_SECONDS to render)
+    private static boolean clickDocumentOption(String pText)
+    {
+        String iOption = DOC_TYPE_OPTIONS_XPATH + "[normalize-space()='" + pText + "']";
+        if (!isVisible(iOption, PROBE_SECONDS))
+        {
+            return false;
+        }
+        xp(iOption).first().click();
+        return true;
     }
 
 
