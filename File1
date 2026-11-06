@@ -25,6 +25,12 @@
 //                 "No transferee matches were found" (the DB name of a herd managed by another agent can differ from the
 //                 portal name). The create steps then replace the transferee and search again in the same dialog.
 //
+//                 06-11-2026 (TC_11_ENTS, fixed herds gone after the environment refresh): searchTransferOut replaces a herd
+//                 that is not in the Transfer Out list by the first herd of the full list (blank search), for the test cases
+//                 listed in ents.transferout.first.row.testcases (default TC_11_ENTS). The replacement is remembered in
+//                 HERD_REPLACED and transferOutAllRowsXpath uses it, so activeTransferOutRows, transferOutName and
+//                 clickTransferOutView follow it without any change. Every other test case behaves as before.
+//
 // Author        : Aniket Pathare | aniket.pathare@government.ie
 // Date Created  : 22-09-2026 | Updated: 24-09-2026 (transferee multi-match), 30-09-2026 (individual logins), 02-10-2026 (no match)
 //                                       06-10-2026 (loginAs: new-user Next screens straight after the password Login click)
@@ -32,6 +38,7 @@
 //                                       08-10-2026 (verifyTransfereeHolder; acceptWithTransferKey key button wait)
 //                                       08-10-2026 (ensureIndividualTransferorHerd: the login can open a partnership)
 //                                       12-10-2026 (searchTransferee: waits for the real result of THIS search)
+//                                       06-11-2026 (searchTransferOut: first herd of the list when the herd is not found)
 // ===================================================================================================================================
 
 package stepdefinitions.ENTS;
@@ -47,9 +54,11 @@ import utilities.EntsTestData;
 import utilities.ObjReader;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -563,20 +572,32 @@ final class EntsSession
     static final String NAME_CELL_XPATH    = "//td[contains(@class,'mat-column-name')]";
     static final String EXPIRED_CELL_XPATH = "//td[contains(@class,'mat-column-expired')]";
 
+    // Herd typed in the feature file -> herd used instead, when the typed herd is not in the Transfer Out list (06-11-2026).
+    // transferOutAllRowsXpath reads it, so activeTransferOutRows, transferOutName and clickTransferOutView follow the
+    // replacement without any change. Only filled for test cases listed in ents.transferout.first.row.testcases.
+    private static final Map<String, String> HERD_REPLACED = new HashMap<>();
+
+    // The herd really used for pHerd (pHerd itself when it was not replaced)
+    static String replacedHerd(String pHerd)
+    {
+        return HERD_REPLACED.getOrDefault(pHerd, pHerd);
+    }
+
     // ***************************************************************************************************************************************************************************************
     // Function Name : transferOutAllRowsXpath
     // Description   : XPath of EVERY Transfer Out row of one herd, expired or not: rows whose Herd No. cell is exactly
     //                 the herd and that have a View link.
     //                 One herd can have several rows, one per holder. Seen 22-09-2026 for D3990193: "Thomas Morris"
     //                 (Expired icon shown) and "Jean Doolaghty" (not expired). Both rows hold the same herd number.
+    //                 06-11-2026: uses the replacement herd when searchTransferOut replaced pHerd.
     // Parameters    : pHerd (String) - herd number
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026
+    // Date Created  : 22-09-2026 | Updated: 06-11-2026 (replaced herd)
     // ***************************************************************************************************************************************************************************************
     static String transferOutAllRowsXpath(String pHerd)
     {
         return "//tr[." + VIEW_LINK_XPATH + "]"
-                + "[.//td[contains(@class,'mat-column-herdNo')][normalize-space()='" + pHerd + "']]";
+                + "[.//td[contains(@class,'mat-column-herdNo')][normalize-space()='" + replacedHerd(pHerd) + "']]";
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -603,25 +624,68 @@ final class EntsSession
     //                 is shown (up to ents.search.seconds). Returns false when it never appears.
     //                 Then goes through every row of the herd and logs Name + Expired for each, so the log shows which
     //                 row will be used. Expired rows are not rejected here - see activeTransferOutRows.
+    //                 06-11-2026 (TC_11_ENTS, fixed herds gone after the environment refresh): when the herd is not
+    //                 found and the test case is listed in ents.transferout.first.row.testcases, the search box is
+    //                 emptied, the first NOT-expired herd of the full list is taken (TRN rows skipped) and searched
+    //                 instead. The replacement is remembered (HERD_REPLACED), so the View click, the name and later
+    //                 searches of the same feature herd use it. Every other test case: unchanged.
     // Parameters    : pHerd (String) - herd number
     // Author        : Aniket Pathare | aniket.pathare@government.ie
-    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (logs every row)
+    // Date Created  : 22-09-2026 | Updated: 22-09-2026 (logs every row), 06-11-2026 (first-row fallback)
     // ***************************************************************************************************************************************************************************************
     static boolean searchTransferOut(String pHerd)
     {
-        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), pHerd);
+        int iSeconds = ConfigManager.getInt("ents.search.seconds", 8);
+
+        iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), replacedHerd(pHerd));
         iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
 
-        if (!isVisible(transferOutAllRowsXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 4)))
+        if (!isVisible(transferOutAllRowsXpath(pHerd), iSeconds))
         {
-            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), "");
-            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
-            //Featch the herd number from first row and again search with that herd number
-        }
+            if (!firstRowFallbackOn())
+            {
+                return false;
+            }
 
-        if (!isVisible(transferOutAllRowsXpath(pHerd), ConfigManager.getInt("ents.search.seconds", 8)))
-        {
-            return false;
+            // Blank search - every herd of the login
+            log.warning("[TRANSFER] " + replacedHerd(pHerd) + " is not in the Transfer Out list of " + EntsTestData.loggedInUser()
+                    + " - blank search to take the first herd of the list.");
+            xp(ObjReader.getLocator("iTransfersHerdSearchField")).first().fill("");
+            iAction("CLICK", "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+
+            // First NOT-expired row whose herd starts with a letter (TRN rows start with a digit)
+            String iUsableRows = "//tr[." + VIEW_LINK_XPATH + "][not(." + EXPIRED_CELL_XPATH + "//mat-icon)]";
+            if (!isVisible(iUsableRows, iSeconds))
+            {
+                log.warning("[TRANSFER] The blank search shows no usable row either (0 of 0, or every row expired).");
+                return false;
+            }
+            String iNewHerd = null;
+            for (Locator iRow : xp(iUsableRows).all())
+            {
+                String iCell = iRow.locator("xpath=.//td[contains(@class,'mat-column-herdNo')]").first().innerText().trim();
+                if (iCell.matches("^[A-Z].*"))
+                {
+                    iNewHerd = iCell;
+                    break;
+                }
+            }
+            if (iNewHerd == null)
+            {
+                log.warning("[TRANSFER] The first page of the list has only TRN rows - no herd to use instead of " + pHerd + ".");
+                return false;
+            }
+
+            HERD_REPLACED.put(pHerd, iNewHerd);
+            log.warning("[TRANSFER] Using " + iNewHerd + " (first herd of the Transfer Out list) instead of " + pHerd + ".");
+
+            // Search again with the new herd, so only its row is on screen
+            iAction("TEXTBOX", "XPATH", ObjReader.getLocator("iTransfersHerdSearchField"), iNewHerd);
+            iAction("CLICK",   "XPATH", ObjReader.getLocator("iTransfersSearchBtn"), null);
+            if (!isVisible(transferOutAllRowsXpath(pHerd), iSeconds))
+            {
+                return false;
+            }
         }
 
         List<Locator> iRows = xp(transferOutAllRowsXpath(pHerd)).all();
@@ -638,10 +702,22 @@ final class EntsSession
             {
                 iName = "?";
             }
-            log.info("[TRANSFER] " + pHerd + " row " + (i + 1) + "/" + iRows.size() + ": Name='" + iName + "' | "
+            log.info("[TRANSFER] " + replacedHerd(pHerd) + " row " + (i + 1) + "/" + iRows.size() + ": Name='" + iName + "' | "
                     + (iExpired ? "EXPIRED - skipped" : "not expired"));
         }
         return true;
+    }
+
+    // True when the running test case (System property "testcase") is listed in ents.transferout.first.row.testcases
+    // (comma separated, default TC_11_ENTS). Keeps the first-row fallback away from every other test case.
+    private static boolean firstRowFallbackOn()
+    {
+        String iTestCase = System.getProperty("testcase", "").trim();
+        for (String iId : ConfigManager.getOrDefault("ents.transferout.first.row.testcases", "TC_11_ENTS").split(","))
+        {
+            if (!iId.trim().isEmpty() && iId.trim().equalsIgnoreCase(iTestCase)) return true;
+        }
+        return false;
     }
 
     // ***************************************************************************************************************************************************************************************
@@ -692,7 +768,7 @@ final class EntsSession
             throw new IllegalStateException("[TRANSFER] Every Transfer Out row of herd " + pHerd + " is marked expired - nothing to open.");
         }
         iAction("CLICK", "XPATH", "(" + transferOutRowXpath(pHerd) + VIEW_LINK_XPATH + ")[1]", null);
-        log.info("[TRANSFER] Opened herd " + pHerd + " ('" + transferOutName(pHerd) + "' row) from Transfer Out.");
+        log.info("[TRANSFER] Opened herd " + replacedHerd(pHerd) + " ('" + transferOutName(pHerd) + "' row) from Transfer Out.");
     }
 
     // ***************************************************************************************************************************************************************************************
