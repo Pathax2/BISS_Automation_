@@ -1,0 +1,1012 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maintainability and Scale Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  @property --c { syntax: '<color>'; inherits: true; initial-value: #16407A; }
+  :root {
+    --bg: #070D1B;
+    --panel: rgba(15, 23, 42, 0.62);
+    --line: rgba(255, 255, 255, 0.09);
+    --ink: #F1F5FB;
+    --muted: #A9B8CF;
+    --c: #16407A;
+    --sw: min(calc(100vw - 32px), calc((100vh - 250px) * 1.7778));
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1100px 620px at 12% -12%, rgba(34, 197, 94, 0.14), transparent 60%),
+      radial-gradient(900px 620px at 100% 112%, rgba(59, 130, 246, 0.16), transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    transition: --c 0.8s ease;
+    overflow-x: hidden;
+  }
+  .app { min-height: 100vh; overflow-x: clip; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 16px; }
+
+  /* ---------- diagram card ---------- */
+  .stage { position: relative; width: var(--sw); }
+  .stage::before {
+    content: ""; position: absolute; inset: -6% -4%; z-index: 0; pointer-events: none;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--c) 45%, transparent), transparent 75%);
+    filter: blur(40px); opacity: 0.55;
+  }
+  .card {
+    position: relative; z-index: 1; border-radius: 18px; overflow: hidden;
+    box-shadow: 0 40px 100px -24px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+  #dia { display: block; width: 100%; height: auto; }
+
+  /* ---------- step states ---------- */
+  #dia .step { transition: opacity 0.7s ease; }
+  #dia .step.future { opacity: 0; pointer-events: none; }
+  #dia .step.past { opacity: 0.26; }
+  #dia .step.past:hover { opacity: 0.62; }
+  #dia .step.current, #dia .step.shown { opacity: 1; }
+
+  /* entry animations: replayed each time a step becomes current */
+  #dia .step.current .ni { animation: rise 0.7s cubic-bezier(.2, .8, .2, 1) var(--d, 0s) both; }
+  #dia .step.current .zone { transform-box: fill-box; transform-origin: center; animation: zin 0.65s ease-out 0.05s both; }
+  #dia .step.current .draw { stroke-dasharray: 1; animation: draw 0.75s ease-out var(--d, 0s) both; }
+  #dia .step.current .drawl { stroke-dasharray: 1; animation: drawl 0.75s ease-out var(--d, 0s) both; }
+  #dia .step.current .fade, #dia .step.current .lbl, #dia .step.current .bul, #dia .step.current .pwbg { animation: fade 0.55s ease-out var(--d, 0.5s) both; }
+  #dia .step.current .bp { transform-box: fill-box; transform-origin: center; animation: pop 0.6s cubic-bezier(.3, 1.7, .5, 1) var(--d, 0.3s) both; }
+  #dia .step.current .zframe { animation: zglow 2.6s ease-in-out 1.1s infinite; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+  @keyframes zin { from { opacity: 0; transform: scale(0.985); } to { opacity: 1; transform: none; } }
+  @keyframes draw { 0% { stroke-dashoffset: 1; marker-end: none; } 88% { marker-end: none; } 89% { marker-end: url(#arr); } 100% { stroke-dashoffset: 0; marker-end: url(#arr); } }
+  @keyframes drawl { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pop { 0% { opacity: 0; transform: scale(0.2); } 100% { opacity: 1; transform: scale(1); } }
+  @keyframes zglow { 0%, 100% { stroke-opacity: 0.55; stroke-width: 1.4; fill-opacity: 0.045; } 50% { stroke-opacity: 1; stroke-width: 2.6; fill-opacity: 0.085; } }
+
+  /* data particles travelling along the numbered flows */
+  #dia .flowline { fill: none; stroke: var(--fc); stroke-width: 3.6; stroke-linecap: round; stroke-dasharray: 0.1 12.9; opacity: 0; pointer-events: none; }
+  #dia .step.current .flowline { animation: march 0.9s linear infinite, fade 0.4s ease-out 0.75s both; }
+  #dia.all .flowline { opacity: 1; animation: march 0.9s linear infinite; }
+  @keyframes march { to { stroke-dashoffset: -13; } }
+
+  #dia .ring { opacity: 0; transform-box: fill-box; transform-origin: center; pointer-events: none; }
+  #dia .step.current .ring { animation: ring 2.2s ease-out 0.9s infinite; }
+  #dia.all .ring { animation: ring 2.8s ease-out calc(var(--n) * 0.4s) infinite; }
+  @keyframes ring { 0% { opacity: 0.75; transform: scale(1); } 100% { opacity: 0; transform: scale(2.7); } }
+
+  #cap.swap { animation: capin 0.6s ease-out both; }
+  @keyframes capin { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- hover effects on every box ---------- */
+  #dia .node, #dia .panel { cursor: pointer; transition: transform 0.32s cubic-bezier(.2, .8, .2, 1), filter 0.32s ease; }
+  #dia .node:hover, #dia .panel:hover { transform: translateY(-4px); filter: drop-shadow(0 14px 16px color-mix(in srgb, var(--c) 38%, transparent)); }
+  #dia .node .ncard { transition: fill 0.25s ease; }
+  #dia .node:hover .ncard { fill: color-mix(in srgb, var(--c) 6%, #FFFFFF); }
+  #dia .node .acc, #dia .panel .acc { transition: stroke-opacity 0.25s ease, stroke-width 0.25s ease; }
+  #dia .node:hover .acc { stroke-opacity: 1; stroke-width: 2.2; }
+  #dia .panel:hover .acc { stroke-opacity: 0.9; }
+  #dia .node .tg { transform-box: fill-box; transform-origin: center; transition: transform 0.4s cubic-bezier(.3, 1.7, .5, 1); }
+  #dia .node:hover .tg { transform: scale(1.14) rotate(-5deg); }
+  #dia .node .nbar { transition: filter 0.25s ease; }
+  #dia .node:hover .nbar { filter: brightness(1.25); }
+  #dia .cyl .lid { transition: fill 0.25s ease; }
+  #dia .cyl:hover .lid { fill: #DE9A48; }
+  #dia .ztab { cursor: pointer; transition: filter 0.25s ease; }
+  #dia .ztab:hover { filter: brightness(1.18) drop-shadow(0 4px 8px color-mix(in srgb, var(--zc) 50%, transparent)); }
+  #dia .pill { transition: transform 0.25s ease, filter 0.25s ease; }
+  #dia .pill rect { transition: fill-opacity 0.25s ease; }
+  #dia .pill:hover { transform: translateY(-2px); }
+  #dia .pill:hover rect { fill-opacity: 0.22; }
+  #dia .pill.hl:hover { filter: drop-shadow(0 0 10px rgba(34, 197, 94, 0.9)); }
+  #dia .pill.hl:hover rect { fill-opacity: 1; }
+
+  /* ---------- presenter bar ---------- */
+  .bar {
+    width: max(var(--sw), min(calc(100vw - 32px), 980px));
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 14px 18px 16px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.6);
+  }
+  .segs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .seg {
+    position: relative; flex: 1; height: 6px; border: 0; padding: 0; border-radius: 99px; cursor: pointer;
+    background: rgba(255, 255, 255, 0.12); transition: height 0.2s ease, background 0.2s ease;
+  }
+  .seg:hover { height: 10px; background: rgba(255, 255, 255, 0.22); }
+  .seg i { position: absolute; inset: 0; width: 0; border-radius: inherit; background: var(--sc); }
+  .seg.done i, .seg.cur i { width: 100%; }
+  .seg.cur i { box-shadow: 0 0 12px var(--sc); }
+  .seg.cur.timing i { width: 0; animation: fill var(--dur) linear forwards; }
+  @keyframes fill { to { width: 100%; } }
+  .seg::after {
+    content: attr(data-label); position: absolute; left: 50%; bottom: 16px; transform: translate(-50%, 4px);
+    white-space: nowrap; font-size: 11.5px; font-weight: 600; color: #fff; background: rgba(2, 6, 23, 0.92);
+    border: 1px solid var(--line); padding: 5px 9px; border-radius: 8px; opacity: 0; pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  .seg:hover::after { opacity: 1; transform: translate(-50%, 0); }
+
+  .row { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; }
+  .chip {
+    width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center;
+    font-size: 20px; font-weight: 800; color: #fff; letter-spacing: -0.5px;
+    background: linear-gradient(145deg, color-mix(in srgb, var(--c) 100%, #fff 18%), color-mix(in srgb, var(--c) 80%, #000 25%));
+    box-shadow: 0 10px 28px -8px var(--c), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  }
+  .kick { font-size: 11.5px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: color-mix(in srgb, var(--c) 45%, #fff); }
+  .ttl { font-size: 21px; font-weight: 800; letter-spacing: -0.3px; margin: 2px 0 4px; }
+  .desc { font-size: 14px; line-height: 1.5; color: var(--muted); max-width: 900px; }
+  .txt.swap { animation: txtin 0.5s ease-out both; }
+  @keyframes txtin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .ctl { display: flex; gap: 8px; align-items: center; }
+  .btn {
+    height: 44px; min-width: 44px; padding: 0 14px; border-radius: 12px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font: 600 13.5px Inter, system-ui, sans-serif; color: #E8EEF8;
+    background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.14);
+    transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  }
+  .btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .btn:hover { transform: translateY(-2px); background: rgba(255, 255, 255, 0.12); border-color: color-mix(in srgb, var(--c) 70%, #fff); box-shadow: 0 10px 26px -8px var(--c); }
+  .btn:active { transform: translateY(0) scale(0.96); }
+  .btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 60%, #fff); outline-offset: 2px; }
+  .btn.primary { background: linear-gradient(145deg, color-mix(in srgb, var(--c) 100%, #fff 12%), color-mix(in srgb, var(--c) 80%, #000 20%)); border-color: transparent; }
+  .btn.primary:hover { box-shadow: 0 12px 30px -6px var(--c); }
+  .btn[disabled] { opacity: 0.35; pointer-events: none; }
+  .hint { font-size: 11.5px; color: #7D8DA6; margin-top: 10px; text-align: right; }
+  .hint kbd { font: 600 10.5px Inter, sans-serif; padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); color: #C9D5E6; }
+
+  /* ---------- tooltip ---------- */
+  .tip {
+    position: fixed; left: 0; top: 0; z-index: 20; pointer-events: none; max-width: 320px;
+    background: rgba(2, 6, 23, 0.92); border: 1px solid var(--line); border-left: 3px solid var(--tc, #22C55E);
+    border-radius: 12px; padding: 10px 13px; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.7);
+    opacity: 0; transform: translateY(6px); transition: opacity 0.16s ease, transform 0.16s ease;
+  }
+  .tip.on { opacity: 1; transform: none; }
+  .tip .z { font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--tc); }
+  .tip .t { font-size: 15px; font-weight: 700; margin: 3px 0 5px; color: #fff; }
+  .tip .l { font-size: 12.5px; color: #B6C4D8; line-height: 1.5; }
+  .tip .go { font-size: 11px; color: #7D8DA6; margin-top: 6px; }
+
+  @media (max-width: 760px) {
+    :root { --sw: calc(100vw - 16px); }
+    .app { padding: 8px; justify-content: flex-start; }
+    .row { grid-template-columns: auto 1fr; }
+    .ctl { grid-column: 1 / -1; justify-content: space-between; }
+    .ctl .lbltxt { display: none; }
+    .hint { display: none; }
+    .ttl { font-size: 18px; }
+    .desc { font-size: 13px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #dia *, .txt, .seg i { animation: none !important; transition: none !important; }
+    #dia .step.current .flowline { opacity: 1; }
+  }
+
+  /* video / frame export: diagram only, edge to edge */
+  body.export { background: #F6F8FB; }
+  .export .app { padding: 0; gap: 0; justify-content: flex-start; }
+  .export .stage { width: 100vw; }
+  .export .stage::before, .export .bar, .export .tip { display: none; }
+  .export .card { border-radius: 0; box-shadow: none; }
+
+  :fullscreen .app { background: var(--bg); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage"><div class="card">
+<svg id="dia" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" role="img" aria-label="Maintainability, runtime test data and future plans of the BISS and ENTS framework, animated by step">
+<defs><linearGradient id="hdr" x1="0" x2="1"><stop offset="0" stop-color="#0B1F3A"/><stop offset="1" stop-color="#16407A"/></linearGradient><radialGradient id="hdrglow" cx="0.08" cy="0.2" r="0.5"><stop offset="0" stop-color="#22C55E" stop-opacity="0.22"/><stop offset="1" stop-color="#22C55E" stop-opacity="0"/></radialGradient><linearGradient id="pwg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#15803D" stop-opacity="0.10"/><stop offset="1" stop-color="#15803D" stop-opacity="0.03"/></linearGradient><linearGradient id="rainbow" x1="0" x2="1"><stop offset="0.000" stop-color="#B42318"/><stop offset="0.143" stop-color="#6D28D9"/><stop offset="0.286" stop-color="#15803D"/><stop offset="0.429" stop-color="#B42318"/><stop offset="0.571" stop-color="#B45309"/><stop offset="0.714" stop-color="#15803D"/><stop offset="0.857" stop-color="#1D4ED8"/><stop offset="1.000" stop-color="#0E7490"/></linearGradient><pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#CBD5E1" fill-opacity="0.55"/></pattern><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748B"/></marker><filter id="sh" x="-5%" y="-5%" width="110%" height="120%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#0F172A" flood-opacity="0.08"/></filter><filter id="big" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.18"/></filter></defs>
+<rect width="1920" height="1080" fill="#F6F8FB"/>
+<rect y="84" width="1920" height="996" fill="url(#dots)"/>
+<g class="ghost"><text x="1896" y="104" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#8796AD" text-anchor="end" letter-spacing="1.2">THEME 1  ·  REDUCED MAINTENANCE</text>
+<text x="1896" y="436" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#8796AD" text-anchor="end" letter-spacing="1.2">THEME 2  ·  TEST DATA AT RUN TIME</text>
+<text x="1896" y="768" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#8796AD" text-anchor="end" letter-spacing="1.2">THEME 3  ·  FUTURE PLANS AND SCALE</text>
+<rect x="24" y="112" width="440" height="308" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="40" y="99" width="397.1" height="26" rx="13" fill="#E2E8F0"/>
+<text x="54" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">A</text>
+<text x="70" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">THE MAINTENANCE PROBLEM · SELENIUM DAYS</text>
+<rect x="484" y="112" width="700" height="308" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="500" y="99" width="530.6" height="26" rx="13" fill="#E2E8F0"/>
+<text x="514" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">B</text>
+<text x="530" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">ONE PLACE FOR EVERYTHING · COMMONFUNCTIONS &amp; UIHELPERS</text>
+<rect x="1204" y="112" width="692" height="308" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="1220" y="99" width="308.1" height="26" rx="13" fill="#E2E8F0"/>
+<text x="1234" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">C</text>
+<text x="1250" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">WHAT IT MEANS FOR MAINTENANCE</text>
+<rect x="24" y="444" width="440" height="308" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="40" y="431" width="254.70000000000002" height="26" rx="13" fill="#E2E8F0"/>
+<text x="54" y="448" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">D</text>
+<text x="70" y="448.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">THE TEST DATA CHALLENGE</text>
+<rect x="484" y="444" width="700" height="308" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="500" y="431" width="388.2" height="26" rx="13" fill="#E2E8F0"/>
+<text x="514" y="448" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">E</text>
+<text x="530" y="448.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">THE FIX · DATA FROM ORACLE AT RUN TIME</text>
+<rect x="1204" y="444" width="692" height="308" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="1220" y="431" width="139.0" height="26" rx="13" fill="#E2E8F0"/>
+<text x="1234" y="448" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">F</text>
+<text x="1250" y="448.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">THE RESULT</text>
+<rect x="24" y="776" width="920" height="274" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="40" y="763" width="219.1" height="26" rx="13" fill="#E2E8F0"/>
+<text x="54" y="780" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">G</text>
+<text x="70" y="780.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">NEXT ON THE ROADMAP</text>
+<rect x="964" y="776" width="932" height="274" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="980" y="763" width="165.7" height="26" rx="13" fill="#E2E8F0"/>
+<text x="994" y="780" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1010" y="780.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">HOW IT SCALES</text></g>
+<g class="legend"><text x="24" y="1073" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="600" fill="#5B6B82" text-anchor="start" letter-spacing="0">Flow:  1 problem → one shared core  ·  2 core → maintenance gains  ·  3 data problem → runtime data  ·  4 runtime data → results  ·  5 what is next  ·  6 how it scales</text>
+<text x="1896" y="1073" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="600" fill="#5B6B82" text-anchor="end" letter-spacing="0">DAFM BISS / ENTS · QA Automation</text></g>
+<g class="step future" data-step="1"><g class="zone" style="--zc:#B42318">
+<rect class="zframe" x="24" y="112" width="440" height="308" rx="16" fill="#B42318" fill-opacity="0.045" stroke="#B42318" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="40" y="99" width="397.1" height="26" rx="13" fill="#B42318"/>
+<circle cx="54" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="54" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">A</text>
+<text x="70" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">THE MAINTENANCE PROBLEM · SELENIUM DAYS</text>
+</g></g>
+<g class="node" data-s="1" data-t="Waits copied into every class" data-l="isVisible(By, 5) lived in ten files" data-z="A · The maintenance problem" style="--c:#B42318">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="44" y="140" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="140" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="146.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,152.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a7 7 0 0 1 12.5-3.5L19 8M20 15a7 7 0 0 1-12.5 3.5L5 16"/><path d="M19 3.5V8h-4.5M5 20.5V16h4.5"/></g></g>
+<text x="100" y="160.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Waits copied into every class</text>
+<text x="100" y="176.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">isVisible(By, 5) lived in ten files</text>
+</g></g>
+<g class="node" data-s="1" data-t="XPaths inside Java" data-l="a UI change meant a Java change and a review" data-z="A · The maintenance problem" style="--c:#B42318">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="44" y="194" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="194" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="200.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,206.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l-5 6 5 6M16 6l5 6-5 6M14 4l-4 16"/></g></g>
+<text x="100" y="214.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">XPaths inside Java</text>
+<text x="100" y="230.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">a UI change meant a Java change and a review</text>
+</g></g>
+<g class="node" data-s="1" data-t="Thread.sleep and hard waits" data-l="slow when green, flaky when the server is busy" data-z="A · The maintenance problem" style="--c:#B42318">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="44" y="248" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="248" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="254.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,260.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></g></g>
+<text x="100" y="268.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Thread.sleep and hard waits</text>
+<text x="100" y="284.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">slow when green, flaky when the server is busy</text>
+</g></g>
+<g class="node" data-s="1" data-t="Browser plumbing in steps" data-l="switchTo window · frame · alert · JS clicks" data-z="A · The maintenance problem" style="--c:#B42318">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="44" y="302" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="302" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="308.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,314.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M2.5 8.5h19"/><circle cx="5.5" cy="6.3" r="0.6"/><circle cx="7.8" cy="6.3" r="0.6"/></g></g>
+<text x="100" y="322.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Browser plumbing in steps</text>
+<text x="100" y="338.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">switchTo window · frame · alert · JS clicks</text>
+</g></g>
+<g class="node" data-s="1" data-t="Excel rows in step text" data-l="herd from row 7: brittle and unreadable" data-z="A · The maintenance problem" style="--c:#B42318">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="44" y="356" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="356" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="362.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,368.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14.5h18M9 4v16"/></g></g>
+<text x="100" y="376.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Excel rows in step text</text>
+<text x="100" y="392.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">herd from row 7: brittle and unreadable</text>
+</g></g></g>
+<g class="step future" data-step="2"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M464,266 L482,266" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="1" style="--fc:#6D28D9" d="M464,266 L482,266"/>
+<g class="badge" style="--n:1">
+<circle class="ring" cx="473" cy="266" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="473" cy="266" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="473" y="270" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">1</text></g>
+</g>
+<g class="lbl" style="--d:0.45s"><text x="473" y="291" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="middle" letter-spacing="0.4">FIX</text></g>
+<g class="zone" style="--zc:#6D28D9">
+<rect class="zframe" x="484" y="112" width="700" height="308" rx="16" fill="#6D28D9" fill-opacity="0.045" stroke="#6D28D9" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="500" y="99" width="530.6" height="26" rx="13" fill="#6D28D9"/>
+<circle cx="514" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="514" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">B</text>
+<text x="530" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">ONE PLACE FOR EVERYTHING · COMMONFUNCTIONS &amp; UIHELPERS</text>
+</g></g>
+<g class="node" data-s="2" data-t="iAction( ) engine" data-l="17 action types, one signature | waits · highlight · log · mask · metrics" data-z="B · One place for everything" style="--c:#6D28D9">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="504" y="140" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="504" y="140" width="322" height="74" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="515" y="152" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(521,158) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></g></g>
+<text x="560" y="165" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">iAction( ) engine</text>
+<text x="560" y="181" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">17 action types, one signature</text>
+<text x="560" y="195" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">waits · highlight · log · mask · metrics</text>
+</g></g>
+<g class="node" data-s="2" data-t="ObjReader + Object Repository" data-l="every XPath lives in one properties file | {TOKEN} keys for dynamic rows" data-z="B · One place for everything" style="--c:#6D28D9">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="838" y="140" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="838" y="140" width="322" height="74" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="849" y="152" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(855,158) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></g></g>
+<text x="894" y="165" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">ObjReader + Object Repository</text>
+<text x="894" y="181" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">every XPath lives in one properties file</text>
+<text x="894" y="195" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">{TOKEN} keys for dynamic rows</text>
+</g></g>
+<g class="node" data-s="2" data-t="UiHelpers" data-l="isVisible · byXpath · jsClick · setValueByJs | tabs · frames · dialogs · downloads · keys" data-z="B · One place for everything" style="--c:#6D28D9">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="504" y="226" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="504" y="226" width="322" height="74" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="515" y="238" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(521,244) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20L15 9M14 4v3M19 9h-3M17.5 5.5l-2 2M11 3.5l.8 2.2M20.5 13l-2.2-.8"/></g></g>
+<text x="560" y="251" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">UiHelpers</text>
+<text x="560" y="267" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">isVisible · byXpath · jsClick · setValueByJs</text>
+<text x="560" y="281" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">tabs · frames · dialogs · downloads · keys</text>
+</g></g>
+<g class="node" data-s="2" data-t="ConfigManager" data-l="-D  &gt;  BISS_ env  &gt;  profile  &gt;  base file | every timeout and switch is a key" data-z="B · One place for everything" style="--c:#6D28D9">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="838" y="226" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="838" y="226" width="322" height="74" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="849" y="238" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(855,244) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></g></g>
+<text x="894" y="251" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">ConfigManager</text>
+<text x="894" y="267" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">-D  &gt;  BISS_ env  &gt;  profile  &gt;  base file</text>
+<text x="894" y="281" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">every timeout and switch is a key</text>
+</g></g>
+<g class="node" data-s="2" data-t="LoginScreens" data-l="PIN · TOTP · OTP · expired-account guard | written once, used by every pack" data-z="B · One place for everything" style="--c:#8B5CF6">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="504" y="312" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="504" y="312" width="322" height="74" rx="10" fill="none" stroke="#8B5CF6" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="515" y="324" width="34" height="34" rx="9" fill="#8B5CF6"/>
+<g transform="translate(521,330) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16 7l3 3M14 9l2 2"/></g></g>
+<text x="560" y="337" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">LoginScreens</text>
+<text x="560" y="353" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">PIN · TOTP · OTP · expired-account guard</text>
+<text x="560" y="367" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">written once, used by every pack</text>
+</g></g>
+<g class="node" data-s="2" data-t="Self-healing in the engine" data-l="click fallback · mat-select · spinners | fixed once, every test benefits" data-z="B · One place for everything" style="--c:#8B5CF6">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="838" y="312" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="838" y="312" width="322" height="74" rx="10" fill="none" stroke="#8B5CF6" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="849" y="324" width="34" height="34" rx="9" fill="#8B5CF6"/>
+<g transform="translate(855,330) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a7 7 0 0 1 12.5-3.5L19 8M20 15a7 7 0 0 1-12.5 3.5L5 16"/><path d="M19 3.5V8h-4.5M5 20.5V16h4.5"/></g></g>
+<text x="894" y="337" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Self-healing in the engine</text>
+<text x="894" y="353" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">click fallback · mat-select · spinners</text>
+<text x="894" y="367" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">fixed once, every test benefits</text>
+</g></g></g>
+<g class="step future" data-step="3"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1184,266 L1202,266" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="2" style="--fc:#15803D" d="M1184,266 L1202,266"/>
+<g class="badge" style="--n:2">
+<circle class="ring" cx="1193" cy="266" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1193" cy="266" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1193" y="270" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">2</text></g>
+</g>
+<g class="lbl" style="--d:0.45s"><text x="1193" y="291" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="middle" letter-spacing="0.4">GAIN</text></g>
+<g class="zone" style="--zc:#15803D">
+<rect class="zframe" x="1204" y="112" width="692" height="308" rx="16" fill="#15803D" fill-opacity="0.045" stroke="#15803D" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="1220" y="99" width="308.1" height="26" rx="13" fill="#15803D"/>
+<circle cx="1234" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="1234" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">C</text>
+<text x="1250" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">WHAT IT MEANS FOR MAINTENANCE</text>
+</g></g>
+<g class="node" data-s="3" data-t="UI change = one key in the Object Repository" data-l="no Java edit, no review cycle, no re-test of the glue" data-z="C · What it means for maintenance" style="--c:#15803D">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="140" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="140" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="146.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,152.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.3l2.7 2.7L16 9.5"/></g></g>
+<text x="1280" y="160.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">UI change = one key in the Object Repository</text>
+<text x="1280" y="176.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">no Java edit, no review cycle, no re-test of the glue</text>
+</g></g>
+<g class="node" data-s="3" data-t="Behaviour change = one config key" data-l="timeouts · fallbacks · browser reuse · tracing · zoom" data-z="C · What it means for maintenance" style="--c:#15803D">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="194" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="194" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="200.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,206.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></g></g>
+<text x="1280" y="214.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Behaviour change = one config key</text>
+<text x="1280" y="230.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">timeouts · fallbacks · browser reuse · tracing · zoom</text>
+</g></g>
+<g class="node" data-s="3" data-t="New action type = one performX method" data-l="every pack gets it the same day" data-z="C · What it means for maintenance" style="--c:#15803D">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="248" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="248" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="254.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,260.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></g></g>
+<text x="1280" y="268.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">New action type = one performX method</text>
+<text x="1280" y="284.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">every pack gets it the same day</text>
+</g></g>
+<g class="node" data-s="3" data-t="Engine swap with zero step changes" data-l="Selenium → Playwright kept iAction and the OR as they were" data-z="C · What it means for maintenance" style="--c:#15803D">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="302" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="302" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="308.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,314.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g></g>
+<text x="1280" y="322.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Engine swap with zero step changes</text>
+<text x="1280" y="338.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Selenium → Playwright kept iAction and the OR as they were</text>
+</g></g>
+<g class="node" data-s="3" data-t="Step code reads as business steps" data-l="new joiners write Gherkin and OR keys, not browser code" data-z="C · What it means for maintenance" style="--c:#15803D">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="356" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="356" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="362.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,368.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></g></g>
+<text x="1280" y="376.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Step code reads as business steps</text>
+<text x="1280" y="392.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">new joiners write Gherkin and OR keys, not browser code</text>
+</g></g></g>
+<g class="step future" data-step="4"><g class="zone" style="--zc:#B42318">
+<rect class="zframe" x="24" y="444" width="440" height="308" rx="16" fill="#B42318" fill-opacity="0.045" stroke="#B42318" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="40" y="431" width="254.70000000000002" height="26" rx="13" fill="#B42318"/>
+<circle cx="54" cy="444" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="54" y="448" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">D</text>
+<text x="70" y="448.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">THE TEST DATA CHALLENGE</text>
+</g></g>
+<g class="node" data-s="4" data-t="Herds typed into TestData.xlsx" data-l="found by hand in SQL Developer, per test case" data-z="D · The test data challenge" style="--c:#B42318">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="44" y="472" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="472" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="478.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,484.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14.5h18M9 4v16"/></g></g>
+<text x="100" y="492.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Herds typed into TestData.xlsx</text>
+<text x="100" y="508.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">found by hand in SQL Developer, per test case</text>
+</g></g>
+<g class="node" data-s="4" data-t="CENTEST refreshed every week" data-l="a production copy: last week&#x27;s herds vanish" data-z="D · The test data challenge" style="--c:#B42318">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="44" y="526" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="526" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="532.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,538.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g></g>
+<text x="100" y="546.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">CENTEST refreshed every week</text>
+<text x="100" y="562.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">a production copy: last week&#x27;s herds vanish</text>
+</g></g>
+<g class="node" data-s="4" data-t="One herd per submission" data-l="NR / CISYF, transfers: used once, then burnt" data-z="D · The test data challenge" style="--c:#B42318">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="44" y="580" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="580" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="586.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,592.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></g></g>
+<text x="100" y="600.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">One herd per submission</text>
+<text x="100" y="616.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">NR / CISYF, transfers: used once, then burnt</text>
+</g></g>
+<g class="node" data-s="4" data-t="Queries in the middle of a scenario" data-l="5–6 s each, failing only after login and navigation" data-z="D · The test data challenge" style="--c:#B42318">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="44" y="634" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="634" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="640.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,646.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></g></g>
+<text x="100" y="654.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Queries in the middle of a scenario</text>
+<text x="100" y="670.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">5–6 s each, failing only after login and navigation</text>
+</g></g>
+<g class="node" data-s="4" data-t="Pairs are hard to find by hand" data-l="transferor + transferee · ETF partner · individual login" data-z="D · The test data challenge" style="--c:#B42318">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="44" y="688" width="400" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="688" width="400" height="46" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="694.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,700.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="8" r="3"/><circle cx="17" cy="16" r="3"/><path d="M9.5 10l5 4"/></g></g>
+<text x="100" y="708.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Pairs are hard to find by hand</text>
+<text x="100" y="724.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">transferor + transferee · ETF partner · individual login</text>
+</g></g></g>
+<g class="step future" data-step="5"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M464,598 L482,598" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="3" style="--fc:#B45309" d="M464,598 L482,598"/>
+<g class="badge" style="--n:3">
+<circle class="ring" cx="473" cy="598" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="473" cy="598" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="473" y="602" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">3</text></g>
+</g>
+<g class="lbl" style="--d:0.45s"><text x="473" y="623" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="middle" letter-spacing="0.4">FIX</text></g>
+<g class="zone" style="--zc:#B45309">
+<rect class="zframe" x="484" y="444" width="700" height="308" rx="16" fill="#B45309" fill-opacity="0.045" stroke="#B45309" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="500" y="431" width="388.2" height="26" rx="13" fill="#B45309"/>
+<circle cx="514" cy="444" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="514" y="448" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">E</text>
+<text x="530" y="448.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">THE FIX · DATA FROM ORACLE AT RUN TIME</text>
+</g></g>
+<g class="node" data-s="5" data-t="DBRouter" data-l="labelled SQL across three Oracle schemas | bind parameters · thread-safe · timed" data-z="E · Data from Oracle at run time" style="--c:#B45309">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="504" y="472" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="504" y="472" width="322" height="74" rx="10" fill="none" stroke="#B45309" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="515" y="484" width="34" height="34" rx="9" fill="#B45309"/>
+<g transform="translate(521,490) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g></g>
+<text x="560" y="497" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">DBRouter</text>
+<text x="560" y="513" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">labelled SQL across three Oracle schemas</text>
+<text x="560" y="527" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">bind parameters · thread-safe · timed</text>
+</g></g>
+<g class="node" data-s="5" data-t="DataHarvester · TC_00_DATA" data-l="every query once, up front, in parallel | Monday refill, or when the DB fingerprint changes" data-z="E · Data from Oracle at run time" style="--c:#B45309">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="838" y="472" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="838" y="472" width="322" height="74" rx="10" fill="none" stroke="#B45309" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="849" y="484" width="34" height="34" rx="9" fill="#B45309"/>
+<g transform="translate(855,490) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16M7 20V10M12 20V5M17 20v-8"/></g></g>
+<text x="894" y="497" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">DataHarvester · TC_00_DATA</text>
+<text x="894" y="513" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">every query once, up front, in parallel</text>
+<text x="894" y="527" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Monday refill, or when the DB fingerprint changes</text>
+</g></g>
+<g class="node" data-s="5" data-t="Test Data Vault" data-l="AVAILABLE → RESERVED → USED / BAD | file lock · stock report · never committed" data-z="E · Data from Oracle at run time" style="--c:#B45309">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="504" y="558" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="504" y="558" width="322" height="74" rx="10" fill="none" stroke="#B45309" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="515" y="570" width="34" height="34" rx="9" fill="#B45309"/>
+<g transform="translate(521,576) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="18" height="17" rx="2"/><circle cx="12" cy="12" r="4"/><path d="M12 8v1.5M12 14.5V16M8 12h1.5M14.5 12H16"/></g></g>
+<text x="560" y="583" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Test Data Vault</text>
+<text x="560" y="599" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">AVAILABLE → RESERVED → USED / BAD</text>
+<text x="560" y="613" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">file lock · stock report · never committed</text>
+</g></g>
+<g class="node" data-s="5" data-t="EntsTestData" data-l="{transferor.login} · {transferee.herd} tokens | pairs built per purpose, bad herd → next one" data-z="E · Data from Oracle at run time" style="--c:#B45309">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="838" y="558" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="838" y="558" width="322" height="74" rx="10" fill="none" stroke="#B45309" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="849" y="570" width="34" height="34" rx="9" fill="#B45309"/>
+<g transform="translate(855,576) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="8" r="3"/><circle cx="17" cy="16" r="3"/><path d="M9.5 10l5 4"/></g></g>
+<text x="894" y="583" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">EntsTestData</text>
+<text x="894" y="599" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">{transferor.login} · {transferee.herd} tokens</text>
+<text x="894" y="613" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">pairs built per purpose, bad herd → next one</text>
+</g></g>
+<g class="node" data-s="5" data-t="StaffTestData" data-l="lazy pools per scheme year · @amendable tags | cursor per year, unusable herd skipped" data-z="E · Data from Oracle at run time" style="--c:#D97706">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="504" y="644" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="504" y="644" width="322" height="74" rx="10" fill="none" stroke="#D97706" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="515" y="656" width="34" height="34" rx="9" fill="#D97706"/>
+<g transform="translate(521,662) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></g></g>
+<text x="560" y="669" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">StaffTestData</text>
+<text x="560" y="685" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">lazy pools per scheme year · @amendable tags</text>
+<text x="560" y="699" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">cursor per year, unusable herd skipped</text>
+</g></g>
+<g class="node" data-s="5" data-t="TD: resolution" data-l="TD:Column → env secret → -D → TestData.xlsx | Excel keeps config and secrets only" data-z="E · Data from Oracle at run time" style="--c:#D97706">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="838" y="644" width="322" height="74" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="838" y="644" width="322" height="74" rx="10" fill="none" stroke="#D97706" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="849" y="656" width="34" height="34" rx="9" fill="#D97706"/>
+<g transform="translate(855,662) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16 7l3 3M14 9l2 2"/></g></g>
+<text x="894" y="669" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">TD: resolution</text>
+<text x="894" y="685" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TD:Column → env secret → -D → TestData.xlsx</text>
+<text x="894" y="699" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Excel keeps config and secrets only</text>
+</g></g></g>
+<g class="step future" data-step="6"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1184,598 L1202,598" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="4" style="--fc:#15803D" d="M1184,598 L1202,598"/>
+<g class="badge" style="--n:4">
+<circle class="ring" cx="1193" cy="598" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1193" cy="598" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1193" y="602" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">4</text></g>
+</g>
+<g class="lbl" style="--d:0.45s"><text x="1193" y="623" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="middle" letter-spacing="0.4">GAIN</text></g>
+<g class="zone" style="--zc:#15803D">
+<rect class="zframe" x="1204" y="444" width="692" height="308" rx="16" fill="#15803D" fill-opacity="0.045" stroke="#15803D" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="1220" y="431" width="139.0" height="26" rx="13" fill="#15803D"/>
+<circle cx="1234" cy="444" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="1234" y="448" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">F</text>
+<text x="1250" y="448.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">THE RESULT</text>
+</g></g>
+<g class="node" data-s="6" data-t="No herd numbers in feature files" data-l="TD: placeholders and {tokens}: safe to commit" data-z="F · The result" style="--c:#15803D">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="472" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="472" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="478.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,484.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v4h4M9 12h6M9 16h6"/></g></g>
+<text x="1280" y="492.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">No herd numbers in feature files</text>
+<text x="1280" y="508.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TD: placeholders and {tokens}: safe to commit</text>
+</g></g>
+<g class="node" data-s="6" data-t="A herd in milliseconds, bad ones skipped" data-l="the run keeps going instead of failing on data" data-z="F · The result" style="--c:#15803D">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="526" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="526" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="532.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,538.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></g></g>
+<text x="1280" y="546.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">A herd in milliseconds, bad ones skipped</text>
+<text x="1280" y="562.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">the run keeps going instead of failing on data</text>
+</g></g>
+<g class="node" data-s="6" data-t="Runs survive the weekly refresh" data-l="TC_00_DATA refills the vault: no manual hunting" data-z="F · The result" style="--c:#15803D">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="580" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="580" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="586.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,592.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a7 7 0 0 1 12.5-3.5L19 8M20 15a7 7 0 0 1-12.5 3.5L5 16"/><path d="M19 3.5V8h-4.5M5 20.5V16h4.5"/></g></g>
+<text x="1280" y="600.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Runs survive the weekly refresh</text>
+<text x="1280" y="616.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TC_00_DATA refills the vault: no manual hunting</text>
+</g></g>
+<g class="node" data-s="6" data-t="Same test on SIT, CENTEST and pre-live" data-l="fixed-data mode where SQL is not allowed" data-z="F · The result" style="--c:#15803D">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="634" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="634" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="640.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,646.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3c-2.5 2.5-2.5 15.5 0 18M12 3c2.5 2.5 2.5 15.5 0 18"/></g></g>
+<text x="1280" y="654.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Same test on SIT, CENTEST and pre-live</text>
+<text x="1280" y="670.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">fixed-data mode where SQL is not allowed</text>
+</g></g>
+<g class="node" data-s="6" data-t="Farmer data stays private" data-l="vault git-ignored · reports mask herds and logins" data-z="F · The result" style="--c:#15803D">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="1224" y="688" width="652" height="46" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1224" y="688" width="652" height="46" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1235" y="694.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1241,700.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l8 3v6c0 5-3.5 8.7-8 10-4.5-1.3-8-5-8-10v-6z"/><path d="M8.5 12l2.4 2.4L15.5 9.8"/></g></g>
+<text x="1280" y="708.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Farmer data stays private</text>
+<text x="1280" y="724.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">vault git-ignored · reports mask herds and logins</text>
+</g></g></g>
+<g class="step future" data-step="7"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M834,752 L834,776" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="5" style="--fc:#1D4ED8" d="M834,752 L834,776"/>
+<g class="badge" style="--n:5">
+<circle class="ring" cx="834" cy="764" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="834" cy="764" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="834" y="768" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">5</text></g>
+<g class="lbl" style="--d:0.45s"><text x="850" y="768" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.4">NEXT</text></g>
+</g>
+<g class="zone" style="--zc:#1D4ED8">
+<rect class="zframe" x="24" y="776" width="920" height="274" rx="16" fill="#1D4ED8" fill-opacity="0.045" stroke="#1D4ED8" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="40" y="763" width="219.1" height="26" rx="13" fill="#1D4ED8"/>
+<circle cx="54" cy="776" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="54" y="780" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">G</text>
+<text x="70" y="780.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">NEXT ON THE ROADMAP</text>
+</g></g>
+<g class="node" data-s="7" data-t="Jenkins on OpenShift goes live" data-l="nightly multibranch run · DevOps activation in progress" data-z="G · Next on the roadmap" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="44" y="804" width="432" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="804" width="432" height="64" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="819.0" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(61,825.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></g></g>
+<text x="100" y="833.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Jenkins on OpenShift goes live</text>
+<text x="100" y="849.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">nightly multibranch run · DevOps activation in progress</text>
+</g></g>
+<g class="node" data-s="7" data-t="Remaining Staff packs" data-l="TC_28 – TC_37 on the same StaffSteps library" data-z="G · Next on the roadmap" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="488" y="804" width="432" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="488" y="804" width="432" height="64" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="499" y="819.0" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(505,825.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v4h4M9 12h6M9 16h6"/></g></g>
+<text x="544" y="833.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Remaining Staff packs</text>
+<text x="544" y="849.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TC_28 – TC_37 on the same StaffSteps library</text>
+</g></g>
+<g class="node" data-s="7" data-t="ENTS daily run stabilised" data-l="green every morning · data stock checked first" data-z="G · Next on the roadmap" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="44" y="878" width="432" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="878" width="432" height="64" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="893.0" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(61,899.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.3l2.7 2.7L16 9.5"/></g></g>
+<text x="100" y="907.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">ENTS daily run stabilised</text>
+<text x="100" y="923.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">green every morning · data stock checked first</text>
+</g></g>
+<g class="node" data-s="7" data-t="Test Dashboard for stakeholders" data-l="trend per build · PDF with herds masked" data-z="G · Next on the roadmap" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="488" y="878" width="432" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="488" y="878" width="432" height="64" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="499" y="893.0" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(505,899.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="10" rx="1.5"/><rect x="13" y="3" width="8" height="6" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="15" width="8" height="6" rx="1.5"/></g></g>
+<text x="544" y="907.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Test Dashboard for stakeholders</text>
+<text x="544" y="923.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">trend per build · PDF with herds masked</text>
+</g></g>
+<g class="node" data-s="7" data-t="Pre-live coverage" data-l="TC_BISS_E2E_PreLive · fixed data · no SQL" data-z="G · Next on the roadmap" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="44" y="952" width="432" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="952" width="432" height="64" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="967.0" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(61,973.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3c-2.5 2.5-2.5 15.5 0 18M12 3c2.5 2.5 2.5 15.5 0 18"/></g></g>
+<text x="100" y="981.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Pre-live coverage</text>
+<text x="100" y="997.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TC_BISS_E2E_PreLive · fixed data · no SQL</text>
+</g></g>
+<g class="node" data-s="7" data-t="Object Repository hygiene" data-l="one key per element · nothing left behind" data-z="G · Next on the roadmap" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="488" y="952" width="432" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="488" y="952" width="432" height="64" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="499" y="967.0" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(505,973.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></g></g>
+<text x="544" y="981.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Object Repository hygiene</text>
+<text x="544" y="997.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">one key per element · nothing left behind</text>
+</g></g></g>
+<g class="step future" data-step="8"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1550,752 L1550,776" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="6" style="--fc:#0E7490" d="M1550,752 L1550,776"/>
+<g class="badge" style="--n:6">
+<circle class="ring" cx="1550" cy="764" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1550" cy="764" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1550" y="768" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">6</text></g>
+<g class="lbl" style="--d:0.45s"><text x="1566" y="768" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.4">SCALE</text></g>
+</g>
+<g class="zone" style="--zc:#0E7490">
+<rect class="zframe" x="964" y="776" width="932" height="274" rx="16" fill="#0E7490" fill-opacity="0.045" stroke="#0E7490" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="980" y="763" width="165.7" height="26" rx="13" fill="#0E7490"/>
+<circle cx="994" cy="776" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="994" y="780" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1010" y="780.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">HOW IT SCALES</text>
+</g></g>
+<g class="node" data-s="8" data-t="Parallel packs on OpenShift" data-l="ThreadLocal engine + vault lock already allow it | one pod per SUITE, the same jar" data-z="H · How it scales" style="--c:#0E7490">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="984" y="804" width="438" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="804" width="438" height="64" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="819.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(1001,825.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></g></g>
+<text x="1040" y="826.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Parallel packs on OpenShift</text>
+<text x="1040" y="842.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">ThreadLocal engine + vault lock already allow it</text>
+<text x="1040" y="856.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">one pod per SUITE, the same jar</text>
+</g></g>
+<g class="node" data-s="8" data-t="A new portal = a new pack, same core" data-l="AMS and OpenShift staff packs reuse StaffSteps | no engine change needed" data-z="H · How it scales" style="--c:#0E7490">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="1434" y="804" width="438" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1434" y="804" width="438" height="64" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1445" y="819.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(1451,825.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></g></g>
+<text x="1490" y="826.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">A new portal = a new pack, same core</text>
+<text x="1490" y="842.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">AMS and OpenShift staff packs reuse StaffSteps</text>
+<text x="1490" y="856.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">no engine change needed</text>
+</g></g>
+<g class="node" data-s="8" data-t="Browser matrix for free" data-l="BrowserType: Chromium · Chrome · Edge · WebKit | one config key, no driver binaries" data-z="H · How it scales" style="--c:#0E7490">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="984" y="878" width="438" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="878" width="438" height="64" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="893.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(1001,899.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M2.5 8.5h19"/><circle cx="5.5" cy="6.3" r="0.6"/><circle cx="7.8" cy="6.3" r="0.6"/></g></g>
+<text x="1040" y="900.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Browser matrix for free</text>
+<text x="1040" y="916.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">BrowserType: Chromium · Chrome · Edge · WebKit</text>
+<text x="1040" y="930.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">one config key, no driver binaries</text>
+</g></g>
+<g class="node" data-s="8" data-t="More data pools, same vault" data-l="add a labelled query → a pool → tokens in Gherkin | stock report shows what is left" data-z="H · How it scales" style="--c:#0E7490">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="1434" y="878" width="438" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1434" y="878" width="438" height="64" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1445" y="893.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(1451,899.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="18" height="17" rx="2"/><circle cx="12" cy="12" r="4"/><path d="M12 8v1.5M12 14.5V16M8 12h1.5M14.5 12H16"/></g></g>
+<text x="1490" y="900.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">More data pools, same vault</text>
+<text x="1490" y="916.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">add a labelled query → a pool → tokens in Gherkin</text>
+<text x="1490" y="930.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">stock report shows what is left</text>
+</g></g>
+<g class="node" data-s="8" data-t="Onboarding in days" data-l="Gherkin + OR keys: the engine does the rest | conventions in every file header" data-z="H · How it scales" style="--c:#0E7490">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="984" y="952" width="438" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="952" width="438" height="64" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="967.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(1001,973.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></g></g>
+<text x="1040" y="974.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Onboarding in days</text>
+<text x="1040" y="990.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Gherkin + OR keys: the engine does the rest</text>
+<text x="1040" y="1004.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">conventions in every file header</text>
+</g></g>
+<g class="node" data-s="8" data-t="Evidence that scales" data-l="traces · metrics JSON · dashboard per build | stakeholder PDF, herds masked" data-z="H · How it scales" style="--c:#0E7490">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="1434" y="952" width="438" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1434" y="952" width="438" height="64" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1445" y="967.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(1451,973.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/></g></g>
+<text x="1490" y="974.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Evidence that scales</text>
+<text x="1490" y="990.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">traces · metrics JSON · dashboard per build</text>
+<text x="1490" y="1004.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">stakeholder PDF, herds masked</text>
+</g></g></g>
+<g class="step current" data-step="0"><g class="intro"><g class="ni" style="--d:0.15s">
+<rect x="560" y="392" width="800" height="300" rx="22" fill="#FFFFFF" filter="url(#big)"/>
+<rect x="560" y="392" width="800" height="6" rx="3" fill="url(#rainbow)"/>
+<g transform="translate(934.0,426) scale(2.1666666666666665)" fill="none" stroke="#15803D" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g>
+<text x="960.0" y="520" font-family="Inter, DejaVu Sans, sans-serif" font-size="27" font-weight="800" fill="#0F172A" text-anchor="middle" letter-spacing="-0.4">Three stories: maintenance, test data, what comes next</text>
+<text x="960.0" y="552" font-family="Inter, DejaVu Sans, sans-serif" font-size="15" font-weight="500" fill="#5B6B82" text-anchor="middle" letter-spacing="0">Each band reads left to right: the problem, the fix, and what it gives the team</text>
+<g class="bul" style="--d:0.45s"><rect x="587.0" y="582" width="88" height="58" rx="12" fill="#B42318" fill-opacity="0.08" stroke="#B42318" stroke-opacity="0.45"/>
+<circle cx="631.0" cy="602" r="11" fill="#B42318"/>
+<text x="631.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">A</text>
+<text x="631.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#B42318" text-anchor="middle" letter-spacing="0">Pain</text></g>
+<g class="bul" style="--d:0.52s"><rect x="681.0" y="582" width="88" height="58" rx="12" fill="#6D28D9" fill-opacity="0.08" stroke="#6D28D9" stroke-opacity="0.45"/>
+<circle cx="725.0" cy="602" r="11" fill="#6D28D9"/>
+<text x="725.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">B</text>
+<text x="725.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">Core</text></g>
+<g class="bul" style="--d:0.59s"><rect x="775.0" y="582" width="88" height="58" rx="12" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.45"/>
+<circle cx="819.0" cy="602" r="11" fill="#15803D"/>
+<text x="819.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">C</text>
+<text x="819.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#15803D" text-anchor="middle" letter-spacing="0">Gains</text></g>
+<g class="bul" style="--d:0.66s"><rect x="869.0" y="582" width="88" height="58" rx="12" fill="#B42318" fill-opacity="0.08" stroke="#B42318" stroke-opacity="0.45"/>
+<circle cx="913.0" cy="602" r="11" fill="#B42318"/>
+<text x="913.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">D</text>
+<text x="913.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#B42318" text-anchor="middle" letter-spacing="0">Data pain</text></g>
+<g class="bul" style="--d:0.73s"><rect x="963.0" y="582" width="88" height="58" rx="12" fill="#B45309" fill-opacity="0.08" stroke="#B45309" stroke-opacity="0.45"/>
+<circle cx="1007.0" cy="602" r="11" fill="#B45309"/>
+<text x="1007.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">E</text>
+<text x="1007.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#B45309" text-anchor="middle" letter-spacing="0">Runtime data</text></g>
+<g class="bul" style="--d:0.80s"><rect x="1057.0" y="582" width="88" height="58" rx="12" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.45"/>
+<circle cx="1101.0" cy="602" r="11" fill="#15803D"/>
+<text x="1101.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">F</text>
+<text x="1101.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#15803D" text-anchor="middle" letter-spacing="0">Gains</text></g>
+<g class="bul" style="--d:0.87s"><rect x="1151.0" y="582" width="88" height="58" rx="12" fill="#1D4ED8" fill-opacity="0.08" stroke="#1D4ED8" stroke-opacity="0.45"/>
+<circle cx="1195.0" cy="602" r="11" fill="#1D4ED8"/>
+<text x="1195.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">G</text>
+<text x="1195.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#1D4ED8" text-anchor="middle" letter-spacing="0">Roadmap</text></g>
+<g class="bul" style="--d:0.94s"><rect x="1245.0" y="582" width="88" height="58" rx="12" fill="#0E7490" fill-opacity="0.08" stroke="#0E7490" stroke-opacity="0.45"/>
+<circle cx="1289.0" cy="602" r="11" fill="#0E7490"/>
+<text x="1289.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1289.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#0E7490" text-anchor="middle" letter-spacing="0">Scale</text></g>
+<text x="960.0" y="670" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#15803D" text-anchor="middle" letter-spacing="1.2">Follow the flow  1 → 6</text>
+</g></g></g>
+<g class="header"><rect width="1920" height="84" fill="url(#hdr)"/>
+<rect width="1920" height="84" fill="url(#hdrglow)"/>
+<g transform="translate(30,22) scale(1.6666666666666667)" fill="none" stroke="#7EE2A8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g>
+<text x="84" y="42" font-family="Inter, DejaVu Sans, sans-serif" font-size="26" font-weight="700" fill="#FFFFFF" text-anchor="start" letter-spacing="-0.3">Maintainable by Design · Runtime Test Data · The Road Ahead</text>
+<text x="84" y="66" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="500" fill="#BFD0EA" text-anchor="start" letter-spacing="0" id="cap">Common functions and UI helpers that cut maintenance  ·  test data taken from Oracle at run time  ·  what comes next and how the framework scales</text>
+<g class="pill"><rect x="1739.1" y="28" width="152.9" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1815.55" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Jenkins · OpenShift</text></g>
+<g class="pill"><rect x="1606.6" y="28" width="124.5" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1668.85" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Test Data Vault</text></g>
+<g class="pill"><rect x="1538.0" y="28" width="60.599999999999994" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1568.3" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Oracle</text></g>
+<g class="pill"><rect x="1441.0" y="28" width="89.0" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1485.5" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Cucumber 7</text></g>
+<g class="pill hl"><rect x="1308.5" y="28" width="124.5" height="28" rx="14" fill="#15803D" fill-opacity="1" stroke="#7EE2A8" stroke-opacity="1"/>
+<text x="1370.75" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Playwright 1.61</text></g></g>
+</svg>
+  </div></div>
+
+  <div class="bar" role="region" aria-label="Walkthrough controls">
+    <div class="segs" id="segs"></div>
+    <div class="row">
+      <div class="chip" id="chip">01</div>
+      <div class="txt" id="txt">
+        <div class="kick" id="kick"></div>
+        <div class="ttl" id="ttl"></div>
+        <div class="desc" id="desc"></div>
+      </div>
+      <div class="ctl">
+        <button class="btn" id="prev" aria-label="Previous step"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button class="btn primary" id="play" aria-label="Auto-play">
+          <svg viewBox="0 0 24 24" id="playIco"><path d="M7 4.5l12 7.5-12 7.5z"/></svg><span class="lbltxt" id="playTxt">Auto-play</span>
+        </button>
+        <button class="btn" id="next" aria-label="Next step"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+        <button class="btn" id="allBtn" aria-label="Show the complete flow"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span class="lbltxt">Full view</span></button>
+        <button class="btn" id="fs" aria-label="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      </div>
+    </div>
+    <div class="hint"><kbd>←</kbd> <kbd>→</kbd> or <kbd>Space</kbd> to step · <kbd>P</kbd> auto-play · <kbd>F</kbd> full screen · hover any box for details, click it to jump to its layer</div>
+  </div>
+  <div class="tip" id="tip"></div>
+</div>
+
+<script>
+(function () {
+  var STEPS = [{"t": "Overview", "k": "The map", "c": "#16407A", "cap": "Common functions and UI helpers that cut maintenance  ·  test data taken from Oracle at run time  ·  what comes next and how the framework scales", "d": "Three bands. The top one is about maintenance: what used to hurt, the shared core that replaced it, and what that buys the team. The middle one is the test data story. The bottom one is what comes next and how the same design scales."}, {"t": "The Maintenance Problem", "k": "Zone A  ·  Selenium days", "c": "#B42318", "cap": "Zone A  ·  Before: waits and browser plumbing copied into every class, XPaths in Java, Excel rows in steps", "d": "In the Selenium framework every step class carried its own copy of isVisible and its own JavaScript click, XPaths sat inside Java so a UI change meant a code change and a review, hard waits made runs slow when green and flaky when busy, and step text pointed at Excel rows nobody could read."}, {"t": "One Place for Everything", "k": "Flow 1  ·  Zone B", "c": "#6D28D9", "cap": "Flow 1  ·  CommonFunctions and UiHelpers: one engine, one Object Repository, one config, one login, written once", "d": "iAction is the one entry point for all 17 action types, with waiting, highlighting, logging, masking and metrics inside it. ObjReader serves every XPath from one properties file, UiHelpers replaces the ten private copies with one implementation each, ConfigManager layers -D, environment, profile and base keys, and LoginScreens handles PIN, TOTP and OTP for every pack."}, {"t": "What It Means for Maintenance", "k": "Flow 2  ·  Zone C", "c": "#15803D", "cap": "Flow 2  ·  A UI change is one key, a behaviour change is one config value, and the engine swap needed no step changes", "d": "When the portal changes, the fix is one line in the Object Repository with no Java review. When timing changes, it is a config key. A new action type is one method and every pack gets it. The proof: the move from Selenium to Playwright kept iAction and the Object Repository exactly as they were, so step code reads as business steps that new joiners can write."}, {"t": "The Test Data Challenge", "k": "Zone D", "c": "#B42318", "cap": "Zone D  ·  Herds typed into Excel, a weekly production refresh that wipes them, and data that is burnt after one run", "d": "Test data was the biggest source of failures. Herds were found by hand in SQL Developer and typed into TestData.xlsx; CENTEST is a copy of production refreshed every week, so they vanished; an NR / CISYF or transfer herd is used once and burnt; and queries run mid-scenario took five to six seconds each and only failed after login and navigation."}, {"t": "Data from Oracle at Run Time", "k": "Flow 3  ·  Zone E", "c": "#B45309", "cap": "Flow 3  ·  DBRouter, DataHarvester and the Test Data Vault: every query once, up front, each herd tracked by status", "d": "DBRouter runs labelled, parameterised SQL across the three schemas. TC_00_DATA harvests every pool once, in parallel, and refills on the Monday refresh or when the database fingerprint changes. The Vault tracks each herd from AVAILABLE to RESERVED to USED or BAD under a file lock. EntsTestData builds transfer pairs behind {tokens}, StaffTestData keeps lazy pools per scheme year, and TD: columns resolve from secrets, -D properties or Excel."}, {"t": "The Result", "k": "Flow 4  ·  Zone F", "c": "#15803D", "cap": "Flow 4  ·  No herd numbers in Gherkin, a herd in milliseconds, runs that survive the refresh, farmer data kept private", "d": "Feature files carry placeholders and tokens instead of herd numbers, so they are safe to commit. A test takes a herd from memory in a millisecond and skips a bad one instead of failing. The weekly refresh is a refill, not a rewrite. The same test runs on SIT, CENTEST and, in fixed-data mode, pre-live. The vault stays out of Git and stakeholder reports mask herds and logins."}, {"t": "Next on the Roadmap", "k": "Flow 5  ·  Zone G", "c": "#1D4ED8", "cap": "Flow 5  ·  Pipeline go-live, the remaining Staff packs, a stable ENTS daily run and the stakeholder dashboard", "d": "The Jenkins multibranch pipeline on OpenShift is committed and DevOps activation is in progress. The remaining Staff packs, TC_28 to TC_37, go onto the same StaffSteps library. The ENTS daily run is being stabilised with the data stock checked first, the Test Dashboard gives stakeholders a trend per build, pre-live coverage runs on fixed data, and the Object Repository is being kept to one key per element."}, {"t": "How It Scales", "k": "Flow 6  ·  Zone H", "c": "#0E7490", "cap": "Flow 6  ·  The same core carries more packs, more pools, more browsers and more people without engine changes", "d": "Because the engine is thread-local and the vault is file-locked, packs can run in parallel pods, one SUITE each. A new portal is a new pack on the same core. The browser is one config key across Chromium, Chrome, Edge and WebKit. A new data need is one labelled query and one pool. A new team member writes Gherkin and Object Repository keys, and the evidence, traces, metrics and dashboard, grows with every build."}, {"t": "The Complete Picture", "k": "End to end", "c": "#15803D", "cap": "End to end  ·  One shared core, data from Oracle at run time, and a roadmap that reuses both", "d": "The whole picture: a shared core that turned UI changes into one-line fixes, a data layer that turned the weekly refresh from a crisis into a refill, and a roadmap where every next pack, pool, browser and person lands on the same foundation."}];
+  var N = STEPS.length;
+  var DUR = 7000;
+  var svg = document.getElementById("dia");
+  var groups = Array.prototype.slice.call(svg.querySelectorAll(".step"));
+  var cap = document.getElementById("cap");
+  var segs = document.getElementById("segs");
+  var txt = document.getElementById("txt");
+  var cur = -1, timer = null, playing = false;
+
+  if (new URLSearchParams(location.search).has("export")) document.body.classList.add("export");
+
+  STEPS.forEach(function (s, i) {
+    var b = document.createElement("button");
+    b.className = "seg";
+    b.setAttribute("data-label", (i + 1) + ". " + s.t);
+    b.setAttribute("aria-label", "Go to step " + (i + 1) + ": " + s.t);
+    b.style.setProperty("--sc", s.c);
+    b.appendChild(document.createElement("i"));
+    b.addEventListener("click", function () { go(i); });
+    segs.appendChild(b);
+  });
+  var segEls = Array.prototype.slice.call(segs.children);
+
+  function restart(el, cls) {
+    el.classList.remove(cls);
+    void el.getBoundingClientRect();
+    el.classList.add(cls);
+  }
+
+  function setStates(k) {
+    svg.classList.toggle("all", k === N - 1);
+    var target = null;
+    groups.forEach(function (g) {
+      var s = +g.getAttribute("data-step"), st;
+      if (k === N - 1) st = s === 0 ? "future" : "shown";
+      else if (s === 0) st = k === 0 ? "current" : "future";
+      else st = s === k ? "current" : (s < k ? "past" : "future");
+      if (st === "current") target = g;
+      else g.setAttribute("class", "step " + st);
+    });
+    if (target) {
+      target.setAttribute("class", "step");
+      void svg.getBoundingClientRect();
+      target.setAttribute("class", "step current");
+    }
+  }
+
+  function go(k) {
+    k = Math.max(0, Math.min(N - 1, k));
+    var s = STEPS[k];
+    cur = k;
+    setStates(k);
+    cap.textContent = s.cap;
+    restart(cap, "swap");
+    document.body.style.setProperty("--c", s.c);
+    document.getElementById("chip").textContent = (k + 1 < 10 ? "0" : "") + (k + 1);
+    document.getElementById("kick").textContent = "Step " + (k + 1) + " of " + N + "  ·  " + s.k;
+    document.getElementById("ttl").textContent = s.t;
+    document.getElementById("desc").textContent = s.d;
+    restart(txt, "swap");
+    segEls.forEach(function (e, i) {
+      e.classList.toggle("done", i < k);
+      e.classList.toggle("cur", i === k);
+      e.classList.remove("timing");
+    });
+    document.getElementById("prev").disabled = k === 0;
+    document.getElementById("next").disabled = k === N - 1;
+    schedule();
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!playing) return;
+    if (cur >= N - 1) { setPlaying(false); return; }
+    var seg = segEls[cur];
+    seg.style.setProperty("--dur", DUR + "ms");
+    restart(seg, "timing");
+    timer = setTimeout(function () { go(cur + 1); }, DUR);
+  }
+
+  function setPlaying(on) {
+    playing = on;
+    document.getElementById("playTxt").textContent = on ? "Pause" : "Auto-play";
+    document.getElementById("playIco").innerHTML = on ? '<path d="M8 5v14M16 5v14"/>' : '<path d="M7 4.5l12 7.5-12 7.5z"/>';
+    if (on && cur >= N - 1) { go(0); return; }
+    if (!on) { clearTimeout(timer); segEls.forEach(function (e) { e.classList.remove("timing"); }); }
+    else schedule();
+  }
+
+  function fullscreen() {
+    if (!document.fullscreenElement) { (document.documentElement.requestFullscreen || function () {}).call(document.documentElement); }
+    else if (document.exitFullscreen) { document.exitFullscreen(); }
+  }
+
+  document.getElementById("prev").addEventListener("click", function () { go(cur - 1); });
+  document.getElementById("next").addEventListener("click", function () { go(cur + 1); });
+  document.getElementById("play").addEventListener("click", function () { setPlaying(!playing); });
+  document.getElementById("allBtn").addEventListener("click", function () { go(N - 1); });
+  document.getElementById("fs").addEventListener("click", fullscreen);
+
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    var k = e.key;
+    if (k === "ArrowRight" || k === " " || k === "PageDown" || k === "Enter") { e.preventDefault(); go(cur + 1); }
+    else if (k === "ArrowLeft" || k === "PageUp" || k === "Backspace") { e.preventDefault(); go(cur - 1); }
+    else if (k === "Home") { go(0); }
+    else if (k === "End") { go(N - 1); }
+    else if (k === "p" || k === "P") { setPlaying(!playing); }
+    else if (k === "f" || k === "F") { fullscreen(); }
+  });
+
+  // swipe on phones and tablets
+  var tx = null;
+  svg.addEventListener("touchstart", function (e) { tx = e.touches[0].clientX; }, { passive: true });
+  svg.addEventListener("touchend", function (e) {
+    if (tx === null) return;
+    var dx = e.changedTouches[0].clientX - tx; tx = null;
+    if (Math.abs(dx) > 50) go(cur + (dx < 0 ? 1 : -1));
+  });
+
+  // tooltip + click to jump
+  var tip = document.getElementById("tip");
+  svg.addEventListener("mousemove", function (e) {
+    var n = e.target.closest(".node");
+    if (!n || n.closest(".step.future")) { tip.classList.remove("on"); return; }
+    var col = getComputedStyle(n).getPropertyValue("--c").trim();
+    tip.style.setProperty("--tc", col);
+    var lines = (n.getAttribute("data-l") || "").split(" | ").filter(Boolean);
+    tip.innerHTML = "";
+    var z = document.createElement("div"); z.className = "z"; z.textContent = n.getAttribute("data-z"); tip.appendChild(z);
+    var t = document.createElement("div"); t.className = "t"; t.textContent = n.getAttribute("data-t"); tip.appendChild(t);
+    lines.forEach(function (l) { var d = document.createElement("div"); d.className = "l"; d.textContent = l; tip.appendChild(d); });
+    var s = +n.getAttribute("data-s");
+    if (s !== cur) { var g = document.createElement("div"); g.className = "go"; g.textContent = "Click to jump to this layer"; tip.appendChild(g); }
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    var x = Math.min(window.innerWidth - w - 12, e.clientX + 16);
+    var y = e.clientY + 18 + h > window.innerHeight ? e.clientY - h - 14 : e.clientY + 18;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+    tip.classList.add("on");
+  });
+  svg.addEventListener("mouseleave", function () { tip.classList.remove("on"); });
+  svg.addEventListener("click", function (e) {
+    var n = e.target.closest(".node, .ztab, .panel");
+    if (!n) return;
+    var g = n.closest(".step");
+    if (!g || g.classList.contains("future")) return;
+    var s = +g.getAttribute("data-step");
+    if (s !== cur) go(s);
+  });
+
+  // hooks used to export the video frames
+  window.__go = go;
+  window.__seek = function (ms) {
+    document.getAnimations().forEach(function (a) { a.pause(); a.currentTime = ms; });
+  };
+
+  go(0);
+})();
+</script>
+</body>
+</html>
