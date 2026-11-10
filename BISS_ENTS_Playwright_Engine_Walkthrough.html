@@ -1,0 +1,1110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playwright Engine Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  @property --c { syntax: '<color>'; inherits: true; initial-value: #16407A; }
+  :root {
+    --bg: #070D1B;
+    --panel: rgba(15, 23, 42, 0.62);
+    --line: rgba(255, 255, 255, 0.09);
+    --ink: #F1F5FB;
+    --muted: #A9B8CF;
+    --c: #16407A;
+    --sw: min(calc(100vw - 32px), calc((100vh - 250px) * 1.7778));
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1100px 620px at 12% -12%, rgba(34, 197, 94, 0.14), transparent 60%),
+      radial-gradient(900px 620px at 100% 112%, rgba(59, 130, 246, 0.16), transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    transition: --c 0.8s ease;
+    overflow-x: hidden;
+  }
+  .app { min-height: 100vh; overflow-x: clip; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 16px; }
+
+  /* ---------- diagram card ---------- */
+  .stage { position: relative; width: var(--sw); }
+  .stage::before {
+    content: ""; position: absolute; inset: -6% -4%; z-index: 0; pointer-events: none;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--c) 45%, transparent), transparent 75%);
+    filter: blur(40px); opacity: 0.55;
+  }
+  .card {
+    position: relative; z-index: 1; border-radius: 18px; overflow: hidden;
+    box-shadow: 0 40px 100px -24px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+  #dia { display: block; width: 100%; height: auto; }
+
+  /* ---------- step states ---------- */
+  #dia .step { transition: opacity 0.7s ease; }
+  #dia .step.future { opacity: 0; pointer-events: none; }
+  #dia .step.past { opacity: 0.26; }
+  #dia .step.past:hover { opacity: 0.62; }
+  #dia .step.current, #dia .step.shown { opacity: 1; }
+
+  /* entry animations: replayed each time a step becomes current */
+  #dia .step.current .ni { animation: rise 0.7s cubic-bezier(.2, .8, .2, 1) var(--d, 0s) both; }
+  #dia .step.current .zone { transform-box: fill-box; transform-origin: center; animation: zin 0.65s ease-out 0.05s both; }
+  #dia .step.current .draw { stroke-dasharray: 1; animation: draw 0.75s ease-out var(--d, 0s) both; }
+  #dia .step.current .drawl { stroke-dasharray: 1; animation: drawl 0.75s ease-out var(--d, 0s) both; }
+  #dia .step.current .fade, #dia .step.current .lbl, #dia .step.current .bul, #dia .step.current .pwbg { animation: fade 0.55s ease-out var(--d, 0.5s) both; }
+  #dia .step.current .bp { transform-box: fill-box; transform-origin: center; animation: pop 0.6s cubic-bezier(.3, 1.7, .5, 1) var(--d, 0.3s) both; }
+  #dia .step.current .zframe { animation: zglow 2.6s ease-in-out 1.1s infinite; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+  @keyframes zin { from { opacity: 0; transform: scale(0.985); } to { opacity: 1; transform: none; } }
+  @keyframes draw { 0% { stroke-dashoffset: 1; marker-end: none; } 88% { marker-end: none; } 89% { marker-end: url(#arr); } 100% { stroke-dashoffset: 0; marker-end: url(#arr); } }
+  @keyframes drawl { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pop { 0% { opacity: 0; transform: scale(0.2); } 100% { opacity: 1; transform: scale(1); } }
+  @keyframes zglow { 0%, 100% { stroke-opacity: 0.55; stroke-width: 1.4; fill-opacity: 0.045; } 50% { stroke-opacity: 1; stroke-width: 2.6; fill-opacity: 0.085; } }
+
+  /* data particles travelling along the numbered flows */
+  #dia .flowline { fill: none; stroke: var(--fc); stroke-width: 3.6; stroke-linecap: round; stroke-dasharray: 0.1 12.9; opacity: 0; pointer-events: none; }
+  #dia .step.current .flowline { animation: march 0.9s linear infinite, fade 0.4s ease-out 0.75s both; }
+  #dia.all .flowline { opacity: 1; animation: march 0.9s linear infinite; }
+  @keyframes march { to { stroke-dashoffset: -13; } }
+
+  #dia .ring { opacity: 0; transform-box: fill-box; transform-origin: center; pointer-events: none; }
+  #dia .step.current .ring { animation: ring 2.2s ease-out 0.9s infinite; }
+  #dia.all .ring { animation: ring 2.8s ease-out calc(var(--n) * 0.4s) infinite; }
+  @keyframes ring { 0% { opacity: 0.75; transform: scale(1); } 100% { opacity: 0; transform: scale(2.7); } }
+
+  #cap.swap { animation: capin 0.6s ease-out both; }
+  @keyframes capin { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- hover effects on every box ---------- */
+  #dia .node, #dia .panel { cursor: pointer; transition: transform 0.32s cubic-bezier(.2, .8, .2, 1), filter 0.32s ease; }
+  #dia .node:hover, #dia .panel:hover { transform: translateY(-4px); filter: drop-shadow(0 14px 16px color-mix(in srgb, var(--c) 38%, transparent)); }
+  #dia .node .ncard { transition: fill 0.25s ease; }
+  #dia .node:hover .ncard { fill: color-mix(in srgb, var(--c) 6%, #FFFFFF); }
+  #dia .node .acc, #dia .panel .acc { transition: stroke-opacity 0.25s ease, stroke-width 0.25s ease; }
+  #dia .node:hover .acc { stroke-opacity: 1; stroke-width: 2.2; }
+  #dia .panel:hover .acc { stroke-opacity: 0.9; }
+  #dia .node .tg { transform-box: fill-box; transform-origin: center; transition: transform 0.4s cubic-bezier(.3, 1.7, .5, 1); }
+  #dia .node:hover .tg { transform: scale(1.14) rotate(-5deg); }
+  #dia .node .nbar { transition: filter 0.25s ease; }
+  #dia .node:hover .nbar { filter: brightness(1.25); }
+  #dia .cyl .lid { transition: fill 0.25s ease; }
+  #dia .cyl:hover .lid { fill: #DE9A48; }
+  #dia .ztab { cursor: pointer; transition: filter 0.25s ease; }
+  #dia .ztab:hover { filter: brightness(1.18) drop-shadow(0 4px 8px color-mix(in srgb, var(--zc) 50%, transparent)); }
+  #dia .pill { transition: transform 0.25s ease, filter 0.25s ease; }
+  #dia .pill rect { transition: fill-opacity 0.25s ease; }
+  #dia .pill:hover { transform: translateY(-2px); }
+  #dia .pill:hover rect { fill-opacity: 0.22; }
+  #dia .pill.hl:hover { filter: drop-shadow(0 0 10px rgba(34, 197, 94, 0.9)); }
+  #dia .pill.hl:hover rect { fill-opacity: 1; }
+
+  /* ---------- presenter bar ---------- */
+  .bar {
+    width: max(var(--sw), min(calc(100vw - 32px), 980px));
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 14px 18px 16px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.6);
+  }
+  .segs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .seg {
+    position: relative; flex: 1; height: 6px; border: 0; padding: 0; border-radius: 99px; cursor: pointer;
+    background: rgba(255, 255, 255, 0.12); transition: height 0.2s ease, background 0.2s ease;
+  }
+  .seg:hover { height: 10px; background: rgba(255, 255, 255, 0.22); }
+  .seg i { position: absolute; inset: 0; width: 0; border-radius: inherit; background: var(--sc); }
+  .seg.done i, .seg.cur i { width: 100%; }
+  .seg.cur i { box-shadow: 0 0 12px var(--sc); }
+  .seg.cur.timing i { width: 0; animation: fill var(--dur) linear forwards; }
+  @keyframes fill { to { width: 100%; } }
+  .seg::after {
+    content: attr(data-label); position: absolute; left: 50%; bottom: 16px; transform: translate(-50%, 4px);
+    white-space: nowrap; font-size: 11.5px; font-weight: 600; color: #fff; background: rgba(2, 6, 23, 0.92);
+    border: 1px solid var(--line); padding: 5px 9px; border-radius: 8px; opacity: 0; pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  .seg:hover::after { opacity: 1; transform: translate(-50%, 0); }
+
+  .row { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; }
+  .chip {
+    width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center;
+    font-size: 20px; font-weight: 800; color: #fff; letter-spacing: -0.5px;
+    background: linear-gradient(145deg, color-mix(in srgb, var(--c) 100%, #fff 18%), color-mix(in srgb, var(--c) 80%, #000 25%));
+    box-shadow: 0 10px 28px -8px var(--c), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  }
+  .kick { font-size: 11.5px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: color-mix(in srgb, var(--c) 45%, #fff); }
+  .ttl { font-size: 21px; font-weight: 800; letter-spacing: -0.3px; margin: 2px 0 4px; }
+  .desc { font-size: 14px; line-height: 1.5; color: var(--muted); max-width: 900px; }
+  .txt.swap { animation: txtin 0.5s ease-out both; }
+  @keyframes txtin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .ctl { display: flex; gap: 8px; align-items: center; }
+  .btn {
+    height: 44px; min-width: 44px; padding: 0 14px; border-radius: 12px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font: 600 13.5px Inter, system-ui, sans-serif; color: #E8EEF8;
+    background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.14);
+    transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  }
+  .btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .btn:hover { transform: translateY(-2px); background: rgba(255, 255, 255, 0.12); border-color: color-mix(in srgb, var(--c) 70%, #fff); box-shadow: 0 10px 26px -8px var(--c); }
+  .btn:active { transform: translateY(0) scale(0.96); }
+  .btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 60%, #fff); outline-offset: 2px; }
+  .btn.primary { background: linear-gradient(145deg, color-mix(in srgb, var(--c) 100%, #fff 12%), color-mix(in srgb, var(--c) 80%, #000 20%)); border-color: transparent; }
+  .btn.primary:hover { box-shadow: 0 12px 30px -6px var(--c); }
+  .btn[disabled] { opacity: 0.35; pointer-events: none; }
+  .hint { font-size: 11.5px; color: #7D8DA6; margin-top: 10px; text-align: right; }
+  .hint kbd { font: 600 10.5px Inter, sans-serif; padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); color: #C9D5E6; }
+
+  /* ---------- tooltip ---------- */
+  .tip {
+    position: fixed; left: 0; top: 0; z-index: 20; pointer-events: none; max-width: 320px;
+    background: rgba(2, 6, 23, 0.92); border: 1px solid var(--line); border-left: 3px solid var(--tc, #22C55E);
+    border-radius: 12px; padding: 10px 13px; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.7);
+    opacity: 0; transform: translateY(6px); transition: opacity 0.16s ease, transform 0.16s ease;
+  }
+  .tip.on { opacity: 1; transform: none; }
+  .tip .z { font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--tc); }
+  .tip .t { font-size: 15px; font-weight: 700; margin: 3px 0 5px; color: #fff; }
+  .tip .l { font-size: 12.5px; color: #B6C4D8; line-height: 1.5; }
+  .tip .go { font-size: 11px; color: #7D8DA6; margin-top: 6px; }
+
+  @media (max-width: 760px) {
+    :root { --sw: calc(100vw - 16px); }
+    .app { padding: 8px; justify-content: flex-start; }
+    .row { grid-template-columns: auto 1fr; }
+    .ctl { grid-column: 1 / -1; justify-content: space-between; }
+    .ctl .lbltxt { display: none; }
+    .hint { display: none; }
+    .ttl { font-size: 18px; }
+    .desc { font-size: 13px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #dia *, .txt, .seg i { animation: none !important; transition: none !important; }
+    #dia .step.current .flowline { opacity: 1; }
+  }
+
+  /* video / frame export: diagram only, edge to edge */
+  body.export { background: #F6F8FB; }
+  .export .app { padding: 0; gap: 0; justify-content: flex-start; }
+  .export .stage { width: 100vw; }
+  .export .stage::before, .export .bar, .export .tip { display: none; }
+  .export .card { border-radius: 0; box-shadow: none; }
+
+  :fullscreen .app { background: var(--bg); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage"><div class="card">
+<svg id="dia" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" role="img" aria-label="How Playwright works inside the BISS and ENTS test automation framework, animated by step">
+<defs><linearGradient id="hdr" x1="0" x2="1"><stop offset="0" stop-color="#0B1F3A"/><stop offset="1" stop-color="#16407A"/></linearGradient><radialGradient id="hdrglow" cx="0.08" cy="0.2" r="0.5"><stop offset="0" stop-color="#22C55E" stop-opacity="0.22"/><stop offset="1" stop-color="#22C55E" stop-opacity="0"/></radialGradient><linearGradient id="pwg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#15803D" stop-opacity="0.10"/><stop offset="1" stop-color="#15803D" stop-opacity="0.03"/></linearGradient><linearGradient id="rainbow" x1="0" x2="1"><stop offset="0.000" stop-color="#0E7490"/><stop offset="0.143" stop-color="#1D4ED8"/><stop offset="0.286" stop-color="#6D28D9"/><stop offset="0.429" stop-color="#15803D"/><stop offset="0.571" stop-color="#334155"/><stop offset="0.714" stop-color="#B42318"/><stop offset="0.857" stop-color="#BE123C"/><stop offset="1.000" stop-color="#92400E"/></linearGradient><pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#CBD5E1" fill-opacity="0.55"/></pattern><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748B"/></marker><filter id="sh" x="-5%" y="-5%" width="110%" height="120%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#0F172A" flood-opacity="0.08"/></filter><filter id="big" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.18"/></filter></defs>
+<rect width="1920" height="1080" fill="#F6F8FB"/>
+<rect y="84" width="1920" height="996" fill="url(#dots)"/>
+<g class="ghost"><rect x="24" y="112" width="400" height="548" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="40" y="99" width="379.3" height="26" rx="13" fill="#E2E8F0"/>
+<text x="54" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">A</text>
+<text x="70" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">BROWSER LIFECYCLE · PLAYWRIGHTFACTORY</text>
+<rect x="444" y="112" width="500" height="236" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="460" y="99" width="228.0" height="26" rx="13" fill="#E2E8F0"/>
+<text x="474" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">B</text>
+<text x="490" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">A STEP CALLS IACTION</text>
+<rect x="444" y="372" width="500" height="288" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="460" y="359" width="343.7" height="26" rx="13" fill="#E2E8F0"/>
+<text x="474" y="376" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">C</text>
+<text x="490" y="376.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">ACTION DISPATCH · ONE ENTRY POINT</text>
+<rect x="964" y="112" width="520" height="548" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="980" y="99" width="334.8" height="26" rx="13" fill="#E2E8F0"/>
+<text x="994" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">D</text>
+<text x="1010" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">PLAYWRIGHT ENGINE · AUTO-WAITING</text>
+<rect x="1504" y="112" width="392" height="548" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="1520" y="99" width="245.8" height="26" rx="13" fill="#E2E8F0"/>
+<text x="1534" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">E</text>
+<text x="1550" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">ANGULAR APP UNDER TEST</text>
+<rect x="24" y="684" width="920" height="222" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="40" y="671" width="325.90000000000003" height="26" rx="13" fill="#E2E8F0"/>
+<text x="54" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">F</text>
+<text x="70" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">SELF-HEALING BUILT INTO IACTION</text>
+<rect x="964" y="684" width="520" height="222" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="980" y="671" width="201.3" height="26" rx="13" fill="#E2E8F0"/>
+<text x="994" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">G</text>
+<text x="1010" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">RESULT &amp; EVIDENCE</text>
+<rect x="1504" y="684" width="392" height="222" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="1520" y="671" width="254.70000000000002" height="26" rx="13" fill="#E2E8F0"/>
+<text x="1534" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1550" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">TEARDOWN · HOOKS @AFTER</text></g>
+<g class="legend"><text x="24" y="1073" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="600" fill="#5B6B82" text-anchor="start" letter-spacing="0">Flow:  1 page handed to iAction  →  2 dispatch by action type  →  3 Locator + actionability  →  4 CDP to Chromium  ·  5 self-healing fallbacks  ·  6 result to logs and report  ·  7 evidence on failure</text>
+<text x="1896" y="1073" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="600" fill="#5B6B82" text-anchor="end" letter-spacing="0">DAFM BISS / ENTS · QA Automation</text></g>
+<g class="step future" data-step="1"><g class="zone" style="--zc:#0E7490">
+<rect class="zframe" x="24" y="112" width="400" height="548" rx="16" fill="#0E7490" fill-opacity="0.045" stroke="#0E7490" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="40" y="99" width="379.3" height="26" rx="13" fill="#0E7490"/>
+<circle cx="54" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="54" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">A</text>
+<text x="70" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">BROWSER LIFECYCLE · PLAYWRIGHTFACTORY</text>
+</g></g>
+<g class="node" data-s="1" data-t="Hooks @BeforeAll" data-l="launchBrowser(browser, url) | one test case = one clean session" data-z="A · Browser lifecycle" style="--c:#0E7490">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="44" y="142" width="360" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="142" width="360" height="62" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="156.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,162.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9a4 4 0 1 1-4-4"/><circle cx="12" cy="3" r="0.8"/></g></g>
+<text x="100" y="163.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Hooks @BeforeAll</text>
+<text x="100" y="179.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">launchBrowser(browser, url)</text>
+<text x="100" y="193.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">one test case = one clean session</text>
+</g></g>
+<g class="node" data-s="1" data-t="Playwright.create()" data-l="driver process starts · no chromedriver" data-z="A · Browser lifecycle" style="--c:#0E7490">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="44" y="232" width="360" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="232" width="360" height="54" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="242.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,248.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5l12 7.5-12 7.5z"/></g></g>
+<text x="100" y="256.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Playwright.create()</text>
+<text x="100" y="272.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">driver process starts · no chromedriver</text>
+</g></g>
+<g class="node" data-s="1" data-t="BrowserType.launch()" data-l="Chromium headless in the container | Chrome channel on the laptop" data-z="A · Browser lifecycle" style="--c:#0E7490">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="44" y="314" width="360" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="314" width="360" height="70" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="332.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,338.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M2.5 8.5h19"/><circle cx="5.5" cy="6.3" r="0.6"/><circle cx="7.8" cy="6.3" r="0.6"/></g></g>
+<text x="100" y="339.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">BrowserType.launch()</text>
+<text x="100" y="355.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Chromium headless in the container</text>
+<text x="100" y="369.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Chrome channel on the laptop</text>
+</g></g>
+<g class="node" data-s="1" data-t="Browser.newContext()" data-l="isolated profile · 1920x1080 · en-IE | default timeouts from config keys" data-z="A · Browser lifecycle" style="--c:#0E7490">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="44" y="412" width="360" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="412" width="360" height="70" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="430.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,436.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></g></g>
+<text x="100" y="437.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Browser.newContext()</text>
+<text x="100" y="453.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">isolated profile · 1920x1080 · en-IE</text>
+<text x="100" y="467.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">default timeouts from config keys</text>
+</g></g>
+<g class="node" data-s="1" data-t="tracing.start() + startChunk()" data-l="DOM snapshot per action · one chunk per test" data-z="A · Browser lifecycle" style="--c:#0E7490">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="44" y="510" width="360" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="510" width="360" height="54" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="520.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,526.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h4l2-2.5h6L17 8h4v11H3z"/><circle cx="12" cy="13.5" r="3.5"/></g></g>
+<text x="100" y="534.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">tracing.start() + startChunk()</text>
+<text x="100" y="550.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">DOM snapshot per action · one chunk per test</text>
+</g></g>
+<g class="node" data-s="1" data-t="Context.newPage() → ThreadLocal" data-l="Page bound to the thread: iAction uses it" data-z="A · Browser lifecycle" style="--c:#0E7490">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="44" y="592" width="360" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="592" width="360" height="54" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="602.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,608.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></g></g>
+<text x="100" y="616.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Context.newPage() → ThreadLocal</text>
+<text x="100" y="632.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Page bound to the thread: iAction uses it</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M224,204 L224,230" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M224,286 L224,312" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.90s" d="M224,384 L224,410" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.96s" d="M224,482 L224,508" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.02s" d="M224,564 L224,590" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/></g>
+<g class="step future" data-step="2"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M404,619 L434,619 L434,255 L462,255" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="1" style="--fc:#1D4ED8" d="M404,619 L434,619 L434,255 L462,255"/>
+<g class="badge" style="--n:1">
+<circle class="ring" cx="434" cy="300" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="434" cy="300" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="434" y="304" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">1</text></g>
+<g class="lbl" style="--d:0.45s"><text x="418" y="304" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="end" letter-spacing="0.4">PAGE</text></g>
+</g>
+<g class="zone" style="--zc:#1D4ED8">
+<rect class="zframe" x="444" y="112" width="500" height="236" rx="16" fill="#1D4ED8" fill-opacity="0.045" stroke="#1D4ED8" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="460" y="99" width="228.0" height="26" rx="13" fill="#1D4ED8"/>
+<circle cx="474" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="474" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">B</text>
+<text x="490" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">A STEP CALLS IACTION</text>
+</g></g>
+<g class="node" data-s="2" data-t="Gherkin step" data-l="one feature file line" data-z="B · A step calls iAction" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="464" y="140" width="146" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="464" y="140" width="146" height="58" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="472" y="150" width="4" height="38" rx="2" fill="#1D4ED8"/>
+<text x="484" y="166.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Gherkin step</text>
+<text x="484" y="182.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">one feature file line</text>
+</g></g>
+<g class="node" data-s="2" data-t="Step definition" data-l="Java glue · OR keys" data-z="B · A step calls iAction" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="621" y="140" width="146" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="621" y="140" width="146" height="58" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="629" y="150" width="4" height="38" rx="2" fill="#1D4ED8"/>
+<text x="641" y="166.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Step definition</text>
+<text x="641" y="182.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Java glue · OR keys</text>
+</g></g>
+<g class="node" data-s="2" data-t="iAction( )" data-l="type · by · key · value" data-z="B · A step calls iAction" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="778" y="140" width="146" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="778" y="140" width="146" height="58" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="786" y="150" width="4" height="38" rx="2" fill="#1D4ED8"/>
+<text x="798" y="166.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">iAction( )</text>
+<text x="798" y="182.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">type · by · key · value</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M610,169 L619,169" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M767,169 L776,169" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="node" data-s="2" data-t="resolveValue()" data-l="TD: → env · -D · xlsx" data-z="B · A step calls iAction" style="--c:#3B82F6">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="464" y="240" width="146" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="464" y="240" width="146" height="58" rx="10" fill="none" stroke="#3B82F6" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="472" y="250" width="4" height="38" rx="2" fill="#3B82F6"/>
+<text x="484" y="266.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">resolveValue()</text>
+<text x="484" y="282.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TD: → env · -D · xlsx</text>
+</g></g>
+<g class="node" data-s="2" data-t="toSelector()" data-l="XPATH → xpath=…" data-z="B · A step calls iAction" style="--c:#3B82F6">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="621" y="240" width="146" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="621" y="240" width="146" height="58" rx="10" fill="none" stroke="#3B82F6" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="629" y="250" width="4" height="38" rx="2" fill="#3B82F6"/>
+<text x="641" y="266.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">toSelector()</text>
+<text x="641" y="282.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">XPATH → xpath=…</text>
+</g></g>
+<g class="node" data-s="2" data-t="locator().first()" data-l="re-found on each call" data-z="B · A step calls iAction" style="--c:#3B82F6">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="778" y="240" width="146" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="778" y="240" width="146" height="58" rx="10" fill="none" stroke="#3B82F6" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="786" y="250" width="4" height="38" rx="2" fill="#3B82F6"/>
+<text x="798" y="266.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">locator().first()</text>
+<text x="798" y="282.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">re-found on each call</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.90s" d="M610,269 L619,269" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.96s" d="M767,269 L776,269" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.02s" d="M851,198 L851,238" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="lbl" style="--d:0.70s"><text x="843" y="222" font-family="Inter, DejaVu Sans, sans-serif" font-size="9" font-weight="600" fill="#5B6B82" text-anchor="end" letter-spacing="0">secrets shown as ****</text></g></g>
+<g class="step future" data-step="3"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M860,348 L860,372" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="2" style="--fc:#6D28D9" d="M860,348 L860,372"/>
+<g class="badge" style="--n:2">
+<circle class="ring" cx="860" cy="360" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="860" cy="360" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="860" y="364" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">2</text></g>
+<g class="lbl" style="--d:0.45s"><text x="844" y="364" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="end" letter-spacing="0.4">DISPATCH</text></g>
+</g>
+<g class="zone" style="--zc:#6D28D9">
+<rect class="zframe" x="444" y="372" width="500" height="288" rx="16" fill="#6D28D9" fill-opacity="0.045" stroke="#6D28D9" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="460" y="359" width="343.7" height="26" rx="13" fill="#6D28D9"/>
+<circle cx="474" cy="372" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="474" y="376" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">C</text>
+<text x="490" y="376.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">ACTION DISPATCH · ONE ENTRY POINT</text>
+</g></g>
+<g class="lbl" style="--d:0.40s"><text x="464" y="400" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.5">ACTION TYPES  ·  switch(iActionType) → one performX method each</text></g>
+<g class="bul" style="--d:0.45s"><rect x="464" y="408" width="42" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="484.8" y="421.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">CLICK</text></g>
+<g class="bul" style="--d:0.48s"><rect x="511.5" y="408" width="53" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="537.82" y="421.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">JSCLICK</text></g>
+<g class="bul" style="--d:0.51s"><rect x="570.0" y="408" width="53" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="596.32" y="421.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">TEXTBOX</text></g>
+<g class="bul" style="--d:0.54s"><rect x="628.5" y="408" width="36" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="646.54" y="421.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">LIST</text></g>
+<g class="bul" style="--d:0.57s"><rect x="670.5" y="408" width="58" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="699.58" y="421.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">CHECKBOX</text></g>
+<g class="bul" style="--d:0.60s"><rect x="734.5" y="408" width="75" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="771.86" y="421.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">RADIOBUTTON</text></g>
+<g class="bul" style="--d:0.63s"><rect x="815.0" y="408" width="42" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="835.8" y="421.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">HOVER</text></g>
+<g class="bul" style="--d:0.66s"><rect x="464" y="432" width="69" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="498.6" y="445.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">UPLOADFILE</text></g>
+<g class="bul" style="--d:0.69s"><rect x="539.0" y="432" width="58" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="568.08" y="445.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">CALENDAR</text></g>
+<g class="bul" style="--d:0.72s"><rect x="603.0" y="432" width="58" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="632.08" y="445.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">DRAGDROP</text></g>
+<g class="bul" style="--d:0.75s"><rect x="667.0" y="432" width="75" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="704.36" y="445.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">WAITVISIBLE</text></g>
+<g class="bul" style="--d:0.78s"><rect x="747.5" y="432" width="86" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="790.38" y="445.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">WAITINVISIBLE</text></g>
+<g class="bul" style="--d:0.81s"><rect x="464" y="456" width="86" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="506.88" y="469.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">WAITCLICKABLE</text></g>
+<g class="bul" style="--d:0.84s"><rect x="555.5" y="456" width="53" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="581.82" y="469.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">GETTEXT</text></g>
+<g class="bul" style="--d:0.87s"><rect x="614.0" y="456" width="69" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="648.6" y="469.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">VERIFYTEXT</text></g>
+<g class="bul" style="--d:0.90s"><rect x="689.0" y="456" width="86" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="731.88" y="469.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">VERIFYELEMENT</text></g>
+<g class="bul" style="--d:0.93s"><rect x="780.5" y="456" width="97" height="20" rx="10" fill="#6D28D9" fill-opacity="0.09" stroke="#6D28D9" stroke-opacity="0.5"/>
+<text x="828.9" y="469.6" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="9.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">SCROLLTOELEMENT</text></g>
+<g class="node" data-s="3" data-t="performClick" data-l="waitFor(visible) → highlight → | click, JavaScript click if blocked" data-z="C · Action dispatch" style="--c:#6D28D9">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="464" y="486" width="226" height="80" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="464" y="486" width="226" height="80" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="475" y="498" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(481,504) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></g></g>
+<text x="520" y="511" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">performClick</text>
+<text x="520" y="527" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">waitFor(visible) → highlight →</text>
+<text x="520" y="541" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">click, JavaScript click if blocked</text>
+</g></g>
+<g class="node" data-s="3" data-t="performTextBox" data-l="fill() waits enabled + editable, | clears, types, fires input/change" data-z="C · Action dispatch" style="--c:#6D28D9">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="698" y="486" width="226" height="80" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="698" y="486" width="226" height="80" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="709" y="498" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(715,504) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v4h4M9 12h6M9 16h6"/></g></g>
+<text x="754" y="511" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">performTextBox</text>
+<text x="754" y="527" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">fill() waits enabled + editable,</text>
+<text x="754" y="541" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">clears, types, fires input/change</text>
+</g></g>
+<g class="node" data-s="3" data-t="performList" data-l="mat-select · native · overlay | all waits run inside the browser" data-z="C · Action dispatch" style="--c:#8B5CF6">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="464" y="574" width="226" height="76" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="464" y="574" width="226" height="76" rx="10" fill="none" stroke="#8B5CF6" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="475" y="586" width="34" height="34" rx="9" fill="#8B5CF6"/>
+<g transform="translate(481,592) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></g></g>
+<text x="520" y="599" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">performList</text>
+<text x="520" y="615" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">mat-select · native · overlay</text>
+<text x="520" y="629" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">all waits run inside the browser</text>
+</g></g>
+<g class="node" data-s="3" data-t="performWaitInvisible" data-l="gone = detached · aria-hidden · | display none · opacity 0 · no size" data-z="C · Action dispatch" style="--c:#8B5CF6">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="698" y="574" width="226" height="76" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="698" y="574" width="226" height="76" rx="10" fill="none" stroke="#8B5CF6" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="709" y="586" width="34" height="34" rx="9" fill="#8B5CF6"/>
+<g transform="translate(715,592) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></g></g>
+<text x="754" y="599" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">performWaitInvisible</text>
+<text x="754" y="615" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">gone = detached · aria-hidden ·</text>
+<text x="754" y="629" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">display none · opacity 0 · no size</text>
+</g></g></g>
+<g class="step future" data-step="4"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M924,526 L954,526 L954,177 L982,177" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="3" style="--fc:#15803D" d="M924,526 L954,526 L954,177 L982,177"/>
+<g class="badge" style="--n:3">
+<circle class="ring" cx="954" cy="352" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="954" cy="352" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="954" y="356" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">3</text></g>
+<g class="lbl" style="--d:0.45s"><text x="938" y="356" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="end" letter-spacing="0.4">LOCATOR</text></g>
+</g>
+<rect class="pwbg" x="964" y="112" width="520" height="548" rx="16" fill="url(#pwg)"/>
+<g class="zone" style="--zc:#15803D">
+<rect class="zframe" x="964" y="112" width="520" height="548" rx="16" fill="#15803D" fill-opacity="0.045" stroke="#15803D" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="980" y="99" width="334.8" height="26" rx="13" fill="#15803D"/>
+<circle cx="994" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="994" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">D</text>
+<text x="1010" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">PLAYWRIGHT ENGINE · AUTO-WAITING</text>
+</g></g>
+<g class="node" data-s="4" data-t="Playwright for Java 1.61" data-l="Locator API: the element is found again on every call | no stale elements · no WebDriverWait · no ExpectedConditions" data-z="D · Playwright engine" style="--c:#15803D">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="984" y="140" width="480" height="74" rx="10" fill="#F3FBF5" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="140" width="480" height="74" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="152" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1001,158) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g></g>
+<text x="1040" y="165" font-family="Inter, DejaVu Sans, sans-serif" font-size="14.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Playwright for Java 1.61</text>
+<text x="1040" y="181" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Locator API: the element is found again on every call</text>
+<text x="1040" y="195" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">no stale elements · no WebDriverWait · no ExpectedConditions</text>
+</g></g>
+<g class="lbl" style="--d:0.50s"><text x="984" y="240" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.5">ACTIONABILITY CHECKS  ·  retried every frame until explicit.wait.seconds (30 s)</text></g>
+<g class="bul" style="--d:0.60s"><rect x="984" y="250" width="90" height="40" rx="9" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.55"/>
+<circle cx="998" cy="270" r="6" fill="#15803D"/>
+<path d="M995,270 l2.2,2.2 l4-4.4" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1010" y="267" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Attached</text>
+<text x="1010" y="281" font-family="Inter, DejaVu Sans, sans-serif" font-size="8.8" font-weight="500" fill="#5B6B82" text-anchor="start" letter-spacing="0">in the DOM</text></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M1074,270 L1081,270" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="bul" style="--d:0.68s"><rect x="1081" y="250" width="90" height="40" rx="9" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.55"/>
+<circle cx="1095" cy="270" r="6" fill="#15803D"/>
+<path d="M1092,270 l2.2,2.2 l4-4.4" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1107" y="267" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Visible</text>
+<text x="1107" y="281" font-family="Inter, DejaVu Sans, sans-serif" font-size="8.8" font-weight="500" fill="#5B6B82" text-anchor="start" letter-spacing="0">has a box</text></g>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M1171,270 L1178,270" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="bul" style="--d:0.76s"><rect x="1178" y="250" width="90" height="40" rx="9" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.55"/>
+<circle cx="1192" cy="270" r="6" fill="#15803D"/>
+<path d="M1189,270 l2.2,2.2 l4-4.4" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1204" y="267" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Stable</text>
+<text x="1204" y="281" font-family="Inter, DejaVu Sans, sans-serif" font-size="8.8" font-weight="500" fill="#5B6B82" text-anchor="start" letter-spacing="0">not moving</text></g>
+<path class="arr draw" pathLength="1" style="--d:0.90s" d="M1268,270 L1275,270" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="bul" style="--d:0.84s"><rect x="1275" y="250" width="90" height="40" rx="9" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.55"/>
+<circle cx="1289" cy="270" r="6" fill="#15803D"/>
+<path d="M1286,270 l2.2,2.2 l4-4.4" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1301" y="267" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Enabled</text>
+<text x="1301" y="281" font-family="Inter, DejaVu Sans, sans-serif" font-size="8.8" font-weight="500" fill="#5B6B82" text-anchor="start" letter-spacing="0">not disabled</text></g>
+<path class="arr draw" pathLength="1" style="--d:0.96s" d="M1365,270 L1372,270" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="bul" style="--d:0.92s"><rect x="1372" y="250" width="90" height="40" rx="9" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.55"/>
+<circle cx="1386" cy="270" r="6" fill="#15803D"/>
+<path d="M1383,270 l2.2,2.2 l4-4.4" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1398" y="267" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Reachable</text>
+<text x="1398" y="281" font-family="Inter, DejaVu Sans, sans-serif" font-size="8.8" font-weight="500" fill="#5B6B82" text-anchor="start" letter-spacing="0">not covered</text></g>
+<g class="node" data-s="4" data-t="Action performed" data-l="real mouse / keyboard · fill · setInputFiles · selectOption · dragTo" data-z="D · Playwright engine" style="--c:#15803D">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="984" y="312" width="480" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="312" width="480" height="62" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="326.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1001,332.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></g></g>
+<text x="1040" y="340.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Action performed</text>
+<text x="1040" y="356.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">real mouse / keyboard · fill · setInputFiles · selectOption · dragTo</text>
+</g></g>
+<g class="node" data-s="4" data-t="evaluate() inside the browser" data-l="state reads, 50 ms polling, JS click: one round trip each | Selenium executeScript() kept: arguments[0] still works" data-z="D · Playwright engine" style="--c:#15803D">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="984" y="398" width="480" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="398" width="480" height="70" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="416.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1001,422.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l-5 6 5 6M16 6l5 6-5 6M14 4l-4 16"/></g></g>
+<text x="1040" y="423.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">evaluate() inside the browser</text>
+<text x="1040" y="439.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">state reads, 50 ms polling, JS click: one round trip each</text>
+<text x="1040" y="453.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Selenium executeScript() kept: arguments[0] still works</text>
+</g></g>
+<g class="node" data-s="4" data-t="Playwright driver  ↔  CDP  ↔  Chromium" data-l="browsers come from the image · no download at run time" data-z="D · Playwright engine" style="--c:#16A34A">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="984" y="492" width="480" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="492" width="480" height="54" rx="10" fill="none" stroke="#16A34A" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="502.0" width="34" height="34" rx="9" fill="#16A34A"/>
+<g transform="translate(1001,508.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></g></g>
+<text x="1040" y="516.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Playwright driver  ↔  CDP  ↔  Chromium</text>
+<text x="1040" y="532.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">browsers come from the image · no download at run time</text>
+</g></g>
+<g class="node" data-s="4" data-t="TimeoutError with call log" data-l="message + last call line go into the STEP FAIL row | classified: ELEMENT_NOT_FOUND · TIMEOUT · CLICK_INTERCEPTED" data-z="D · Playwright engine" style="--c:#16A34A">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="984" y="570" width="480" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="570" width="480" height="70" rx="10" fill="none" stroke="#16A34A" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="588.0" width="34" height="34" rx="9" fill="#16A34A"/>
+<g transform="translate(1001,594.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></g></g>
+<text x="1040" y="595.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">TimeoutError with call log</text>
+<text x="1040" y="611.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">message + last call line go into the STEP FAIL row</text>
+<text x="1040" y="625.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">classified: ELEMENT_NOT_FOUND · TIMEOUT · CLICK_INTERCEPTED</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:1.02s" d="M1224,214 L1224,238" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.08s" d="M1224,290 L1224,310" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.14s" d="M1224,374 L1224,396" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.20s" d="M1224,468 L1224,490" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr fade" style="--d:1.26s" d="M1224,546 L1224,568" fill="none" stroke="#64748B" stroke-width="1.7" stroke-dasharray="5 4" marker-end="url(#arr)" stroke-linejoin="round"/></g>
+<g class="step future" data-step="5"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1464,519 L1516,519" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="4" style="--fc:#334155" d="M1464,519 L1516,519"/>
+<g class="badge" style="--n:4">
+<circle class="ring" cx="1491" cy="519" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1491" cy="519" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1491" y="523" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">4</text></g>
+</g>
+<g class="lbl" style="--d:0.45s"><text x="1491" y="544" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="middle" letter-spacing="0.4">CDP</text></g>
+<g class="zone" style="--zc:#334155">
+<rect class="zframe" x="1504" y="112" width="392" height="548" rx="16" fill="#334155" fill-opacity="0.045" stroke="#334155" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="1520" y="99" width="245.8" height="26" rx="13" fill="#334155"/>
+<circle cx="1534" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="1534" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">E</text>
+<text x="1550" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">ANGULAR APP UNDER TEST</text>
+</g></g>
+<g class="node" data-s="5" data-t="Keycloak login" data-l="username · password · PIN / TOTP" data-z="E · Angular app under test" style="--c:#334155">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="140" width="342" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="140" width="342" height="58" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="152.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,158.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></g></g>
+<text x="1590" y="166.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Keycloak login</text>
+<text x="1590" y="182.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">username · password · PIN / TOTP</text>
+</g></g>
+<g class="node" data-s="5" data-t="BISS iNet · Staff · ENTS" data-l="Angular SPA · async routing" data-z="E · Angular app under test" style="--c:#334155">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="220" width="342" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="220" width="342" height="58" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="232.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,238.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3c-2.5 2.5-2.5 15.5 0 18M12 3c2.5 2.5 2.5 15.5 0 18"/></g></g>
+<text x="1590" y="246.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">BISS iNet · Staff · ENTS</text>
+<text x="1590" y="262.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Angular SPA · async routing</text>
+</g></g>
+<g class="node" data-s="5" data-t="Angular Material (MDC)" data-l="mat-select · mat-checkbox · mat-dialog" data-z="E · Angular app under test" style="--c:#334155">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="300" width="342" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="300" width="342" height="58" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="312.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,318.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></g></g>
+<text x="1590" y="326.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Angular Material (MDC)</text>
+<text x="1590" y="342.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">mat-select · mat-checkbox · mat-dialog</text>
+</g></g>
+<g class="node" data-s="5" data-t="CDK overlay portals" data-l="option panels render outside the form | found through aria-controls" data-z="E · Angular app under test" style="--c:#334155">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="380" width="342" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="380" width="342" height="70" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="398.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,404.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></g></g>
+<text x="1590" y="405.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">CDK overlay portals</text>
+<text x="1590" y="421.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">option panels render outside the form</text>
+<text x="1590" y="435.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">found through aria-controls</text>
+</g></g>
+<g class="node" data-s="5" data-t="Spinners &amp; dialogs" data-l="MDC spinner fades to opacity 0" data-z="E · Angular app under test" style="--c:#334155">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="472" width="342" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="472" width="342" height="58" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="484.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,490.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></g></g>
+<text x="1590" y="498.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Spinners &amp; dialogs</text>
+<text x="1590" y="514.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">MDC spinner fades to opacity 0</text>
+</g></g>
+<g class="node" data-s="5" data-t="Reactive forms" data-l="need input / change events → fill()" data-z="E · Angular app under test" style="--c:#334155">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="552" width="342" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="552" width="342" height="58" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="564.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,570.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v4h4M9 12h6M9 16h6"/></g></g>
+<text x="1590" y="578.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Reactive forms</text>
+<text x="1590" y="594.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">need input / change events → fill()</text>
+</g></g>
+<path class="arr drawl" pathLength="1" style="--d:0.78s" d="M1518,169 V581" fill="none" stroke="#94A3B8" stroke-width="1.4"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M1518,169 L1532,169" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.90s" d="M1518,249 L1532,249" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.96s" d="M1518,329 L1532,329" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.02s" d="M1518,415 L1532,415" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.08s" d="M1518,501 L1532,501" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.14s" d="M1518,581 L1532,581" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/></g>
+<g class="step future" data-step="6"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M694,650 L694,684" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="5" style="--fc:#B42318" d="M694,650 L694,684"/>
+<g class="badge" style="--n:5">
+<circle class="ring" cx="694" cy="667" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="694" cy="667" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="694" y="671" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">5</text></g>
+<g class="lbl" style="--d:0.45s"><text x="710" y="671" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.4">SELF-HEAL</text></g>
+</g>
+<g class="zone" style="--zc:#B42318">
+<rect class="zframe" x="24" y="684" width="920" height="222" rx="16" fill="#B42318" fill-opacity="0.045" stroke="#B42318" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="40" y="671" width="325.90000000000003" height="26" rx="13" fill="#B42318"/>
+<circle cx="54" cy="684" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="54" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">F</text>
+<text x="70" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">SELF-HEALING BUILT INTO IACTION</text>
+</g></g>
+<g class="node" data-s="6" data-t="Click fallback" data-l="normal click (5 s) → JavaScript click | both reasons reported if both fail" data-z="F · Self-healing" style="--c:#B42318">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="44" y="712" width="285" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="712" width="285" height="72" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="731.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(61,737.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></g></g>
+<text x="100" y="738.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Click fallback</text>
+<text x="100" y="754.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">normal click (5 s) → JavaScript click</text>
+<text x="100" y="768.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">both reasons reported if both fail</text>
+</g></g>
+<g class="node" data-s="6" data-t="mat-select opener" data-l="trigger click → JS click → Enter key | waits while disabled (County → Townland)" data-z="F · Self-healing" style="--c:#B42318">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="341" y="712" width="285" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="341" y="712" width="285" height="72" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="352" y="731.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(358,737.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></g></g>
+<text x="397" y="738.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">mat-select opener</text>
+<text x="397" y="754.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">trigger click → JS click → Enter key</text>
+<text x="397" y="768.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">waits while disabled (County → Townland)</text>
+</g></g>
+<g class="node" data-s="6" data-t="Searchable dropdowns" data-l="full text → name → code → empty box | list must stay still 400 ms, then pick" data-z="F · Self-healing" style="--c:#B42318">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="638" y="712" width="285" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="638" y="712" width="285" height="72" rx="10" fill="none" stroke="#B42318" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="649" y="731.0" width="34" height="34" rx="9" fill="#B42318"/>
+<g transform="translate(655,737.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20L15 9M14 4v3M19 9h-3M17.5 5.5l-2 2M11 3.5l.8 2.2M20.5 13l-2.2-.8"/></g></g>
+<text x="694" y="738.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Searchable dropdowns</text>
+<text x="694" y="754.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">full text → name → code → empty box</text>
+<text x="694" y="768.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">list must stay still 400 ms, then pick</text>
+</g></g>
+<g class="node" data-s="6" data-t="Option re-marked" data-l="list redrawn after the pick → found again | then clicked with the fallback" data-z="F · Self-healing" style="--c:#DC2626">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="44" y="804" width="285" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="804" width="285" height="72" rx="10" fill="none" stroke="#DC2626" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="823.0" width="34" height="34" rx="9" fill="#DC2626"/>
+<g transform="translate(61,829.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a7 7 0 0 1 12.5-3.5L19 8M20 15a7 7 0 0 1-12.5 3.5L5 16"/><path d="M19 3.5V8h-4.5M5 20.5V16h4.5"/></g></g>
+<text x="100" y="830.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Option re-marked</text>
+<text x="100" y="846.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">list redrawn after the pick → found again</text>
+<text x="100" y="860.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">then clicked with the fallback</text>
+</g></g>
+<g class="node" data-s="6" data-t="State-aware clicks" data-l="checkbox / radio read the real state | already checked → no click at all" data-z="F · Self-healing" style="--c:#DC2626">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="341" y="804" width="285" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="341" y="804" width="285" height="72" rx="10" fill="none" stroke="#DC2626" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="352" y="823.0" width="34" height="34" rx="9" fill="#DC2626"/>
+<g transform="translate(358,829.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.3l2.7 2.7L16 9.5"/></g></g>
+<text x="397" y="830.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">State-aware clicks</text>
+<text x="397" y="846.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">checkbox / radio read the real state</text>
+<text x="397" y="860.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">already checked → no click at all</text>
+</g></g>
+<g class="node" data-s="6" data-t="Spinner gone rules" data-l="aria-hidden · display none · opacity 0 | SVG spinner → its parent is watched" data-z="F · Self-healing" style="--c:#DC2626">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="638" y="804" width="285" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="638" y="804" width="285" height="72" rx="10" fill="none" stroke="#DC2626" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="649" y="823.0" width="34" height="34" rx="9" fill="#DC2626"/>
+<g transform="translate(655,829.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></g></g>
+<text x="694" y="830.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Spinner gone rules</text>
+<text x="694" y="846.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">aria-hidden · display none · opacity 0</text>
+<text x="694" y="860.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">SVG spinner → its parent is watched</text>
+</g></g></g>
+<g class="step future" data-step="7"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1224,660 L1224,684" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="6" style="--fc:#BE123C" d="M1224,660 L1224,684"/>
+<g class="badge" style="--n:6">
+<circle class="ring" cx="1224" cy="672" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1224" cy="672" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1224" y="676" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">6</text></g>
+<g class="lbl" style="--d:0.45s"><text x="1240" y="676" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.4">RESULT</text></g>
+</g>
+<g class="zone" style="--zc:#BE123C">
+<rect class="zframe" x="964" y="684" width="520" height="222" rx="16" fill="#BE123C" fill-opacity="0.045" stroke="#BE123C" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="980" y="671" width="201.3" height="26" rx="13" fill="#BE123C"/>
+<circle cx="994" cy="684" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="994" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">G</text>
+<text x="1010" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">RESULT &amp; EVIDENCE</text>
+</g></g>
+<g class="node" data-s="7" data-t="STEP PASS / FAIL log" data-l="duration in ms per action · passwords shown as ****" data-z="G · Result &amp; evidence" style="--c:#BE123C">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="984" y="712" width="480" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="712" width="480" height="54" rx="10" fill="none" stroke="#BE123C" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="722.0" width="34" height="34" rx="9" fill="#BE123C"/>
+<g transform="translate(1001,728.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></g></g>
+<text x="1040" y="736.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">STEP PASS / FAIL log</text>
+<text x="1040" y="752.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">duration in ms per action · passwords shown as ****</text>
+</g></g>
+<g class="node" data-s="7" data-t="Step log → Word report + ExecutionMetrics" data-l="PASS · FAIL · HANDLED (caught by the step) · root cause" data-z="G · Result &amp; evidence" style="--c:#BE123C">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="984" y="776" width="480" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="776" width="480" height="54" rx="10" fill="none" stroke="#BE123C" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="786.0" width="34" height="34" rx="9" fill="#BE123C"/>
+<g transform="translate(1001,792.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/></g></g>
+<text x="1040" y="800.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Step log → Word report + ExecutionMetrics</text>
+<text x="1040" y="816.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">PASS · FAIL · HANDLED (caught by the step) · root cause</text>
+</g></g>
+<g class="node" data-s="7" data-t="classifyException()" data-l="ASSERTION · CLICK_INTERCEPTED · STALE · NOT_FOUND · TIMEOUT" data-z="G · Result &amp; evidence" style="--c:#BE123C">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="984" y="840" width="480" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="984" y="840" width="480" height="54" rx="10" fill="none" stroke="#BE123C" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="995" y="850.0" width="34" height="34" rx="9" fill="#BE123C"/>
+<g transform="translate(1001,856.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></g></g>
+<text x="1040" y="864.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">classifyException()</text>
+<text x="1040" y="880.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">ASSERTION · CLICK_INTERCEPTED · STALE · NOT_FOUND · TIMEOUT</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M1224,766 L1224,774" fill="none" stroke="#64748B" stroke-width="1.7" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M1224,830 L1224,838" fill="none" stroke="#64748B" stroke-width="1.7" stroke-linejoin="round"/></g>
+<g class="step future" data-step="8"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1860,660 L1860,684" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="7" style="--fc:#92400E" d="M1860,660 L1860,684"/>
+<g class="badge" style="--n:7">
+<circle class="ring" cx="1860" cy="672" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1860" cy="672" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1860" y="676" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">7</text></g>
+<g class="lbl" style="--d:0.45s"><text x="1844" y="676" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="end" letter-spacing="0.4">EVIDENCE</text></g>
+</g>
+<g class="zone" style="--zc:#92400E">
+<rect class="zframe" x="1504" y="684" width="392" height="222" rx="16" fill="#92400E" fill-opacity="0.045" stroke="#92400E" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="1520" y="671" width="254.70000000000002" height="26" rx="13" fill="#92400E"/>
+<circle cx="1534" cy="684" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="1534" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1550" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">TEARDOWN · HOOKS @AFTER</text>
+</g></g>
+<g class="node" data-s="8" data-t="Failure screenshot" data-l="attached to the scenario + Word doc" data-z="H · Teardown" style="--c:#92400E">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="712" width="342" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="712" width="342" height="54" rx="10" fill="none" stroke="#92400E" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="722.0" width="34" height="34" rx="9" fill="#92400E"/>
+<g transform="translate(1551,728.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h4l2-2.5h6L17 8h4v11H3z"/><circle cx="12" cy="13.5" r="3.5"/></g></g>
+<text x="1590" y="736.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Failure screenshot</text>
+<text x="1590" y="752.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">attached to the scenario + Word doc</text>
+</g></g>
+<g class="node" data-s="8" data-t="Trace chunk kept on failure" data-l="zip replays on trace.playwright.dev" data-z="H · Teardown" style="--c:#92400E">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="776" width="342" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="776" width="342" height="54" rx="10" fill="none" stroke="#92400E" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="786.0" width="34" height="34" rx="9" fill="#92400E"/>
+<g transform="translate(1551,792.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="18" height="17" rx="2"/><circle cx="12" cy="12" r="4"/><path d="M12 8v1.5M12 14.5V16M8 12h1.5M14.5 12H16"/></g></g>
+<text x="1590" y="800.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Trace chunk kept on failure</text>
+<text x="1590" y="816.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">zip replays on trace.playwright.dev</text>
+</g></g>
+<g class="node" data-s="8" data-t="Browser kept open (reuse)" data-l="resetSession: new tab · cookies cleared" data-z="H · Teardown" style="--c:#92400E">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="840" width="342" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="840" width="342" height="54" rx="10" fill="none" stroke="#92400E" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="850.0" width="34" height="34" rx="9" fill="#92400E"/>
+<g transform="translate(1551,856.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a7 7 0 0 1 12.5-3.5L19 8M20 15a7 7 0 0 1-12.5 3.5L5 16"/><path d="M19 3.5V8h-4.5M5 20.5V16h4.5"/></g></g>
+<text x="1590" y="864.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Browser kept open (reuse)</text>
+<text x="1590" y="880.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">resetSession: new tab · cookies cleared</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M1705,766 L1705,774" fill="none" stroke="#64748B" stroke-width="1.7" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M1705,830 L1705,838" fill="none" stroke="#64748B" stroke-width="1.7" stroke-linejoin="round"/></g>
+<g class="step future" data-step="9"><g class="panel" style="--c:#1E293B"><g class="ni" style="--d:0.10s">
+<rect class="ncard" x="24" y="926" width="934" height="130" rx="14" fill="#FFFFFF" stroke="#D5DCE6"/>
+<rect class="acc" x="24" y="926" width="934" height="130" rx="14" fill="none" stroke="#1E293B" stroke-opacity="0" stroke-width="1.6"/>
+<rect x="24" y="926" width="934" height="36" rx="14" fill="#1E293B"/>
+<rect x="24" y="948" width="934" height="14" fill="#1E293B"/>
+<g transform="translate(38,932) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a7 7 0 0 1 12.5-3.5L19 8M20 15a7 7 0 0 1-12.5 3.5L5 16"/><path d="M19 3.5V8h-4.5M5 20.5V16h4.5"/></g>
+<text x="70" y="949.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="start" letter-spacing="0.8">SELENIUM → PLAYWRIGHT · WHAT CHANGED FOR THE TEAM</text>
+<g class="bul" style="--d:0.45s"><circle cx="44" cy="977" r="3.2" fill="#1E293B"/>
+<text x="54" y="981" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Same iAction signature, same Object Repository XPaths</text></g>
+<g class="bul" style="--d:0.51s"><circle cx="506" cy="977" r="3.2" fill="#1E293B"/>
+<text x="516" y="981" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">No chromedriver, no WebDriverWait, no ExpectedConditions</text></g>
+<g class="bul" style="--d:0.57s"><circle cx="44" cy="997" r="3.2" fill="#1E293B"/>
+<text x="54" y="1001" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Locators re-resolve: no StaleElementReferenceException</text></g>
+<g class="bul" style="--d:0.63s"><circle cx="506" cy="997" r="3.2" fill="#1E293B"/>
+<text x="516" y="1001" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">executeScript() and JavaScript click kept for old step code</text></g>
+<g class="bul" style="--d:0.69s"><circle cx="44" cy="1017" r="3.2" fill="#1E293B"/>
+<text x="54" y="1021" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Headless container runs, browsers shipped in the image</text></g>
+<g class="bul" style="--d:0.75s"><circle cx="506" cy="1017" r="3.2" fill="#1E293B"/>
+<text x="516" y="1021" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">A trace zip replaces guesswork when a step fails</text></g>
+<g class="bul" style="--d:0.81s"><circle cx="44" cy="1037" r="3.2" fill="#1E293B"/>
+<text x="54" y="1041" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Waits run inside the browser: one round trip, not thirty</text></g>
+<g class="bul" style="--d:0.87s"><circle cx="506" cy="1037" r="3.2" fill="#1E293B"/>
+<text x="516" y="1041" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Every timeout and fallback is a configuration key</text></g>
+</g></g>
+<g class="panel" style="--c:#15803D"><g class="ni" style="--d:0.28s">
+<rect class="ncard" x="978" y="926" width="918" height="130" rx="14" fill="#FFFFFF" stroke="#D5DCE6"/>
+<rect class="acc" x="978" y="926" width="918" height="130" rx="14" fill="none" stroke="#15803D" stroke-opacity="0" stroke-width="1.6"/>
+<rect x="978" y="926" width="918" height="36" rx="14" fill="#15803D"/>
+<rect x="978" y="948" width="918" height="14" fill="#15803D"/>
+<g transform="translate(992,932) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g>
+<text x="1024" y="949.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="start" letter-spacing="0.8">PLAYWRIGHT API IN USE</text>
+<g class="bul" style="--d:0.63s"><circle cx="998" cy="977" r="3.2" fill="#15803D"/>
+<text x="1008" y="981" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Locator · waitFor · click · fill · hover · dblclick</text></g>
+<g class="bul" style="--d:0.69s"><circle cx="1450" cy="977" r="3.2" fill="#15803D"/>
+<text x="1460" y="981" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">setInputFiles on hidden &lt;input type=file&gt;</text></g>
+<g class="bul" style="--d:0.75s"><circle cx="998" cy="997" r="3.2" fill="#15803D"/>
+<text x="1008" y="1001" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">selectOption · dragTo · pressSequentially · keyboard</text></g>
+<g class="bul" style="--d:0.81s"><circle cx="1450" cy="997" r="3.2" fill="#15803D"/>
+<text x="1460" y="1001" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">evaluate · addInitScript · executeScript bridge</text></g>
+<g class="bul" style="--d:0.87s"><circle cx="998" cy="1017" r="3.2" fill="#15803D"/>
+<text x="1008" y="1021" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">BrowserContext · clearCookies · CDP storage clear</text></g>
+<g class="bul" style="--d:0.93s"><circle cx="1450" cy="1017" r="3.2" fill="#15803D"/>
+<text x="1460" y="1021" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">tracing.start · startChunk · stopChunk</text></g>
+<g class="bul" style="--d:0.99s"><circle cx="998" cy="1037" r="3.2" fill="#15803D"/>
+<text x="1008" y="1041" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">page.screenshot · locator.screenshot</text></g>
+<g class="bul" style="--d:1.05s"><circle cx="1450" cy="1037" r="3.2" fill="#15803D"/>
+<text x="1460" y="1041" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">waitForLoadState · Angular whenStable()</text></g>
+</g></g></g>
+<g class="step current" data-step="0"><g class="intro"><g class="ni" style="--d:0.15s">
+<rect x="560" y="392" width="800" height="300" rx="22" fill="#FFFFFF" filter="url(#big)"/>
+<rect x="560" y="392" width="800" height="6" rx="3" fill="url(#rainbow)"/>
+<g transform="translate(934.0,426) scale(2.1666666666666665)" fill="none" stroke="#15803D" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g>
+<text x="960.0" y="520" font-family="Inter, DejaVu Sans, sans-serif" font-size="28" font-weight="800" fill="#0F172A" text-anchor="middle" letter-spacing="-0.4">How Playwright works inside the framework</text>
+<text x="960.0" y="552" font-family="Inter, DejaVu Sans, sans-serif" font-size="15" font-weight="500" fill="#5B6B82" text-anchor="middle" letter-spacing="0">One UI action, from the Gherkin step to Chromium and back  ·  Playwright for Java 1.61</text>
+<g class="bul" style="--d:0.45s"><rect x="587.0" y="582" width="88" height="58" rx="12" fill="#0E7490" fill-opacity="0.08" stroke="#0E7490" stroke-opacity="0.45"/>
+<circle cx="631.0" cy="602" r="11" fill="#0E7490"/>
+<text x="631.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">A</text>
+<text x="631.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#0E7490" text-anchor="middle" letter-spacing="0">Lifecycle</text></g>
+<g class="bul" style="--d:0.52s"><rect x="681.0" y="582" width="88" height="58" rx="12" fill="#1D4ED8" fill-opacity="0.08" stroke="#1D4ED8" stroke-opacity="0.45"/>
+<circle cx="725.0" cy="602" r="11" fill="#1D4ED8"/>
+<text x="725.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">B</text>
+<text x="725.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#1D4ED8" text-anchor="middle" letter-spacing="0">iAction</text></g>
+<g class="bul" style="--d:0.59s"><rect x="775.0" y="582" width="88" height="58" rx="12" fill="#6D28D9" fill-opacity="0.08" stroke="#6D28D9" stroke-opacity="0.45"/>
+<circle cx="819.0" cy="602" r="11" fill="#6D28D9"/>
+<text x="819.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">C</text>
+<text x="819.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">Dispatch</text></g>
+<g class="bul" style="--d:0.66s"><rect x="869.0" y="582" width="88" height="58" rx="12" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.45"/>
+<circle cx="913.0" cy="602" r="11" fill="#15803D"/>
+<text x="913.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">D</text>
+<text x="913.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#15803D" text-anchor="middle" letter-spacing="0">Engine</text></g>
+<g class="bul" style="--d:0.73s"><rect x="963.0" y="582" width="88" height="58" rx="12" fill="#334155" fill-opacity="0.08" stroke="#334155" stroke-opacity="0.45"/>
+<circle cx="1007.0" cy="602" r="11" fill="#334155"/>
+<text x="1007.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">E</text>
+<text x="1007.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#334155" text-anchor="middle" letter-spacing="0">Angular app</text></g>
+<g class="bul" style="--d:0.80s"><rect x="1057.0" y="582" width="88" height="58" rx="12" fill="#B42318" fill-opacity="0.08" stroke="#B42318" stroke-opacity="0.45"/>
+<circle cx="1101.0" cy="602" r="11" fill="#B42318"/>
+<text x="1101.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">F</text>
+<text x="1101.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#B42318" text-anchor="middle" letter-spacing="0">Self-heal</text></g>
+<g class="bul" style="--d:0.87s"><rect x="1151.0" y="582" width="88" height="58" rx="12" fill="#BE123C" fill-opacity="0.08" stroke="#BE123C" stroke-opacity="0.45"/>
+<circle cx="1195.0" cy="602" r="11" fill="#BE123C"/>
+<text x="1195.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">G</text>
+<text x="1195.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#BE123C" text-anchor="middle" letter-spacing="0">Result</text></g>
+<g class="bul" style="--d:0.94s"><rect x="1245.0" y="582" width="88" height="58" rx="12" fill="#92400E" fill-opacity="0.08" stroke="#92400E" stroke-opacity="0.45"/>
+<circle cx="1289.0" cy="602" r="11" fill="#92400E"/>
+<text x="1289.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1289.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#92400E" text-anchor="middle" letter-spacing="0">Teardown</text></g>
+<text x="960.0" y="670" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#15803D" text-anchor="middle" letter-spacing="1.2">Follow the flow  1 → 7</text>
+</g></g></g>
+<g class="header"><rect width="1920" height="84" fill="url(#hdr)"/>
+<rect width="1920" height="84" fill="url(#hdrglow)"/>
+<g transform="translate(30,22) scale(1.6666666666666667)" fill="none" stroke="#7EE2A8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g>
+<text x="84" y="42" font-family="Inter, DejaVu Sans, sans-serif" font-size="26" font-weight="700" fill="#FFFFFF" text-anchor="start" letter-spacing="-0.3">Playwright inside the BISS &amp; ENTS Framework</text>
+<text x="84" y="66" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="500" fill="#BFD0EA" text-anchor="start" letter-spacing="0" id="cap">How one iAction call becomes an auto-waited browser action  ·  Playwright for Java 1.61  ·  same step code, same Object Repository</text>
+<g class="pill"><rect x="1760.4" y="28" width="131.6" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1826.2" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Angular Material</text></g>
+<g class="pill"><rect x="1713.1000000000001" y="28" width="39.3" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1732.7500000000002" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">CDP</text></g>
+<g class="pill"><rect x="1637.4" y="28" width="67.69999999999999" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1671.25" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Tracing</text></g>
+<g class="pill"><rect x="1533.3000000000002" y="28" width="96.1" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1581.3500000000001" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Locator API</text></g>
+<g class="pill"><rect x="1450.5000000000002" y="28" width="74.8" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1487.9000000000003" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Chromium</text></g>
+<g class="pill hl"><rect x="1318.0000000000002" y="28" width="124.5" height="28" rx="14" fill="#15803D" fill-opacity="1" stroke="#7EE2A8" stroke-opacity="1"/>
+<text x="1380.2500000000002" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Playwright 1.61</text></g>
+<g class="pill"><rect x="1242.3000000000002" y="28" width="67.69999999999999" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1276.15" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Java 21</text></g></g>
+</svg>
+  </div></div>
+
+  <div class="bar" role="region" aria-label="Walkthrough controls">
+    <div class="segs" id="segs"></div>
+    <div class="row">
+      <div class="chip" id="chip">01</div>
+      <div class="txt" id="txt">
+        <div class="kick" id="kick"></div>
+        <div class="ttl" id="ttl"></div>
+        <div class="desc" id="desc"></div>
+      </div>
+      <div class="ctl">
+        <button class="btn" id="prev" aria-label="Previous step"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button class="btn primary" id="play" aria-label="Auto-play">
+          <svg viewBox="0 0 24 24" id="playIco"><path d="M7 4.5l12 7.5-12 7.5z"/></svg><span class="lbltxt" id="playTxt">Auto-play</span>
+        </button>
+        <button class="btn" id="next" aria-label="Next step"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+        <button class="btn" id="allBtn" aria-label="Show the complete flow"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span class="lbltxt">Full view</span></button>
+        <button class="btn" id="fs" aria-label="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      </div>
+    </div>
+    <div class="hint"><kbd>←</kbd> <kbd>→</kbd> or <kbd>Space</kbd> to step · <kbd>P</kbd> auto-play · <kbd>F</kbd> full screen · hover any box for details, click it to jump to its layer</div>
+  </div>
+  <div class="tip" id="tip"></div>
+</div>
+
+<script>
+(function () {
+  var STEPS = [{"t": "Overview", "k": "The map", "c": "#16407A", "cap": "How one iAction call becomes an auto-waited browser action  ·  Playwright for Java 1.61  ·  same step code, same Object Repository", "d": "Eight layers, seven numbered flows. Each step follows one UI action: how a Gherkin line becomes an iAction call, how Playwright waits and acts on Chromium, and what comes back as evidence."}, {"t": "Browser Lifecycle", "k": "Zone A  ·  PlaywrightFactory", "c": "#0E7490", "cap": "Zone A  ·  Hooks start the Playwright object graph: Playwright → Browser → Context → Page, one per thread", "d": "Hooks call launchBrowser once per test case. PlaywrightFactory creates Playwright, launches Chromium (headless in the container, the installed Chrome on a laptop), opens an isolated context with a fixed viewport and locale, starts tracing, and binds the Page to the thread. No driver binaries are involved."}, {"t": "A Step Calls iAction", "k": "Flow 1  ·  Zone B", "c": "#1D4ED8", "cap": "Flow 1  ·  Step code is unchanged: iAction(type, XPATH, key, value) resolves TD: values and builds a Locator", "d": "The migration contract: step definitions still call iAction with the same four arguments and the same Object Repository keys. The value is resolved (TD: columns from a container secret, a -D property or TestData.xlsx), the XPath becomes an xpath= selector and page.locator() returns a lazy Locator."}, {"t": "Action Dispatch", "k": "Flow 2  ·  Zone C", "c": "#6D28D9", "cap": "Flow 2  ·  One switch sends each action type to its own performX method", "d": "iAction is the single entry point. A switch on the action type hands over to one method each: performClick, performTextBox, performList, performWaitInvisible and the rest. Every method waits for the element first, highlights it when enabled, then acts."}, {"t": "Playwright Engine", "k": "Flow 3  ·  Zone D", "c": "#15803D", "cap": "Flow 3  ·  The Locator re-finds the element and Playwright checks attached, visible, stable, enabled and unobstructed before acting", "d": "This is what replaced WebDriverWait. A Locator finds the element again on every call, so there are no stale elements. Before a click or fill, Playwright retries its actionability checks until the configured timeout, then performs a real input event. Polling and state reads run inside the browser as one evaluate() round trip, and a failure comes back as a TimeoutError with a call log."}, {"t": "Angular App Under Test", "k": "Flow 4  ·  Zone E", "c": "#334155", "cap": "Flow 4  ·  Commands reach Chromium over CDP; the Angular Material app is what makes the waits necessary", "d": "Chromium runs the real portals: Keycloak login, then the BISS iNet, Staff and ENTS Angular apps. Material components render option panels in CDK overlays outside the form, spinners fade to opacity 0 instead of disappearing, and reactive forms only accept values that fire input events. The engine and the self-healing rules are built around exactly these behaviours."}, {"t": "Self-Healing", "k": "Flow 5  ·  Zone F", "c": "#B42318", "cap": "Flow 5  ·  When the normal path fails inside the timeout, iAction tries the next strategy before failing the step", "d": "A blocked click falls back to a JavaScript click. A mat-select is opened by trigger click, then JavaScript click, then the Enter key, and a searchable list is searched four ways before giving up. Checkboxes read their real state so they are never toggled twice, and a spinner is only considered gone by the same rules the Selenium version used."}, {"t": "Result & Evidence", "k": "Flow 6  ·  Zone G", "c": "#BE123C", "cap": "Flow 6  ·  Every action writes a timed PASS / FAIL row with a classified root cause; passwords are masked", "d": "Each iAction call logs its duration and outcome, feeds ExecutionMetrics and appends a row to the step log that becomes the Word report. A failed action that the step definition handled on purpose is shown as HANDLED, not FAIL. Playwright errors are classified into fixed root-cause buckets so the report reads the same as before."}, {"t": "Teardown", "k": "Flow 7  ·  Zone H", "c": "#92400E", "cap": "Flow 7  ·  On failure Hooks attach a screenshot and keep the trace chunk; the browser stays open for the next test case", "d": "Hooks @After attach a screenshot to the scenario and the Word document. PlaywrightFactory.stop saves the trace chunk only when the test failed, replayable on trace.playwright.dev. With browser.reuse the browser is not closed: the next test case gets a new tab with cookies and site storage cleared, saving the Chrome start and close time."}, {"t": "Migration & API", "k": "Built in", "c": "#1E293B", "cap": "Built in  ·  What changed from Selenium, and which Playwright APIs the framework actually uses", "d": "For the team nothing changed in the feature files or step signatures. Under the hood chromedriver, WebDriverWait and stale-element handling are gone, waits run inside the browser, and a trace zip replaces guesswork. The right panel lists the Playwright calls the framework relies on."}, {"t": "The Complete Picture", "k": "End to end", "c": "#15803D", "cap": "End to end  ·  Flows 1 → 7, one UI action from the Gherkin step to Chromium and back to the report", "d": "The whole picture: PlaywrightFactory hands a Page to iAction, the action type is dispatched, the Locator waits for an actionable element and Playwright drives Chromium over CDP; fallbacks catch what Angular Material throws at it, and every action ends as a logged, classified row with traces and screenshots on failure."}];
+  var N = STEPS.length;
+  var DUR = 7000;
+  var svg = document.getElementById("dia");
+  var groups = Array.prototype.slice.call(svg.querySelectorAll(".step"));
+  var cap = document.getElementById("cap");
+  var segs = document.getElementById("segs");
+  var txt = document.getElementById("txt");
+  var cur = -1, timer = null, playing = false;
+
+  if (new URLSearchParams(location.search).has("export")) document.body.classList.add("export");
+
+  STEPS.forEach(function (s, i) {
+    var b = document.createElement("button");
+    b.className = "seg";
+    b.setAttribute("data-label", (i + 1) + ". " + s.t);
+    b.setAttribute("aria-label", "Go to step " + (i + 1) + ": " + s.t);
+    b.style.setProperty("--sc", s.c);
+    b.appendChild(document.createElement("i"));
+    b.addEventListener("click", function () { go(i); });
+    segs.appendChild(b);
+  });
+  var segEls = Array.prototype.slice.call(segs.children);
+
+  function restart(el, cls) {
+    el.classList.remove(cls);
+    void el.getBoundingClientRect();
+    el.classList.add(cls);
+  }
+
+  function setStates(k) {
+    svg.classList.toggle("all", k === N - 1);
+    var target = null;
+    groups.forEach(function (g) {
+      var s = +g.getAttribute("data-step"), st;
+      if (k === N - 1) st = s === 0 ? "future" : "shown";
+      else if (s === 0) st = k === 0 ? "current" : "future";
+      else st = s === k ? "current" : (s < k ? "past" : "future");
+      if (st === "current") target = g;
+      else g.setAttribute("class", "step " + st);
+    });
+    if (target) {
+      target.setAttribute("class", "step");
+      void svg.getBoundingClientRect();
+      target.setAttribute("class", "step current");
+    }
+  }
+
+  function go(k) {
+    k = Math.max(0, Math.min(N - 1, k));
+    var s = STEPS[k];
+    cur = k;
+    setStates(k);
+    cap.textContent = s.cap;
+    restart(cap, "swap");
+    document.body.style.setProperty("--c", s.c);
+    document.getElementById("chip").textContent = (k + 1 < 10 ? "0" : "") + (k + 1);
+    document.getElementById("kick").textContent = "Step " + (k + 1) + " of " + N + "  ·  " + s.k;
+    document.getElementById("ttl").textContent = s.t;
+    document.getElementById("desc").textContent = s.d;
+    restart(txt, "swap");
+    segEls.forEach(function (e, i) {
+      e.classList.toggle("done", i < k);
+      e.classList.toggle("cur", i === k);
+      e.classList.remove("timing");
+    });
+    document.getElementById("prev").disabled = k === 0;
+    document.getElementById("next").disabled = k === N - 1;
+    schedule();
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!playing) return;
+    if (cur >= N - 1) { setPlaying(false); return; }
+    var seg = segEls[cur];
+    seg.style.setProperty("--dur", DUR + "ms");
+    restart(seg, "timing");
+    timer = setTimeout(function () { go(cur + 1); }, DUR);
+  }
+
+  function setPlaying(on) {
+    playing = on;
+    document.getElementById("playTxt").textContent = on ? "Pause" : "Auto-play";
+    document.getElementById("playIco").innerHTML = on ? '<path d="M8 5v14M16 5v14"/>' : '<path d="M7 4.5l12 7.5-12 7.5z"/>';
+    if (on && cur >= N - 1) { go(0); return; }
+    if (!on) { clearTimeout(timer); segEls.forEach(function (e) { e.classList.remove("timing"); }); }
+    else schedule();
+  }
+
+  function fullscreen() {
+    if (!document.fullscreenElement) { (document.documentElement.requestFullscreen || function () {}).call(document.documentElement); }
+    else if (document.exitFullscreen) { document.exitFullscreen(); }
+  }
+
+  document.getElementById("prev").addEventListener("click", function () { go(cur - 1); });
+  document.getElementById("next").addEventListener("click", function () { go(cur + 1); });
+  document.getElementById("play").addEventListener("click", function () { setPlaying(!playing); });
+  document.getElementById("allBtn").addEventListener("click", function () { go(N - 1); });
+  document.getElementById("fs").addEventListener("click", fullscreen);
+
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    var k = e.key;
+    if (k === "ArrowRight" || k === " " || k === "PageDown" || k === "Enter") { e.preventDefault(); go(cur + 1); }
+    else if (k === "ArrowLeft" || k === "PageUp" || k === "Backspace") { e.preventDefault(); go(cur - 1); }
+    else if (k === "Home") { go(0); }
+    else if (k === "End") { go(N - 1); }
+    else if (k === "p" || k === "P") { setPlaying(!playing); }
+    else if (k === "f" || k === "F") { fullscreen(); }
+  });
+
+  // swipe on phones and tablets
+  var tx = null;
+  svg.addEventListener("touchstart", function (e) { tx = e.touches[0].clientX; }, { passive: true });
+  svg.addEventListener("touchend", function (e) {
+    if (tx === null) return;
+    var dx = e.changedTouches[0].clientX - tx; tx = null;
+    if (Math.abs(dx) > 50) go(cur + (dx < 0 ? 1 : -1));
+  });
+
+  // tooltip + click to jump
+  var tip = document.getElementById("tip");
+  svg.addEventListener("mousemove", function (e) {
+    var n = e.target.closest(".node");
+    if (!n || n.closest(".step.future")) { tip.classList.remove("on"); return; }
+    var col = getComputedStyle(n).getPropertyValue("--c").trim();
+    tip.style.setProperty("--tc", col);
+    var lines = (n.getAttribute("data-l") || "").split(" | ").filter(Boolean);
+    tip.innerHTML = "";
+    var z = document.createElement("div"); z.className = "z"; z.textContent = n.getAttribute("data-z"); tip.appendChild(z);
+    var t = document.createElement("div"); t.className = "t"; t.textContent = n.getAttribute("data-t"); tip.appendChild(t);
+    lines.forEach(function (l) { var d = document.createElement("div"); d.className = "l"; d.textContent = l; tip.appendChild(d); });
+    var s = +n.getAttribute("data-s");
+    if (s !== cur) { var g = document.createElement("div"); g.className = "go"; g.textContent = "Click to jump to this layer"; tip.appendChild(g); }
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    var x = Math.min(window.innerWidth - w - 12, e.clientX + 16);
+    var y = e.clientY + 18 + h > window.innerHeight ? e.clientY - h - 14 : e.clientY + 18;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+    tip.classList.add("on");
+  });
+  svg.addEventListener("mouseleave", function () { tip.classList.remove("on"); });
+  svg.addEventListener("click", function (e) {
+    var n = e.target.closest(".node, .ztab, .panel");
+    if (!n) return;
+    var g = n.closest(".step");
+    if (!g || g.classList.contains("future")) return;
+    var s = +g.getAttribute("data-step");
+    if (s !== cur) go(s);
+  });
+
+  // hooks used to export the video frames
+  window.__go = go;
+  window.__seek = function (ms) {
+    document.getAnimations().forEach(function (a) { a.pause(); a.currentTime = ms; });
+  };
+
+  go(0);
+})();
+</script>
+</body>
+</html>

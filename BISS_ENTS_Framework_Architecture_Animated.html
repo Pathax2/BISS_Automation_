@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Framework Architecture Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  @property --c { syntax: '<color>'; inherits: true; initial-value: #16407A; }
+  :root {
+    --bg: #070D1B;
+    --panel: rgba(15, 23, 42, 0.62);
+    --line: rgba(255, 255, 255, 0.09);
+    --ink: #F1F5FB;
+    --muted: #A9B8CF;
+    --c: #16407A;
+    --sw: min(calc(100vw - 32px), calc((100vh - 250px) * 1.7778));
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1100px 620px at 12% -12%, rgba(34, 197, 94, 0.14), transparent 60%),
+      radial-gradient(900px 620px at 100% 112%, rgba(59, 130, 246, 0.16), transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    transition: --c 0.8s ease;
+    overflow-x: hidden;
+  }
+  .app { min-height: 100vh; overflow-x: clip; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 16px; }
+
+  /* ---------- diagram card ---------- */
+  .stage { position: relative; width: var(--sw); }
+  .stage::before {
+    content: ""; position: absolute; inset: -6% -4%; z-index: 0; pointer-events: none;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--c) 45%, transparent), transparent 75%);
+    filter: blur(40px); opacity: 0.55;
+  }
+  .card {
+    position: relative; z-index: 1; border-radius: 18px; overflow: hidden;
+    box-shadow: 0 40px 100px -24px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+  #dia { display: block; width: 100%; height: auto; }
+
+  /* ---------- step states ---------- */
+  #dia .step { transition: opacity 0.7s ease; }
+  #dia .step.future { opacity: 0; pointer-events: none; }
+  #dia .step.past { opacity: 0.26; }
+  #dia .step.past:hover { opacity: 0.62; }
+  #dia .step.current, #dia .step.shown { opacity: 1; }
+
+  /* entry animations: replayed each time a step becomes current */
+  #dia .step.current .ni { animation: rise 0.7s cubic-bezier(.2, .8, .2, 1) var(--d, 0s) both; }
+  #dia .step.current .zone { transform-box: fill-box; transform-origin: center; animation: zin 0.65s ease-out 0.05s both; }
+  #dia .step.current .draw { stroke-dasharray: 1; animation: draw 0.75s ease-out var(--d, 0s) both; }
+  #dia .step.current .drawl { stroke-dasharray: 1; animation: drawl 0.75s ease-out var(--d, 0s) both; }
+  #dia .step.current .fade, #dia .step.current .lbl, #dia .step.current .bul, #dia .step.current .pwbg { animation: fade 0.55s ease-out var(--d, 0.5s) both; }
+  #dia .step.current .bp { transform-box: fill-box; transform-origin: center; animation: pop 0.6s cubic-bezier(.3, 1.7, .5, 1) var(--d, 0.3s) both; }
+  #dia .step.current .zframe { animation: zglow 2.6s ease-in-out 1.1s infinite; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+  @keyframes zin { from { opacity: 0; transform: scale(0.985); } to { opacity: 1; transform: none; } }
+  @keyframes draw { 0% { stroke-dashoffset: 1; marker-end: none; } 88% { marker-end: none; } 89% { marker-end: url(#arr); } 100% { stroke-dashoffset: 0; marker-end: url(#arr); } }
+  @keyframes drawl { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pop { 0% { opacity: 0; transform: scale(0.2); } 100% { opacity: 1; transform: scale(1); } }
+  @keyframes zglow { 0%, 100% { stroke-opacity: 0.55; stroke-width: 1.4; fill-opacity: 0.045; } 50% { stroke-opacity: 1; stroke-width: 2.6; fill-opacity: 0.085; } }
+
+  /* data particles travelling along the numbered flows */
+  #dia .flowline { fill: none; stroke: var(--fc); stroke-width: 3.6; stroke-linecap: round; stroke-dasharray: 0.1 12.9; opacity: 0; pointer-events: none; }
+  #dia .step.current .flowline { animation: march 0.9s linear infinite, fade 0.4s ease-out 0.75s both; }
+  #dia.all .flowline { opacity: 1; animation: march 0.9s linear infinite; }
+  @keyframes march { to { stroke-dashoffset: -13; } }
+
+  #dia .ring { opacity: 0; transform-box: fill-box; transform-origin: center; pointer-events: none; }
+  #dia .step.current .ring { animation: ring 2.2s ease-out 0.9s infinite; }
+  #dia.all .ring { animation: ring 2.8s ease-out calc(var(--n) * 0.4s) infinite; }
+  @keyframes ring { 0% { opacity: 0.75; transform: scale(1); } 100% { opacity: 0; transform: scale(2.7); } }
+
+  #cap.swap { animation: capin 0.6s ease-out both; }
+  @keyframes capin { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- hover effects on every box ---------- */
+  #dia .node, #dia .panel { cursor: pointer; transition: transform 0.32s cubic-bezier(.2, .8, .2, 1), filter 0.32s ease; }
+  #dia .node:hover, #dia .panel:hover { transform: translateY(-4px); filter: drop-shadow(0 14px 16px color-mix(in srgb, var(--c) 38%, transparent)); }
+  #dia .node .ncard { transition: fill 0.25s ease; }
+  #dia .node:hover .ncard { fill: color-mix(in srgb, var(--c) 6%, #FFFFFF); }
+  #dia .node .acc, #dia .panel .acc { transition: stroke-opacity 0.25s ease, stroke-width 0.25s ease; }
+  #dia .node:hover .acc { stroke-opacity: 1; stroke-width: 2.2; }
+  #dia .panel:hover .acc { stroke-opacity: 0.9; }
+  #dia .node .tg { transform-box: fill-box; transform-origin: center; transition: transform 0.4s cubic-bezier(.3, 1.7, .5, 1); }
+  #dia .node:hover .tg { transform: scale(1.14) rotate(-5deg); }
+  #dia .node .nbar { transition: filter 0.25s ease; }
+  #dia .node:hover .nbar { filter: brightness(1.25); }
+  #dia .cyl .lid { transition: fill 0.25s ease; }
+  #dia .cyl:hover .lid { fill: #DE9A48; }
+  #dia .ztab { cursor: pointer; transition: filter 0.25s ease; }
+  #dia .ztab:hover { filter: brightness(1.18) drop-shadow(0 4px 8px color-mix(in srgb, var(--zc) 50%, transparent)); }
+  #dia .pill { transition: transform 0.25s ease, filter 0.25s ease; }
+  #dia .pill rect { transition: fill-opacity 0.25s ease; }
+  #dia .pill:hover { transform: translateY(-2px); }
+  #dia .pill:hover rect { fill-opacity: 0.22; }
+  #dia .pill.hl:hover { filter: drop-shadow(0 0 10px rgba(34, 197, 94, 0.9)); }
+  #dia .pill.hl:hover rect { fill-opacity: 1; }
+
+  /* ---------- presenter bar ---------- */
+  .bar {
+    width: max(var(--sw), min(calc(100vw - 32px), 980px));
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 14px 18px 16px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.6);
+  }
+  .segs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .seg {
+    position: relative; flex: 1; height: 6px; border: 0; padding: 0; border-radius: 99px; cursor: pointer;
+    background: rgba(255, 255, 255, 0.12); transition: height 0.2s ease, background 0.2s ease;
+  }
+  .seg:hover { height: 10px; background: rgba(255, 255, 255, 0.22); }
+  .seg i { position: absolute; inset: 0; width: 0; border-radius: inherit; background: var(--sc); }
+  .seg.done i, .seg.cur i { width: 100%; }
+  .seg.cur i { box-shadow: 0 0 12px var(--sc); }
+  .seg.cur.timing i { width: 0; animation: fill var(--dur) linear forwards; }
+  @keyframes fill { to { width: 100%; } }
+  .seg::after {
+    content: attr(data-label); position: absolute; left: 50%; bottom: 16px; transform: translate(-50%, 4px);
+    white-space: nowrap; font-size: 11.5px; font-weight: 600; color: #fff; background: rgba(2, 6, 23, 0.92);
+    border: 1px solid var(--line); padding: 5px 9px; border-radius: 8px; opacity: 0; pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  .seg:hover::after { opacity: 1; transform: translate(-50%, 0); }
+
+  .row { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; }
+  .chip {
+    width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center;
+    font-size: 20px; font-weight: 800; color: #fff; letter-spacing: -0.5px;
+    background: linear-gradient(145deg, color-mix(in srgb, var(--c) 100%, #fff 18%), color-mix(in srgb, var(--c) 80%, #000 25%));
+    box-shadow: 0 10px 28px -8px var(--c), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  }
+  .kick { font-size: 11.5px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: color-mix(in srgb, var(--c) 45%, #fff); }
+  .ttl { font-size: 21px; font-weight: 800; letter-spacing: -0.3px; margin: 2px 0 4px; }
+  .desc { font-size: 14px; line-height: 1.5; color: var(--muted); max-width: 900px; }
+  .txt.swap { animation: txtin 0.5s ease-out both; }
+  @keyframes txtin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .ctl { display: flex; gap: 8px; align-items: center; }
+  .btn {
+    height: 44px; min-width: 44px; padding: 0 14px; border-radius: 12px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font: 600 13.5px Inter, system-ui, sans-serif; color: #E8EEF8;
+    background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.14);
+    transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  }
+  .btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .btn:hover { transform: translateY(-2px); background: rgba(255, 255, 255, 0.12); border-color: color-mix(in srgb, var(--c) 70%, #fff); box-shadow: 0 10px 26px -8px var(--c); }
+  .btn:active { transform: translateY(0) scale(0.96); }
+  .btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 60%, #fff); outline-offset: 2px; }
+  .btn.primary { background: linear-gradient(145deg, color-mix(in srgb, var(--c) 100%, #fff 12%), color-mix(in srgb, var(--c) 80%, #000 20%)); border-color: transparent; }
+  .btn.primary:hover { box-shadow: 0 12px 30px -6px var(--c); }
+  .btn[disabled] { opacity: 0.35; pointer-events: none; }
+  .hint { font-size: 11.5px; color: #7D8DA6; margin-top: 10px; text-align: right; }
+  .hint kbd { font: 600 10.5px Inter, sans-serif; padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); color: #C9D5E6; }
+
+  /* ---------- tooltip ---------- */
+  .tip {
+    position: fixed; left: 0; top: 0; z-index: 20; pointer-events: none; max-width: 320px;
+    background: rgba(2, 6, 23, 0.92); border: 1px solid var(--line); border-left: 3px solid var(--tc, #22C55E);
+    border-radius: 12px; padding: 10px 13px; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.7);
+    opacity: 0; transform: translateY(6px); transition: opacity 0.16s ease, transform 0.16s ease;
+  }
+  .tip.on { opacity: 1; transform: none; }
+  .tip .z { font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--tc); }
+  .tip .t { font-size: 15px; font-weight: 700; margin: 3px 0 5px; color: #fff; }
+  .tip .l { font-size: 12.5px; color: #B6C4D8; line-height: 1.5; }
+  .tip .go { font-size: 11px; color: #7D8DA6; margin-top: 6px; }
+
+  @media (max-width: 760px) {
+    :root { --sw: calc(100vw - 16px); }
+    .app { padding: 8px; justify-content: flex-start; }
+    .row { grid-template-columns: auto 1fr; }
+    .ctl { grid-column: 1 / -1; justify-content: space-between; }
+    .ctl .lbltxt { display: none; }
+    .hint { display: none; }
+    .ttl { font-size: 18px; }
+    .desc { font-size: 13px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #dia *, .txt, .seg i { animation: none !important; transition: none !important; }
+    #dia .step.current .flowline { opacity: 1; }
+  }
+
+  /* video / frame export: diagram only, edge to edge */
+  body.export { background: #F6F8FB; }
+  .export .app { padding: 0; gap: 0; justify-content: flex-start; }
+  .export .stage { width: 100vw; }
+  .export .stage::before, .export .bar, .export .tip { display: none; }
+  .export .card { border-radius: 0; box-shadow: none; }
+
+  :fullscreen .app { background: var(--bg); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage"><div class="card">
+<svg id="dia" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" role="img" aria-label="BISS and ENTS Playwright test automation framework architecture, animated by step">
+<defs><linearGradient id="hdr" x1="0" x2="1"><stop offset="0" stop-color="#0B1F3A"/><stop offset="1" stop-color="#16407A"/></linearGradient><radialGradient id="hdrglow" cx="0.08" cy="0.2" r="0.5"><stop offset="0" stop-color="#22C55E" stop-opacity="0.22"/><stop offset="1" stop-color="#22C55E" stop-opacity="0"/></radialGradient><linearGradient id="pwg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#15803D" stop-opacity="0.10"/><stop offset="1" stop-color="#15803D" stop-opacity="0.03"/></linearGradient><linearGradient id="rainbow" x1="0" x2="1"><stop offset="0.000" stop-color="#0E7490"/><stop offset="0.143" stop-color="#1D4ED8"/><stop offset="0.286" stop-color="#6D28D9"/><stop offset="0.429" stop-color="#15803D"/><stop offset="0.571" stop-color="#334155"/><stop offset="0.714" stop-color="#B45309"/><stop offset="0.857" stop-color="#92400E"/><stop offset="1.000" stop-color="#BE123C"/></linearGradient><pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#CBD5E1" fill-opacity="0.55"/></pattern><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748B"/></marker><filter id="sh" x="-5%" y="-5%" width="110%" height="120%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#0F172A" flood-opacity="0.08"/></filter><filter id="big" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.18"/></filter></defs>
+<rect width="1920" height="1080" fill="#F6F8FB"/>
+<rect y="84" width="1920" height="996" fill="url(#dots)"/>
+<g class="ghost"><rect x="24" y="112" width="300" height="548" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="40" y="99" width="174.60000000000002" height="26" rx="13" fill="#E2E8F0"/>
+<text x="54" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">A</text>
+<text x="70" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">SOURCE &amp; CI/CD</text>
+<rect x="344" y="112" width="700" height="228" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="360" y="99" width="210.20000000000002" height="26" rx="13" fill="#E2E8F0"/>
+<text x="374" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">B</text>
+<text x="390" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">TEST ORCHESTRATION</text>
+<rect x="344" y="362" width="700" height="298" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="360" y="349" width="290.3" height="26" rx="13" fill="#E2E8F0"/>
+<text x="374" y="366" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">C</text>
+<text x="390" y="366.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">TEST LOGIC &amp; CORE FRAMEWORK</text>
+<rect x="1064" y="112" width="420" height="548" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="1080" y="99" width="201.3" height="26" rx="13" fill="#E2E8F0"/>
+<text x="1094" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">D</text>
+<text x="1110" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">PLAYWRIGHT ENGINE</text>
+<rect x="1504" y="112" width="392" height="548" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="1520" y="99" width="254.70000000000002" height="26" rx="13" fill="#E2E8F0"/>
+<text x="1534" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">E</text>
+<text x="1550" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">APPLICATIONS UNDER TEST</text>
+<rect x="344" y="684" width="700" height="222" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="360" y="671" width="183.5" height="26" rx="13" fill="#E2E8F0"/>
+<text x="374" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">F</text>
+<text x="390" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">TEST DATA LAYER</text>
+<rect x="1064" y="684" width="420" height="222" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="1080" y="671" width="245.8" height="26" rx="13" fill="#E2E8F0"/>
+<text x="1094" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">G</text>
+<text x="1110" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">DATA SOURCES · CENTEST</text>
+<rect x="1504" y="684" width="392" height="222" rx="16" fill="#FFFFFF" fill-opacity="0.5" stroke="#B9C5D6" stroke-width="1.3" stroke-dasharray="6 5"/>
+<rect x="1520" y="671" width="228.0" height="26" rx="13" fill="#E2E8F0"/>
+<text x="1534" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#8796AD" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1550" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#8796AD" text-anchor="start" letter-spacing="0.8">REPORTING &amp; EVIDENCE</text></g>
+<g class="legend"><text x="24" y="1073" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="600" fill="#5B6B82" text-anchor="start" letter-spacing="0">Flow:  1 run  →  2 step binding  →  3 UI actions through Playwright  →  4 HTTPS to the portals  ·  5 runtime data  →  6 JDBC to Oracle  ·  7 evidence to reports</text>
+<text x="1896" y="1073" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="600" fill="#5B6B82" text-anchor="end" letter-spacing="0">DAFM BISS / ENTS · QA Automation</text></g>
+<g class="step future" data-step="1"><g class="zone" style="--zc:#0E7490">
+<rect class="zframe" x="24" y="112" width="300" height="548" rx="16" fill="#0E7490" fill-opacity="0.045" stroke="#0E7490" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="40" y="99" width="174.60000000000002" height="26" rx="13" fill="#0E7490"/>
+<circle cx="54" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="54" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">A</text>
+<text x="70" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">SOURCE &amp; CI/CD</text>
+</g></g>
+<g class="node" data-s="1" data-t="Test Engineer" data-l="Feature files · step code · OR keys" data-z="A · Source &amp; CI/CD" style="--c:#0E7490">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="44" y="142" width="260" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="142" width="260" height="62" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="156.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,162.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></g></g>
+<text x="100" y="170.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Test Engineer</text>
+<text x="100" y="186.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Feature files · step code · OR keys</text>
+</g></g>
+<g class="node" data-s="1" data-t="GitLab" data-l="Feature branches · MR review" data-z="A · Source &amp; CI/CD" style="--c:#0E7490">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="44" y="236" width="260" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="236" width="260" height="62" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="250.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,256.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 7.2v9.6M18 10.2c0 4-5 4-11 6.6"/></g></g>
+<text x="100" y="264.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">GitLab</text>
+<text x="100" y="280.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Feature branches · MR review</text>
+</g></g>
+<g class="node" data-s="1" data-t="Jenkins Multibranch" data-l="OpenShift podTemplate | Playwright container image | Weekday cron · SUITE parameter" data-z="A · Source &amp; CI/CD" style="--c:#0E7490">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="44" y="330" width="260" height="92" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="330" width="260" height="92" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="342" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,348) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></g></g>
+<text x="100" y="355" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Jenkins Multibranch</text>
+<text x="100" y="371" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">OpenShift podTemplate</text>
+<text x="100" y="385" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Playwright container image</text>
+<text x="100" y="399" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Weekday cron · SUITE parameter</text>
+</g></g>
+<g class="node" data-s="1" data-t="run-tests.sh → Maven" data-l="Headless run · Docker-ready" data-z="A · Source &amp; CI/CD" style="--c:#0E7490">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="44" y="454" width="260" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="454" width="260" height="62" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="468.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,474.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M6.5 9l3.5 3-3.5 3M12 15h5"/></g></g>
+<text x="100" y="482.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">run-tests.sh → Maven</text>
+<text x="100" y="498.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Headless run · Docker-ready</text>
+</g></g>
+<g class="node" data-s="1" data-t="OpenShift Secret" data-l="Credentials mounted at run time" data-z="A · Source &amp; CI/CD" style="--c:#0E7490">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="44" y="572" width="260" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="44" y="572" width="260" height="62" rx="10" fill="none" stroke="#0E7490" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="55" y="586.0" width="34" height="34" rx="9" fill="#0E7490"/>
+<g transform="translate(61,592.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l8 3v6c0 5-3.5 8.7-8 10-4.5-1.3-8-5-8-10v-6z"/><path d="M8.5 12l2.4 2.4L15.5 9.8"/></g></g>
+<text x="100" y="600.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">OpenShift Secret</text>
+<text x="100" y="616.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Credentials mounted at run time</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M174,204 L174,234" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="lbl" style="--d:0.70s"><text x="182" y="223" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="600" fill="#5B6B82" text-anchor="start" letter-spacing="0">push / MR</text></g>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M174,298 L174,328" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="lbl" style="--d:0.70s"><text x="182" y="317" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="600" fill="#5B6B82" text-anchor="start" letter-spacing="0">branch build</text></g>
+<path class="arr draw" pathLength="1" style="--d:0.90s" d="M174,422 L174,452" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr fade" style="--d:0.96s" d="M174,572 L174,518" fill="none" stroke="#64748B" stroke-width="1.7" stroke-dasharray="5 4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="lbl" style="--d:0.70s"><text x="182" y="549" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="600" fill="#5B6B82" text-anchor="start" letter-spacing="0">mounted, never in Git</text></g></g>
+<g class="step future" data-step="2"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M304,485 L334,485 L334,178 L362,178" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="1" style="--fc:#1D4ED8" d="M304,485 L334,485 L334,178 L362,178"/>
+<g class="badge" style="--n:1">
+<circle class="ring" cx="334" cy="330" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="334" cy="330" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="334" y="334" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">1</text></g>
+<g class="lbl" style="--d:0.45s"><text x="350" y="334" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.4">RUN</text></g>
+</g>
+<g class="zone" style="--zc:#1D4ED8">
+<rect class="zframe" x="344" y="112" width="700" height="228" rx="16" fill="#1D4ED8" fill-opacity="0.045" stroke="#1D4ED8" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="360" y="99" width="210.20000000000002" height="26" rx="13" fill="#1D4ED8"/>
+<circle cx="374" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="374" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">B</text>
+<text x="390" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">TEST ORCHESTRATION</text>
+</g></g>
+<g class="node" data-s="2" data-t="TestRunner" data-l="ExecutionControl.xlsx | selects test cases" data-z="B · Test Orchestration" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="364" y="140" width="206" height="76" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="364" y="140" width="206" height="76" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="375" y="152" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(381,158) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5l12 7.5-12 7.5z"/></g></g>
+<text x="420" y="165" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">TestRunner</text>
+<text x="420" y="181" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">ExecutionControl.xlsx</text>
+<text x="420" y="195" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">selects test cases</text>
+</g></g>
+<g class="node" data-s="2" data-t="Hooks" data-l="TestData row · context | retry · soft asserts" data-z="B · Test Orchestration" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="590" y="140" width="206" height="76" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="590" y="140" width="206" height="76" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="601" y="152" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(607,158) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9a4 4 0 1 1-4-4"/><circle cx="12" cy="3" r="0.8"/></g></g>
+<text x="646" y="165" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Hooks</text>
+<text x="646" y="181" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TestData row · context</text>
+<text x="646" y="195" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">retry · soft asserts</text>
+</g></g>
+<g class="node" data-s="2" data-t="Cucumber 7" data-l="Gherkin → step binding | tags · step listener" data-z="B · Test Orchestration" style="--c:#1D4ED8">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="816" y="140" width="206" height="76" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="816" y="140" width="206" height="76" rx="10" fill="none" stroke="#1D4ED8" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="827" y="152" width="34" height="34" rx="9" fill="#1D4ED8"/>
+<g transform="translate(833,158) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19l7-7"/></g></g>
+<text x="872" y="165" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Cucumber 7</text>
+<text x="872" y="181" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Gherkin → step binding</text>
+<text x="872" y="195" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">tags · step listener</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M570,178 L588,178" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M796,178 L814,178" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="lbl" style="--d:0.70s"><text x="364" y="254" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.8" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.5">FEATURE PACKS  ·  declarative Gherkin, one end-to-end scenario per pack</text></g>
+<g class="node" data-s="2" data-t="BISS iNet" data-l="Agent &amp; individual journeys" data-z="B · Test Orchestration" style="--c:#3B82F6">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="364" y="264" width="206" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="364" y="264" width="206" height="58" rx="10" fill="none" stroke="#3B82F6" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="375" y="276.0" width="34" height="34" rx="9" fill="#3B82F6"/>
+<g transform="translate(381,282.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v4h4M9 12h6M9 16h6"/></g></g>
+<text x="420" y="290.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">BISS iNet</text>
+<text x="420" y="306.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Agent &amp; individual journeys</text>
+</g></g>
+<g class="node" data-s="2" data-t="BISS Staff Portal" data-l="Maps · SIM · Payments" data-z="B · Test Orchestration" style="--c:#3B82F6">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="590" y="264" width="206" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="590" y="264" width="206" height="58" rx="10" fill="none" stroke="#3B82F6" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="601" y="276.0" width="34" height="34" rx="9" fill="#3B82F6"/>
+<g transform="translate(607,282.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v4h4M9 12h6M9 16h6"/></g></g>
+<text x="646" y="290.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">BISS Staff Portal</text>
+<text x="646" y="306.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Maps · SIM · Payments</text>
+</g></g>
+<g class="node" data-s="2" data-t="ENTS Transfers" data-l="Agents · individuals · ETF" data-z="B · Test Orchestration" style="--c:#3B82F6">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="816" y="264" width="206" height="58" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="816" y="264" width="206" height="58" rx="10" fill="none" stroke="#3B82F6" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="827" y="276.0" width="34" height="34" rx="9" fill="#3B82F6"/>
+<g transform="translate(833,282.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4 4v15H6z"/><path d="M14 2.5v4h4M9 12h6M9 16h6"/></g></g>
+<text x="872" y="290.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">ENTS Transfers</text>
+<text x="872" y="306.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Agents · individuals · ETF</text>
+</g></g>
+<path class="arr drawl" pathLength="1" style="--d:0.90s" d="M467,264 V258 M693,264 V258 M919,264 V258 M467,258 H919" fill="none" stroke="#94A3B8" stroke-width="1.4"/>
+<path class="arr draw" pathLength="1" style="--d:0.96s" d="M919,258 L919,218" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/></g>
+<g class="step future" data-step="3"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M693,322 L693,390" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="2" style="--fc:#6D28D9" d="M693,322 L693,390"/>
+<g class="badge" style="--n:2">
+<circle class="ring" cx="693" cy="356" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="693" cy="356" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="693" y="360" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">2</text></g>
+<g class="lbl" style="--d:0.45s"><text x="709" y="360" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.4">STEP BINDING</text></g>
+</g>
+<g class="zone" style="--zc:#6D28D9">
+<rect class="zframe" x="344" y="362" width="700" height="298" rx="16" fill="#6D28D9" fill-opacity="0.045" stroke="#6D28D9" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="360" y="349" width="290.3" height="26" rx="13" fill="#6D28D9"/>
+<circle cx="374" cy="362" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="374" y="366" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">C</text>
+<text x="390" y="366.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">TEST LOGIC &amp; CORE FRAMEWORK</text>
+</g></g>
+<g class="node" data-s="3" data-t="BISS Steps" data-l="TC_03 · TC_04–TC_10 | individual &amp; partnership" data-z="C · Test Logic &amp; Core" style="--c:#6D28D9">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="364" y="392" width="206" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="364" y="392" width="206" height="70" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="375" y="410.0" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(381,416.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l-5 6 5 6M16 6l5 6-5 6M14 4l-4 16"/></g></g>
+<text x="420" y="417.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">BISS Steps</text>
+<text x="420" y="433.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TC_03 · TC_04–TC_10</text>
+<text x="420" y="447.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">individual &amp; partnership</text>
+</g></g>
+<g class="node" data-s="3" data-t="StaffSteps" data-l="one library, all staff packs | DB-resolved herds" data-z="C · Test Logic &amp; Core" style="--c:#6D28D9">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="590" y="392" width="206" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="590" y="392" width="206" height="70" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="601" y="410.0" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(607,416.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l-5 6 5 6M16 6l5 6-5 6M14 4l-4 16"/></g></g>
+<text x="646" y="417.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">StaffSteps</text>
+<text x="646" y="433.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">one library, all staff packs</text>
+<text x="646" y="447.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">DB-resolved herds</text>
+</g></g>
+<g class="node" data-s="3" data-t="ENTS Steps" data-l="TC_01–TC_25_ENTS | EntsSession: login · search" data-z="C · Test Logic &amp; Core" style="--c:#6D28D9">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="816" y="392" width="206" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="816" y="392" width="206" height="70" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="827" y="410.0" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(833,416.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l-5 6 5 6M16 6l5 6-5 6M14 4l-4 16"/></g></g>
+<text x="872" y="417.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">ENTS Steps</text>
+<text x="872" y="433.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TC_01–TC_25_ENTS</text>
+<text x="872" y="447.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">EntsSession: login · search</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M467,462 L467,490" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M693,462 L693,490" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.90s" d="M919,462 L919,490" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<g class="node" data-s="3" data-t="iAction Engine" data-l="CLICK · TEXTBOX · LIST · CHECKBOX · VERIFYTEXT · WAITVISIBLE · WAITINVISIBLE · UPLOADFILE · GETTEXT | one entry point: waits, highlighting, step logging, TD: value resolution" data-z="C · Test Logic &amp; Core" style="--c:#6D28D9">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="364" y="492" width="658" height="64" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="364" y="492" width="658" height="64" rx="10" fill="none" stroke="#6D28D9" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="375" y="507.0" width="34" height="34" rx="9" fill="#6D28D9"/>
+<g transform="translate(381,513.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z"/></g></g>
+<text x="420" y="514.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">iAction Engine</text>
+<text x="420" y="530.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">CLICK · TEXTBOX · LIST · CHECKBOX · VERIFYTEXT · WAITVISIBLE · WAITINVISIBLE · UPLOADFILE · GETTEXT</text>
+<text x="420" y="544.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">one entry point: waits, highlighting, step logging, TD: value resolution</text>
+</g></g>
+<g class="node" data-s="3" data-t="Object Repository" data-l="XPaths · {TOKEN} keys" data-z="C · Test Logic &amp; Core" style="--c:#8B5CF6">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="364" y="584" width="154" height="60" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="364" y="584" width="154" height="60" rx="10" fill="none" stroke="#8B5CF6" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="372" y="594" width="4" height="40" rx="2" fill="#8B5CF6"/>
+<text x="384" y="611.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Object Repository</text>
+<text x="384" y="627.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">XPaths · {TOKEN} keys</text>
+</g></g>
+<g class="node" data-s="3" data-t="ConfigManager" data-l="properties · profiles" data-z="C · Test Logic &amp; Core" style="--c:#8B5CF6">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="532" y="584" width="154" height="60" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="532" y="584" width="154" height="60" rx="10" fill="none" stroke="#8B5CF6" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="540" y="594" width="4" height="40" rx="2" fill="#8B5CF6"/>
+<text x="552" y="611.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">ConfigManager</text>
+<text x="552" y="627.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">properties · profiles</text>
+</g></g>
+<g class="node" data-s="3" data-t="LoginScreens" data-l="PIN · TOTP · OTP" data-z="C · Test Logic &amp; Core" style="--c:#8B5CF6">
+<g class="ni" style="--d:0.87s" filter="url(#sh)">
+<rect class="ncard" x="700" y="584" width="154" height="60" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="700" y="584" width="154" height="60" rx="10" fill="none" stroke="#8B5CF6" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="708" y="594" width="4" height="40" rx="2" fill="#8B5CF6"/>
+<text x="720" y="611.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">LoginScreens</text>
+<text x="720" y="627.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">PIN · TOTP · OTP</text>
+</g></g>
+<g class="node" data-s="3" data-t="UiHelpers" data-l="probes · tabs · widgets" data-z="C · Test Logic &amp; Core" style="--c:#8B5CF6">
+<g class="ni" style="--d:0.95s" filter="url(#sh)">
+<rect class="ncard" x="868" y="584" width="154" height="60" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="868" y="584" width="154" height="60" rx="10" fill="none" stroke="#8B5CF6" stroke-opacity="0.18" stroke-width="1"/>
+<rect class="nbar" x="876" y="594" width="4" height="40" rx="2" fill="#8B5CF6"/>
+<text x="888" y="611.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">UiHelpers</text>
+<text x="888" y="627.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">probes · tabs · widgets</text>
+</g></g>
+<path class="arr drawl" pathLength="1" style="--d:0.96s" d="M441,556 V582 M609,556 V582 M777,556 V582 M945,556 V582" fill="none" stroke="#94A3B8" stroke-width="1.4"/></g>
+<g class="step future" data-step="4"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1022,524 L1043,524 L1043,177 L1082,177" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="3" style="--fc:#15803D" d="M1022,524 L1043,524 L1043,177 L1082,177"/>
+<g class="badge" style="--n:3">
+<circle class="ring" cx="1043" cy="352" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1043" cy="352" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1043" y="356" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">3</text></g>
+<g class="lbl" style="--d:0.45s"><text x="1027" y="356" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="end" letter-spacing="0.4">UI ACTIONS</text></g>
+</g>
+<rect class="pwbg" x="1064" y="112" width="420" height="548" rx="16" fill="url(#pwg)"/>
+<g class="zone" style="--zc:#15803D">
+<rect class="zframe" x="1064" y="112" width="420" height="548" rx="16" fill="#15803D" fill-opacity="0.045" stroke="#15803D" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="1080" y="99" width="201.3" height="26" rx="13" fill="#15803D"/>
+<circle cx="1094" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="1094" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">D</text>
+<text x="1110" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">PLAYWRIGHT ENGINE</text>
+</g></g>
+<g class="node" data-s="4" data-t="Playwright for Java" data-l="Locator API · auto-waiting · actionability checks | the engine behind every iAction call" data-z="D · Playwright Engine" style="--c:#15803D">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="1084" y="140" width="380" height="74" rx="10" fill="#F3FBF5" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1084" y="140" width="380" height="74" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1095" y="152" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1101,158) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g></g>
+<text x="1140" y="165" font-family="Inter, DejaVu Sans, sans-serif" font-size="14.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Playwright for Java</text>
+<text x="1140" y="181" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Locator API · auto-waiting · actionability checks</text>
+<text x="1140" y="195" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">the engine behind every iAction call</text>
+</g></g>
+<g class="node" data-s="4" data-t="PlaywrightFactory" data-l="ThreadLocal Browser → Context → Page · page listeners" data-z="D · Playwright Engine" style="--c:#15803D">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="1084" y="240" width="380" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1084" y="240" width="380" height="62" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1095" y="254.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1101,260.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></g></g>
+<text x="1140" y="268.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">PlaywrightFactory</text>
+<text x="1140" y="284.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">ThreadLocal Browser → Context → Page · page listeners</text>
+</g></g>
+<g class="node" data-s="4" data-t="Chromium" data-l="Headless in the container · Chrome channel locally" data-z="D · Playwright Engine" style="--c:#15803D">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="1084" y="328" width="380" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1084" y="328" width="380" height="62" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1095" y="342.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1101,348.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M2.5 8.5h19"/><circle cx="5.5" cy="6.3" r="0.6"/><circle cx="7.8" cy="6.3" r="0.6"/></g></g>
+<text x="1140" y="356.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Chromium</text>
+<text x="1140" y="372.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Headless in the container · Chrome channel locally</text>
+</g></g>
+<g class="node" data-s="4" data-t="Tracing" data-l="trace.zip + screenshots | failed tests only" data-z="D · Playwright Engine" style="--c:#16A34A">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="1084" y="416" width="184" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1084" y="416" width="184" height="70" rx="10" fill="none" stroke="#16A34A" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1095" y="434.0" width="34" height="34" rx="9" fill="#16A34A"/>
+<g transform="translate(1101,440.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h4l2-2.5h6L17 8h4v11H3z"/><circle cx="12" cy="13.5" r="3.5"/></g></g>
+<text x="1140" y="441.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Tracing</text>
+<text x="1140" y="457.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">trace.zip + screenshots</text>
+<text x="1140" y="471.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">failed tests only</text>
+</g></g>
+<g class="node" data-s="4" data-t="Network Waits" data-l="waitForResponse | route settle checks" data-z="D · Playwright Engine" style="--c:#16A34A">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="1280" y="416" width="184" height="70" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1280" y="416" width="184" height="70" rx="10" fill="none" stroke="#16A34A" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1291" y="434.0" width="34" height="34" rx="9" fill="#16A34A"/>
+<g transform="translate(1297,440.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></g></g>
+<text x="1336" y="441.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Network Waits</text>
+<text x="1336" y="457.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">waitForResponse</text>
+<text x="1336" y="471.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">route settle checks</text>
+</g></g>
+<g class="node" data-s="4" data-t="Angular Material Handling" data-l="mat-select · mat-paginator · dialogs · MDC spinners" data-z="D · Playwright Engine" style="--c:#15803D">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="1084" y="512" width="380" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1084" y="512" width="380" height="62" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1095" y="526.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1101,532.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></g></g>
+<text x="1140" y="540.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Angular Material Handling</text>
+<text x="1140" y="556.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">mat-select · mat-paginator · dialogs · MDC spinners</text>
+</g></g>
+<g class="node" data-s="4" data-t="Page Listeners" data-l="console messages · HTTP 4xx / 5xx logged per step" data-z="D · Playwright Engine" style="--c:#15803D">
+<g class="ni" style="--d:0.87s" filter="url(#sh)">
+<rect class="ncard" x="1084" y="590" width="380" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1084" y="590" width="380" height="54" rx="10" fill="none" stroke="#15803D" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1095" y="600.0" width="34" height="34" rx="9" fill="#15803D"/>
+<g transform="translate(1101,606.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></g></g>
+<text x="1140" y="614.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Page Listeners</text>
+<text x="1140" y="630.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">console messages · HTTP 4xx / 5xx logged per step</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M1274,214 L1274,238" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M1274,302 L1274,326" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr drawl" pathLength="1" style="--d:0.90s" d="M1176,390 V414 M1372,390 V414" fill="none" stroke="#94A3B8" stroke-width="1.4"/></g>
+<g class="step future" data-step="5"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1464,359 L1516,359" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="4" style="--fc:#334155" d="M1464,359 L1516,359"/>
+<g class="badge" style="--n:4">
+<circle class="ring" cx="1491" cy="359" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1491" cy="359" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1491" y="363" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">4</text></g>
+</g>
+<g class="lbl" style="--d:0.45s"><text x="1491" y="384" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="middle" letter-spacing="0.4">HTTPS</text></g>
+<g class="zone" style="--zc:#334155">
+<rect class="zframe" x="1504" y="112" width="392" height="548" rx="16" fill="#334155" fill-opacity="0.045" stroke="#334155" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="1520" y="99" width="254.70000000000002" height="26" rx="13" fill="#334155"/>
+<circle cx="1534" cy="112" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="1534" y="116" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">E</text>
+<text x="1550" y="116.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">APPLICATIONS UNDER TEST</text>
+</g></g>
+<g class="node" data-s="5" data-t="Keycloak SSO" data-l="Agent · individual · staff · ETF partner logins" data-z="E · Applications Under Test" style="--c:#334155">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="140" width="342" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="140" width="342" height="62" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="154.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,160.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></g></g>
+<text x="1590" y="168.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Keycloak SSO</text>
+<text x="1590" y="184.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Agent · individual · staff · ETF partner logins</text>
+</g></g>
+<g class="node" data-s="5" data-t="BISS iNet Portal" data-l="Applications · land details · schemes · payments" data-z="E · Applications Under Test" style="--c:#334155">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="228" width="342" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="228" width="342" height="62" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="242.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,248.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3c-2.5 2.5-2.5 15.5 0 18M12 3c2.5 2.5 2.5 15.5 0 18"/></g></g>
+<text x="1590" y="256.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">BISS iNet Portal</text>
+<text x="1590" y="272.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Applications · land details · schemes · payments</text>
+</g></g>
+<g class="node" data-s="5" data-t="BISS Staff Portal" data-l="Amendments · admin checks · maps · SIM" data-z="E · Applications Under Test" style="--c:#334155">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="316" width="342" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="316" width="342" height="62" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="330.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,336.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3c-2.5 2.5-2.5 15.5 0 18M12 3c2.5 2.5 2.5 15.5 0 18"/></g></g>
+<text x="1590" y="344.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">BISS Staff Portal</text>
+<text x="1590" y="360.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Amendments · admin checks · maps · SIM</text>
+</g></g>
+<g class="node" data-s="5" data-t="ENTS Portal" data-l="Transfers · ETF partners · NR / CISYF · appeals" data-z="E · Applications Under Test" style="--c:#334155">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="404" width="342" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="404" width="342" height="62" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="418.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,424.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3c-2.5 2.5-2.5 15.5 0 18M12 3c2.5 2.5 2.5 15.5 0 18"/></g></g>
+<text x="1590" y="432.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">ENTS Portal</text>
+<text x="1590" y="448.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Transfers · ETF partners · NR / CISYF · appeals</text>
+</g></g>
+<g class="node" data-s="5" data-t="Angular SPA front ends" data-l="Material components · async routing" data-z="E · Applications Under Test" style="--c:#334155">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="492" width="342" height="62" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="492" width="342" height="62" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="506.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,512.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></g></g>
+<text x="1590" y="520.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Angular SPA front ends</text>
+<text x="1590" y="536.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">Material components · async routing</text>
+</g></g>
+<g class="node" data-s="5" data-t="SIT / CENTEST Environments" data-l="URLs from the TestData Config sheet" data-z="E · Applications Under Test" style="--c:#334155">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="580" width="342" height="54" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="580" width="342" height="54" rx="10" fill="none" stroke="#334155" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="590.0" width="34" height="34" rx="9" fill="#334155"/>
+<g transform="translate(1551,596.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></g></g>
+<text x="1590" y="604.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">SIT / CENTEST Environments</text>
+<text x="1590" y="620.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">URLs from the TestData Config sheet</text>
+</g></g>
+<path class="arr drawl" pathLength="1" style="--d:0.78s" d="M1518,171 V607" fill="none" stroke="#94A3B8" stroke-width="1.4"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M1518,171 L1532,171" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.90s" d="M1518,259 L1532,259" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.96s" d="M1518,347 L1532,347" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.02s" d="M1518,435 L1532,435" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.08s" d="M1518,523 L1532,523" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:1.14s" d="M1518,607 L1532,607" fill="none" stroke="#64748B" stroke-width="1.4" marker-end="url(#arr)" stroke-linejoin="round"/></g>
+<g class="step future" data-step="6"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M334,614 L334,840 L362,840" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="5" style="--fc:#B45309" d="M364,614 L334,614 L334,840 L362,840"/>
+<path class="arr drawl" pathLength="1" style="--d:0s" d="M364,614 H334" stroke="#64748B" stroke-width="1.7"/>
+<g class="badge" style="--n:5">
+<circle class="ring" cx="334" cy="728" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="334" cy="728" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="334" y="732" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">5</text></g>
+<g class="lbl" style="--d:0.45s"><text x="318" y="732" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="end" letter-spacing="0.4">RUNTIME DATA</text></g>
+</g>
+<g class="zone" style="--zc:#B45309">
+<rect class="zframe" x="344" y="684" width="700" height="222" rx="16" fill="#B45309" fill-opacity="0.045" stroke="#B45309" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="360" y="671" width="183.5" height="26" rx="13" fill="#B45309"/>
+<circle cx="374" cy="684" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="374" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">F</text>
+<text x="390" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">TEST DATA LAYER</text>
+</g></g>
+<g class="node" data-s="6" data-t="DBRouter" data-l="labelled SQL · 3 schemas | thread-safe query()" data-z="F · Test Data Layer" style="--c:#B45309">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="364" y="712" width="206" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="364" y="712" width="206" height="72" rx="10" fill="none" stroke="#B45309" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="375" y="731.0" width="34" height="34" rx="9" fill="#B45309"/>
+<g transform="translate(381,737.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g></g>
+<text x="420" y="738.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">DBRouter</text>
+<text x="420" y="754.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">labelled SQL · 3 schemas</text>
+<text x="420" y="768.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">thread-safe query()</text>
+</g></g>
+<g class="node" data-s="6" data-t="DataHarvester" data-l="TC_00_DATA | parallel pool harvest" data-z="F · Test Data Layer" style="--c:#B45309">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="590" y="712" width="206" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="590" y="712" width="206" height="72" rx="10" fill="none" stroke="#B45309" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="601" y="731.0" width="34" height="34" rx="9" fill="#B45309"/>
+<g transform="translate(607,737.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16M7 20V10M12 20V5M17 20v-8"/></g></g>
+<text x="646" y="738.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">DataHarvester</text>
+<text x="646" y="754.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TC_00_DATA</text>
+<text x="646" y="768.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">parallel pool harvest</text>
+</g></g>
+<g class="node" data-s="6" data-t="Test Data Vault" data-l="AVAILABLE → RESERVED | → USED / BAD" data-z="F · Test Data Layer" style="--c:#B45309">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="816" y="712" width="206" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="816" y="712" width="206" height="72" rx="10" fill="none" stroke="#B45309" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="827" y="731.0" width="34" height="34" rx="9" fill="#B45309"/>
+<g transform="translate(833,737.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="18" height="17" rx="2"/><circle cx="12" cy="12" r="4"/><path d="M12 8v1.5M12 14.5V16M8 12h1.5M14.5 12H16"/></g></g>
+<text x="872" y="738.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Test Data Vault</text>
+<text x="872" y="754.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">AVAILABLE → RESERVED</text>
+<text x="872" y="768.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">→ USED / BAD</text>
+</g></g>
+<g class="node" data-s="6" data-t="EntsTestData" data-l="transfer pairs | {transferee.herd} tokens" data-z="F · Test Data Layer" style="--c:#D97706">
+<g class="ni" style="--d:0.65s" filter="url(#sh)">
+<rect class="ncard" x="364" y="804" width="206" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="364" y="804" width="206" height="72" rx="10" fill="none" stroke="#D97706" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="375" y="823.0" width="34" height="34" rx="9" fill="#D97706"/>
+<g transform="translate(381,829.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="8" r="3"/><circle cx="17" cy="16" r="3"/><path d="M9.5 10l5 4"/></g></g>
+<text x="420" y="830.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">EntsTestData</text>
+<text x="420" y="846.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">transfer pairs</text>
+<text x="420" y="860.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">{transferee.herd} tokens</text>
+</g></g>
+<g class="node" data-s="6" data-t="StaffTestData" data-l="lazy pools per | scheme year" data-z="F · Test Data Layer" style="--c:#D97706">
+<g class="ni" style="--d:0.72s" filter="url(#sh)">
+<rect class="ncard" x="590" y="804" width="206" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="590" y="804" width="206" height="72" rx="10" fill="none" stroke="#D97706" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="601" y="823.0" width="34" height="34" rx="9" fill="#D97706"/>
+<g transform="translate(607,829.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="8" r="3"/><circle cx="17" cy="16" r="3"/><path d="M9.5 10l5 4"/></g></g>
+<text x="646" y="830.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">StaffTestData</text>
+<text x="646" y="846.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">lazy pools per</text>
+<text x="646" y="860.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">scheme year</text>
+</g></g>
+<g class="node" data-s="6" data-t="TestData.xlsx" data-l="TD: values per test case | never committed" data-z="F · Test Data Layer" style="--c:#D97706">
+<g class="ni" style="--d:0.79s" filter="url(#sh)">
+<rect class="ncard" x="816" y="804" width="206" height="72" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="816" y="804" width="206" height="72" rx="10" fill="none" stroke="#D97706" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="827" y="823.0" width="34" height="34" rx="9" fill="#D97706"/>
+<g transform="translate(833,829.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14.5h18M9 4v16"/></g></g>
+<text x="872" y="830.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">TestData.xlsx</text>
+<text x="872" y="846.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">TD: values per test case</text>
+<text x="872" y="860.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">never committed</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M570,748 L588,748" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M796,748 L814,748" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/></g>
+<g class="step future" data-step="7"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M467,712 L467,702 L1050,702 L1050,765 L1096,765" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="6" style="--fc:#92400E" d="M467,712 L467,702 L1050,702 L1050,765 L1096,765"/>
+<g class="badge" style="--n:6">
+<circle class="ring" cx="1050" cy="735" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1050" cy="735" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1050" y="739" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">6</text></g>
+<g class="lbl" style="--d:0.45s"><text x="1066" y="739" font-family="Inter, DejaVu Sans, sans-serif" font-size="10" font-weight="700" fill="#5B6B82" text-anchor="start" letter-spacing="0.4">JDBC</text></g>
+</g>
+<g class="zone" style="--zc:#92400E">
+<rect class="zframe" x="1064" y="684" width="420" height="222" rx="16" fill="#92400E" fill-opacity="0.045" stroke="#92400E" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="1080" y="671" width="245.8" height="26" rx="13" fill="#92400E"/>
+<circle cx="1094" cy="684" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="1094" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">G</text>
+<text x="1110" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">DATA SOURCES · CENTEST</text>
+</g></g>
+<g class="node cyl" data-s="7" data-t="BISS_DATA" data-l="applications | Oracle schema on CENTEST" data-z="G · Data Sources" style="--c:#92400E"><g class="ni" style="--d:0.42s" filter="url(#sh)">
+<path d="M1098.0,737 L1098.0,793 A52.0,9 0 0 0 1202.0,793 L1202.0,737" fill="#C27A2C" />
+<ellipse class="lid" cx="1150" cy="737" rx="52.0" ry="9" fill="#B8742A"/>
+<path d="M1098.0,761.3 A52.0,9 0 0 0 1202.0,761.3" fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="1.2"/>
+<g transform="translate(1137,766.48) scale(1.0833333333333333)" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g>
+<text x="1150" y="822" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="middle" letter-spacing="0">BISS_DATA</text>
+<text x="1150" y="838" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="400" fill="#5B6B82" text-anchor="middle" letter-spacing="0">applications</text>
+</g></g>
+<g class="node cyl" data-s="7" data-t="BISS_INET" data-l="agent logins | Oracle schema on CENTEST" data-z="G · Data Sources" style="--c:#92400E"><g class="ni" style="--d:0.52s" filter="url(#sh)">
+<path d="M1222.0,737 L1222.0,793 A52.0,9 0 0 0 1326.0,793 L1326.0,737" fill="#C27A2C" />
+<ellipse class="lid" cx="1274" cy="737" rx="52.0" ry="9" fill="#B8742A"/>
+<path d="M1222.0,761.3 A52.0,9 0 0 0 1326.0,761.3" fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="1.2"/>
+<g transform="translate(1261,766.48) scale(1.0833333333333333)" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g>
+<text x="1274" y="822" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="middle" letter-spacing="0">BISS_INET</text>
+<text x="1274" y="838" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="400" fill="#5B6B82" text-anchor="middle" letter-spacing="0">agent logins</text>
+</g></g>
+<g class="node cyl" data-s="7" data-t="ENTS_DATA" data-l="entitlements | Oracle schema on CENTEST" data-z="G · Data Sources" style="--c:#92400E"><g class="ni" style="--d:0.62s" filter="url(#sh)">
+<path d="M1346.0,737 L1346.0,793 A52.0,9 0 0 0 1450.0,793 L1450.0,737" fill="#C27A2C" />
+<ellipse class="lid" cx="1398" cy="737" rx="52.0" ry="9" fill="#B8742A"/>
+<path d="M1346.0,761.3 A52.0,9 0 0 0 1450.0,761.3" fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="1.2"/>
+<g transform="translate(1385,766.48) scale(1.0833333333333333)" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g>
+<text x="1398" y="822" font-family="DejaVu Sans Mono, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#0F172A" text-anchor="middle" letter-spacing="0">ENTS_DATA</text>
+<text x="1398" y="838" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="400" fill="#5B6B82" text-anchor="middle" letter-spacing="0">entitlements</text>
+</g></g>
+<g class="lbl" style="--d:0.80s"><text x="1274" y="886" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.5" font-weight="600" fill="#5B6B82" text-anchor="middle" letter-spacing="0">Production copy  ·  refreshed weekly  ·  read-only queries</text></g></g>
+<g class="step future" data-step="8"><path class="arr draw" pathLength="1" style="--d:0.00s" d="M1464,617 L1494,617 L1494,738 L1532,738" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="flowline" data-flow="7" style="--fc:#BE123C" d="M1464,617 L1494,617 L1494,738 L1532,738"/>
+<g class="badge" style="--n:7">
+<circle class="ring" cx="1494" cy="676" r="10.5" fill="none" stroke="#0B1F3A" stroke-width="2"/>
+<g class="bp" style="--d:0.30s"><circle cx="1494" cy="676" r="10.5" fill="#0B1F3A" stroke="#fff" stroke-width="2"/>
+<text x="1494" y="680" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">7</text></g>
+</g>
+<g class="lbl" style="--d:0.45s"><text x="1484" y="702" font-family="Inter, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="#5B6B82" text-anchor="end" letter-spacing="0.4">EVIDENCE</text></g>
+<g class="zone" style="--zc:#BE123C">
+<rect class="zframe" x="1504" y="684" width="392" height="222" rx="16" fill="#BE123C" fill-opacity="0.045" stroke="#BE123C" stroke-opacity="0.55" stroke-width="1.4" stroke-dasharray="6 5"/>
+<g class="ztab"><rect x="1520" y="671" width="228.0" height="26" rx="13" fill="#BE123C"/>
+<circle cx="1534" cy="684" r="9" fill="#fff" fill-opacity="0.25"/>
+<text x="1534" y="688" font-family="Inter, DejaVu Sans, sans-serif" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1550" y="688.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#fff" text-anchor="start" letter-spacing="0.8">REPORTING &amp; EVIDENCE</text>
+</g></g>
+<g class="node" data-s="8" data-t="ExecutionMetrics" data-l="steps · timings · DB query times · herds used" data-z="H · Reporting &amp; Evidence" style="--c:#BE123C">
+<g class="ni" style="--d:0.42s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="712" width="342" height="52" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="712" width="342" height="52" rx="10" fill="none" stroke="#BE123C" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="721.0" width="34" height="34" rx="9" fill="#BE123C"/>
+<g transform="translate(1551,727.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/></g></g>
+<text x="1590" y="735.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">ExecutionMetrics</text>
+<text x="1590" y="751.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">steps · timings · DB query times · herds used</text>
+</g></g>
+<g class="node" data-s="8" data-t="DashboardReport" data-l="team HTML · stakeholder PDF with herds masked" data-z="H · Reporting &amp; Evidence" style="--c:#BE123C">
+<g class="ni" style="--d:0.49s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="780" width="342" height="52" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="780" width="342" height="52" rx="10" fill="none" stroke="#BE123C" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="789.0" width="34" height="34" rx="9" fill="#BE123C"/>
+<g transform="translate(1551,795.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="10" rx="1.5"/><rect x="13" y="3" width="8" height="6" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="15" width="8" height="6" rx="1.5"/></g></g>
+<text x="1590" y="803.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">DashboardReport</text>
+<text x="1590" y="819.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">team HTML · stakeholder PDF with herds masked</text>
+</g></g>
+<g class="node" data-s="8" data-t="Jenkins “Test Dashboard”" data-l="published per build · JUnit trend" data-z="H · Reporting &amp; Evidence" style="--c:#BE123C">
+<g class="ni" style="--d:0.57s" filter="url(#sh)">
+<rect class="ncard" x="1534" y="848" width="342" height="48" rx="10" fill="#FFFFFF" stroke="#D5DCE6" stroke-width="1"/>
+<rect class="acc" x="1534" y="848" width="342" height="48" rx="10" fill="none" stroke="#BE123C" stroke-opacity="0.18" stroke-width="1"/>
+<g class="tg"><rect class="tile" x="1545" y="855.0" width="34" height="34" rx="9" fill="#BE123C"/>
+<g transform="translate(1551,861.0) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.3l2.7 2.7L16 9.5"/></g></g>
+<text x="1590" y="869.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.8" font-weight="700" fill="#0F172A" text-anchor="start" letter-spacing="0">Jenkins “Test Dashboard”</text>
+<text x="1590" y="885.0" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.8" font-weight="400" fill="#5B6B82" text-anchor="start" letter-spacing="0">published per build · JUnit trend</text>
+</g></g>
+<path class="arr draw" pathLength="1" style="--d:0.78s" d="M1705,764 L1705,778" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/>
+<path class="arr draw" pathLength="1" style="--d:0.84s" d="M1705,832 L1705,846" fill="none" stroke="#64748B" stroke-width="1.7" marker-end="url(#arr)" stroke-linejoin="round"/></g>
+<g class="step future" data-step="9"><g class="panel" style="--c:#B42318"><g class="ni" style="--d:0.10s">
+<rect class="ncard" x="24" y="926" width="934" height="130" rx="14" fill="#FFFFFF" stroke="#D5DCE6"/>
+<rect class="acc" x="24" y="926" width="934" height="130" rx="14" fill="none" stroke="#B42318" stroke-opacity="0" stroke-width="1.6"/>
+<rect x="24" y="926" width="934" height="36" rx="14" fill="#B42318"/>
+<rect x="24" y="948" width="934" height="14" fill="#B42318"/>
+<g transform="translate(38,932) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a7 7 0 0 1 12.5-3.5L19 8M20 15a7 7 0 0 1-12.5 3.5L5 16"/><path d="M19 3.5V8h-4.5M5 20.5V16h4.5"/></g>
+<text x="70" y="949.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="start" letter-spacing="0.8">SELF-HEALING &amp; RESILIENCE PATTERNS</text>
+<g class="bul" style="--d:0.45s"><circle cx="44" cy="977" r="3.2" fill="#B42318"/>
+<text x="54" y="981" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Unusable herd skipped, next pool row tried</text></g>
+<g class="bul" style="--d:0.51s"><circle cx="506" cy="977" r="3.2" fill="#B42318"/>
+<text x="516" y="981" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">New pair when a herd has no entitlements</text></g>
+<g class="bul" style="--d:0.57s"><circle cx="44" cy="997" r="3.2" fill="#B42318"/>
+<text x="54" y="1001" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Leased-entitlement type fallback</text></g>
+<g class="bul" style="--d:0.63s"><circle cx="506" cy="997" r="3.2" fill="#B42318"/>
+<text x="516" y="1001" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Protein crop added, parcel restored</text></g>
+<g class="bul" style="--d:0.69s"><circle cx="44" cy="1017" r="3.2" fill="#B42318"/>
+<text x="54" y="1021" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Document-type fallback (individual logins)</text></g>
+<g class="bul" style="--d:0.75s"><circle cx="506" cy="1017" r="3.2" fill="#B42318"/>
+<text x="516" y="1021" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Transfer Out first-row fallback</text></g>
+<g class="bul" style="--d:0.81s"><circle cx="44" cy="1037" r="3.2" fill="#B42318"/>
+<text x="54" y="1041" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Angular route settle before searching</text></g>
+<g class="bul" style="--d:0.87s"><circle cx="506" cy="1037" r="3.2" fill="#B42318"/>
+<text x="516" y="1041" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Optional dialogs confirmed only if shown</text></g>
+</g></g>
+<g class="panel" style="--c:#1E293B"><g class="ni" style="--d:0.28s">
+<rect class="ncard" x="978" y="926" width="918" height="130" rx="14" fill="#FFFFFF" stroke="#D5DCE6"/>
+<rect class="acc" x="978" y="926" width="918" height="130" rx="14" fill="none" stroke="#1E293B" stroke-opacity="0" stroke-width="1.6"/>
+<rect x="978" y="926" width="918" height="36" rx="14" fill="#1E293B"/>
+<rect x="978" y="948" width="918" height="14" fill="#1E293B"/>
+<g transform="translate(992,932) scale(0.9166666666666666)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l8 3v6c0 5-3.5 8.7-8 10-4.5-1.3-8-5-8-10v-6z"/><path d="M8.5 12l2.4 2.4L15.5 9.8"/></g>
+<text x="1024" y="949.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="start" letter-spacing="0.8">GOVERNANCE &amp; SECURITY</text>
+<g class="bul" style="--d:0.63s"><circle cx="998" cy="977" r="3.2" fill="#1E293B"/>
+<text x="1008" y="981" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Merge requests only — every change human-reviewed</text></g>
+<g class="bul" style="--d:0.69s"><circle cx="1450" cy="977" r="3.2" fill="#1E293B"/>
+<text x="1460" y="981" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">No credentials in code, Jenkinsfile or GitLab</text></g>
+<g class="bul" style="--d:0.75s"><circle cx="998" cy="997" r="3.2" fill="#1E293B"/>
+<text x="1008" y="1001" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Farmer data (vault, runtime files) git-ignored</text></g>
+<g class="bul" style="--d:0.81s"><circle cx="1450" cy="997" r="3.2" fill="#1E293B"/>
+<text x="1460" y="1001" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Stakeholder reports mask herds and logins</text></g>
+<g class="bul" style="--d:0.87s"><circle cx="998" cy="1017" r="3.2" fill="#1E293B"/>
+<text x="1008" y="1021" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Fixed-data mode blocks DB access for pre-live</text></g>
+<g class="bul" style="--d:0.93s"><circle cx="1450" cy="1017" r="3.2" fill="#1E293B"/>
+<text x="1460" y="1021" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Layers call downward only: no SQL or XPaths in features</text></g>
+<g class="bul" style="--d:0.99s"><circle cx="998" cy="1037" r="3.2" fill="#1E293B"/>
+<text x="1008" y="1041" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Every timeout and retry is configuration</text></g>
+<g class="bul" style="--d:1.05s"><circle cx="1450" cy="1037" r="3.2" fill="#1E293B"/>
+<text x="1460" y="1041" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.2" font-weight="500" fill="#26364F" text-anchor="start" letter-spacing="0">Traces kept for failed tests only</text></g>
+</g></g></g>
+<g class="step current" data-step="0"><g class="intro"><g class="ni" style="--d:0.15s">
+<rect x="560" y="392" width="800" height="300" rx="22" fill="#FFFFFF" filter="url(#big)"/>
+<rect x="560" y="392" width="800" height="6" rx="3" fill="url(#rainbow)"/>
+<g transform="translate(934.0,426) scale(2.1666666666666665)" fill="none" stroke="#15803D" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g>
+<text x="960.0" y="520" font-family="Inter, DejaVu Sans, sans-serif" font-size="28" font-weight="800" fill="#0F172A" text-anchor="middle" letter-spacing="-0.4">How one test run flows through the framework</text>
+<text x="960.0" y="552" font-family="Inter, DejaVu Sans, sans-serif" font-size="15" font-weight="500" fill="#5B6B82" text-anchor="middle" letter-spacing="0">8 layers  ·  7 numbered flows  ·  Playwright for Java at the core</text>
+<g class="bul" style="--d:0.45s"><rect x="587.0" y="582" width="88" height="58" rx="12" fill="#0E7490" fill-opacity="0.08" stroke="#0E7490" stroke-opacity="0.45"/>
+<circle cx="631.0" cy="602" r="11" fill="#0E7490"/>
+<text x="631.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">A</text>
+<text x="631.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#0E7490" text-anchor="middle" letter-spacing="0">Source &amp; CI/CD</text></g>
+<g class="bul" style="--d:0.52s"><rect x="681.0" y="582" width="88" height="58" rx="12" fill="#1D4ED8" fill-opacity="0.08" stroke="#1D4ED8" stroke-opacity="0.45"/>
+<circle cx="725.0" cy="602" r="11" fill="#1D4ED8"/>
+<text x="725.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">B</text>
+<text x="725.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#1D4ED8" text-anchor="middle" letter-spacing="0">Orchestration</text></g>
+<g class="bul" style="--d:0.59s"><rect x="775.0" y="582" width="88" height="58" rx="12" fill="#6D28D9" fill-opacity="0.08" stroke="#6D28D9" stroke-opacity="0.45"/>
+<circle cx="819.0" cy="602" r="11" fill="#6D28D9"/>
+<text x="819.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">C</text>
+<text x="819.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#6D28D9" text-anchor="middle" letter-spacing="0">Logic &amp; Core</text></g>
+<g class="bul" style="--d:0.66s"><rect x="869.0" y="582" width="88" height="58" rx="12" fill="#15803D" fill-opacity="0.08" stroke="#15803D" stroke-opacity="0.45"/>
+<circle cx="913.0" cy="602" r="11" fill="#15803D"/>
+<text x="913.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">D</text>
+<text x="913.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#15803D" text-anchor="middle" letter-spacing="0">Playwright</text></g>
+<g class="bul" style="--d:0.73s"><rect x="963.0" y="582" width="88" height="58" rx="12" fill="#334155" fill-opacity="0.08" stroke="#334155" stroke-opacity="0.45"/>
+<circle cx="1007.0" cy="602" r="11" fill="#334155"/>
+<text x="1007.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">E</text>
+<text x="1007.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#334155" text-anchor="middle" letter-spacing="0">Applications</text></g>
+<g class="bul" style="--d:0.80s"><rect x="1057.0" y="582" width="88" height="58" rx="12" fill="#B45309" fill-opacity="0.08" stroke="#B45309" stroke-opacity="0.45"/>
+<circle cx="1101.0" cy="602" r="11" fill="#B45309"/>
+<text x="1101.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">F</text>
+<text x="1101.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#B45309" text-anchor="middle" letter-spacing="0">Test Data</text></g>
+<g class="bul" style="--d:0.87s"><rect x="1151.0" y="582" width="88" height="58" rx="12" fill="#92400E" fill-opacity="0.08" stroke="#92400E" stroke-opacity="0.45"/>
+<circle cx="1195.0" cy="602" r="11" fill="#92400E"/>
+<text x="1195.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">G</text>
+<text x="1195.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#92400E" text-anchor="middle" letter-spacing="0">Oracle</text></g>
+<g class="bul" style="--d:0.94s"><rect x="1245.0" y="582" width="88" height="58" rx="12" fill="#BE123C" fill-opacity="0.08" stroke="#BE123C" stroke-opacity="0.45"/>
+<circle cx="1289.0" cy="602" r="11" fill="#BE123C"/>
+<text x="1289.0" y="606" font-family="Inter, DejaVu Sans, sans-serif" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">H</text>
+<text x="1289.0" y="630" font-family="Inter, DejaVu Sans, sans-serif" font-size="10.2" font-weight="700" fill="#BE123C" text-anchor="middle" letter-spacing="0">Reporting</text></g>
+<text x="960.0" y="670" font-family="Inter, DejaVu Sans, sans-serif" font-size="12.5" font-weight="700" fill="#15803D" text-anchor="middle" letter-spacing="1.2">Follow the flow  1 → 7</text>
+</g></g></g>
+<g class="header"><rect width="1920" height="84" fill="url(#hdr)"/>
+<rect width="1920" height="84" fill="url(#hdrglow)"/>
+<g transform="translate(30,22) scale(1.6666666666666667)" fill="none" stroke="#7EE2A8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5S3 15 3 12z"/><path d="M12 8.5c3-1.6 6-1.6 9 0v6c0 3-2 5.5-4.5 5.5-1.6 0-3-1-3.8-2.5"/><path d="M5.5 10h2M14.5 12.5h2M18 12.5h1"/></g>
+<text x="84" y="42" font-family="Inter, DejaVu Sans, sans-serif" font-size="26" font-weight="700" fill="#FFFFFF" text-anchor="start" letter-spacing="-0.3">BISS &amp; ENTS Test Automation Framework</text>
+<text x="84" y="66" font-family="Inter, DejaVu Sans, sans-serif" font-size="13.5" font-weight="500" fill="#BFD0EA" text-anchor="start" letter-spacing="0" id="cap">Solution architecture  ·  Playwright for Java + Cucumber BDD  ·  runtime Oracle test data  ·  Jenkins on OpenShift</text>
+<g class="pill"><rect x="1739.1" y="28" width="152.9" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1815.55" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Jenkins · OpenShift</text></g>
+<g class="pill"><rect x="1635.0" y="28" width="96.1" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1683.05" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Oracle JDBC</text></g>
+<g class="pill"><rect x="1573.5" y="28" width="53.5" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1600.25" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Maven</text></g>
+<g class="pill"><rect x="1497.8" y="28" width="67.69999999999999" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1531.6499999999999" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">JUnit 5</text></g>
+<g class="pill"><rect x="1400.8" y="28" width="89.0" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1445.3" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Cucumber 7</text></g>
+<g class="pill hl"><rect x="1268.3" y="28" width="124.5" height="28" rx="14" fill="#15803D" fill-opacity="1" stroke="#7EE2A8" stroke-opacity="1"/>
+<text x="1330.55" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Playwright 1.61</text></g>
+<g class="pill"><rect x="1192.6" y="28" width="67.69999999999999" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.08" stroke="#FFFFFF" stroke-opacity="0.35"/>
+<text x="1226.4499999999998" y="46.5" font-family="Inter, DejaVu Sans, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF" text-anchor="middle" letter-spacing="0">Java 21</text></g></g>
+</svg>
+  </div></div>
+
+  <div class="bar" role="region" aria-label="Walkthrough controls">
+    <div class="segs" id="segs"></div>
+    <div class="row">
+      <div class="chip" id="chip">01</div>
+      <div class="txt" id="txt">
+        <div class="kick" id="kick"></div>
+        <div class="ttl" id="ttl"></div>
+        <div class="desc" id="desc"></div>
+      </div>
+      <div class="ctl">
+        <button class="btn" id="prev" aria-label="Previous step"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button class="btn primary" id="play" aria-label="Auto-play">
+          <svg viewBox="0 0 24 24" id="playIco"><path d="M7 4.5l12 7.5-12 7.5z"/></svg><span class="lbltxt" id="playTxt">Auto-play</span>
+        </button>
+        <button class="btn" id="next" aria-label="Next step"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+        <button class="btn" id="allBtn" aria-label="Show the complete flow"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span class="lbltxt">Full view</span></button>
+        <button class="btn" id="fs" aria-label="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      </div>
+    </div>
+    <div class="hint"><kbd>←</kbd> <kbd>→</kbd> or <kbd>Space</kbd> to step · <kbd>P</kbd> auto-play · <kbd>F</kbd> full screen · hover any box for details, click it to jump to its layer</div>
+  </div>
+  <div class="tip" id="tip"></div>
+</div>
+
+<script>
+(function () {
+  var STEPS = [{"t": "Overview", "k": "The map", "c": "#16407A", "cap": "Solution architecture  ·  Playwright for Java + Cucumber BDD  ·  runtime Oracle test data  ·  Jenkins on OpenShift", "d": "Eight layers, seven numbered flows. Each step lights up one layer and the flow that reaches it, so you can follow a single test run from commit to dashboard."}, {"t": "Source & CI/CD", "k": "Zone A", "c": "#0E7490", "cap": "Zone A  ·  Code is pushed to a GitLab feature branch and Jenkins builds it in an OpenShift pod", "d": "The engineer writes feature files, step code and Object Repository keys and raises a merge request in GitLab. Jenkins Multibranch builds the branch in an OpenShift pod running the Playwright image. Credentials come from an OpenShift secret at run time, never from Git."}, {"t": "Test Orchestration", "k": "Flow 1  ·  Zone B", "c": "#1D4ED8", "cap": "Flow 1  ·  run-tests.sh starts Maven: TestRunner, Hooks and Cucumber 7 load the feature packs", "d": "run-tests.sh starts Maven. TestRunner reads ExecutionControl.xlsx to choose the test cases, Hooks load the TestData row and handle retries and soft asserts, and Cucumber 7 parses the BISS iNet, Staff and ENTS feature packs."}, {"t": "Test Logic & Core", "k": "Flow 2  ·  Zone C", "c": "#6D28D9", "cap": "Flow 2  ·  Each Gherkin step binds to a step class, and every UI action goes through iAction", "d": "Each Gherkin line binds to a Java step in the BISS, Staff or ENTS step classes. Every UI action goes through one entry point, the iAction engine, which reads XPaths from the Object Repository, resolves TD: values and logs the step."}, {"t": "Playwright Engine", "k": "Flow 3  ·  Zone D", "c": "#15803D", "cap": "Flow 3  ·  iAction drives Playwright for Java: auto-waiting locators on a per-thread Chromium page", "d": "iAction calls Playwright for Java. PlaywrightFactory gives each thread its own Browser, Context and Page on Chromium. Auto-waiting locators, network waits and Angular Material handling keep the tests stable; tracing and page listeners capture what happened."}, {"t": "Applications Under Test", "k": "Flow 4  ·  Zone E", "c": "#334155", "cap": "Flow 4  ·  Chromium signs in through Keycloak and drives the BISS iNet, Staff and ENTS portals", "d": "Chromium reaches the real portals over HTTPS. Keycloak handles agent, individual, staff and ETF partner logins, then the tests drive the BISS iNet, Staff and ENTS Angular apps on SIT or CENTEST."}, {"t": "Test Data Layer", "k": "Flow 5  ·  Zone F", "c": "#B45309", "cap": "Flow 5  ·  Steps ask the data layer for herds and logins at run time, reserved through the Vault", "d": "Steps do not hard-code herds. They ask the data layer at run time: DBRouter runs the labelled query, DataHarvester fills the pools, and the Test Data Vault moves each herd from AVAILABLE to RESERVED to USED or BAD so parallel runs never collide."}, {"t": "Oracle Data Sources", "k": "Flow 6  ·  Zone G", "c": "#92400E", "cap": "Flow 6  ·  DBRouter runs labelled, read-only SQL against three Oracle schemas on CENTEST", "d": "DBRouter connects over JDBC to three Oracle schemas: BISS_DATA, BISS_INET and ENTS_DATA. CENTEST is a weekly-refreshed copy of production, so every query is read-only."}, {"t": "Reporting & Evidence", "k": "Flow 7  ·  Zone H", "c": "#BE123C", "cap": "Flow 7  ·  Timings, traces and results become team and stakeholder dashboards in Jenkins", "d": "Step timings, DB query times and results flow into ExecutionMetrics. DashboardReport builds the team HTML report and a stakeholder PDF with herds masked, published on every Jenkins build."}, {"t": "Resilience & Governance", "k": "Built in", "c": "#B42318", "cap": "Built in  ·  Self-healing patterns keep runs moving; governance keeps farmer data and secrets safe", "d": "Self-healing patterns recover from data and UI surprises without human help. Governance rules keep every change reviewed and keep credentials and farmer data out of Git and out of stakeholder reports."}, {"t": "The Complete Flow", "k": "End to end", "c": "#15803D", "cap": "End to end  ·  Flows 1 → 7, from a commit to a published dashboard", "d": "The whole picture: a commit triggers Jenkins, Cucumber binds the steps, iAction drives Playwright against the portals, runtime data comes from Oracle through the Vault, and the evidence ends up on the dashboard."}];
+  var N = STEPS.length;
+  var DUR = 7000;
+  var svg = document.getElementById("dia");
+  var groups = Array.prototype.slice.call(svg.querySelectorAll(".step"));
+  var cap = document.getElementById("cap");
+  var segs = document.getElementById("segs");
+  var txt = document.getElementById("txt");
+  var cur = -1, timer = null, playing = false;
+
+  if (new URLSearchParams(location.search).has("export")) document.body.classList.add("export");
+
+  STEPS.forEach(function (s, i) {
+    var b = document.createElement("button");
+    b.className = "seg";
+    b.setAttribute("data-label", (i + 1) + ". " + s.t);
+    b.setAttribute("aria-label", "Go to step " + (i + 1) + ": " + s.t);
+    b.style.setProperty("--sc", s.c);
+    b.appendChild(document.createElement("i"));
+    b.addEventListener("click", function () { go(i); });
+    segs.appendChild(b);
+  });
+  var segEls = Array.prototype.slice.call(segs.children);
+
+  function restart(el, cls) {
+    el.classList.remove(cls);
+    void el.getBoundingClientRect();
+    el.classList.add(cls);
+  }
+
+  function setStates(k) {
+    svg.classList.toggle("all", k === N - 1);
+    var target = null;
+    groups.forEach(function (g) {
+      var s = +g.getAttribute("data-step"), st;
+      if (k === N - 1) st = s === 0 ? "future" : "shown";
+      else if (s === 0) st = k === 0 ? "current" : "future";
+      else st = s === k ? "current" : (s < k ? "past" : "future");
+      if (st === "current") target = g;
+      else g.setAttribute("class", "step " + st);
+    });
+    if (target) {
+      target.setAttribute("class", "step");
+      void svg.getBoundingClientRect();
+      target.setAttribute("class", "step current");
+    }
+  }
+
+  function go(k) {
+    k = Math.max(0, Math.min(N - 1, k));
+    var s = STEPS[k];
+    cur = k;
+    setStates(k);
+    cap.textContent = s.cap;
+    restart(cap, "swap");
+    document.body.style.setProperty("--c", s.c);
+    document.getElementById("chip").textContent = (k + 1 < 10 ? "0" : "") + (k + 1);
+    document.getElementById("kick").textContent = "Step " + (k + 1) + " of " + N + "  ·  " + s.k;
+    document.getElementById("ttl").textContent = s.t;
+    document.getElementById("desc").textContent = s.d;
+    restart(txt, "swap");
+    segEls.forEach(function (e, i) {
+      e.classList.toggle("done", i < k);
+      e.classList.toggle("cur", i === k);
+      e.classList.remove("timing");
+    });
+    document.getElementById("prev").disabled = k === 0;
+    document.getElementById("next").disabled = k === N - 1;
+    schedule();
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!playing) return;
+    if (cur >= N - 1) { setPlaying(false); return; }
+    var seg = segEls[cur];
+    seg.style.setProperty("--dur", DUR + "ms");
+    restart(seg, "timing");
+    timer = setTimeout(function () { go(cur + 1); }, DUR);
+  }
+
+  function setPlaying(on) {
+    playing = on;
+    document.getElementById("playTxt").textContent = on ? "Pause" : "Auto-play";
+    document.getElementById("playIco").innerHTML = on ? '<path d="M8 5v14M16 5v14"/>' : '<path d="M7 4.5l12 7.5-12 7.5z"/>';
+    if (on && cur >= N - 1) { go(0); return; }
+    if (!on) { clearTimeout(timer); segEls.forEach(function (e) { e.classList.remove("timing"); }); }
+    else schedule();
+  }
+
+  function fullscreen() {
+    if (!document.fullscreenElement) { (document.documentElement.requestFullscreen || function () {}).call(document.documentElement); }
+    else if (document.exitFullscreen) { document.exitFullscreen(); }
+  }
+
+  document.getElementById("prev").addEventListener("click", function () { go(cur - 1); });
+  document.getElementById("next").addEventListener("click", function () { go(cur + 1); });
+  document.getElementById("play").addEventListener("click", function () { setPlaying(!playing); });
+  document.getElementById("allBtn").addEventListener("click", function () { go(N - 1); });
+  document.getElementById("fs").addEventListener("click", fullscreen);
+
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    var k = e.key;
+    if (k === "ArrowRight" || k === " " || k === "PageDown" || k === "Enter") { e.preventDefault(); go(cur + 1); }
+    else if (k === "ArrowLeft" || k === "PageUp" || k === "Backspace") { e.preventDefault(); go(cur - 1); }
+    else if (k === "Home") { go(0); }
+    else if (k === "End") { go(N - 1); }
+    else if (k === "p" || k === "P") { setPlaying(!playing); }
+    else if (k === "f" || k === "F") { fullscreen(); }
+  });
+
+  // swipe on phones and tablets
+  var tx = null;
+  svg.addEventListener("touchstart", function (e) { tx = e.touches[0].clientX; }, { passive: true });
+  svg.addEventListener("touchend", function (e) {
+    if (tx === null) return;
+    var dx = e.changedTouches[0].clientX - tx; tx = null;
+    if (Math.abs(dx) > 50) go(cur + (dx < 0 ? 1 : -1));
+  });
+
+  // tooltip + click to jump
+  var tip = document.getElementById("tip");
+  svg.addEventListener("mousemove", function (e) {
+    var n = e.target.closest(".node");
+    if (!n || n.closest(".step.future")) { tip.classList.remove("on"); return; }
+    var col = getComputedStyle(n).getPropertyValue("--c").trim();
+    tip.style.setProperty("--tc", col);
+    var lines = (n.getAttribute("data-l") || "").split(" | ").filter(Boolean);
+    tip.innerHTML = "";
+    var z = document.createElement("div"); z.className = "z"; z.textContent = n.getAttribute("data-z"); tip.appendChild(z);
+    var t = document.createElement("div"); t.className = "t"; t.textContent = n.getAttribute("data-t"); tip.appendChild(t);
+    lines.forEach(function (l) { var d = document.createElement("div"); d.className = "l"; d.textContent = l; tip.appendChild(d); });
+    var s = +n.getAttribute("data-s");
+    if (s !== cur) { var g = document.createElement("div"); g.className = "go"; g.textContent = "Click to jump to this layer"; tip.appendChild(g); }
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    var x = Math.min(window.innerWidth - w - 12, e.clientX + 16);
+    var y = e.clientY + 18 + h > window.innerHeight ? e.clientY - h - 14 : e.clientY + 18;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+    tip.classList.add("on");
+  });
+  svg.addEventListener("mouseleave", function () { tip.classList.remove("on"); });
+  svg.addEventListener("click", function (e) {
+    var n = e.target.closest(".node, .ztab, .panel");
+    if (!n) return;
+    var g = n.closest(".step");
+    if (!g || g.classList.contains("future")) return;
+    var s = +g.getAttribute("data-step");
+    if (s !== cur) go(s);
+  });
+
+  // hooks used to export the video frames
+  window.__go = go;
+  window.__seek = function (ms) {
+    document.getAnimations().forEach(function (a) { a.pause(); a.currentTime = ms; });
+  };
+
+  go(0);
+})();
+</script>
+</body>
+</html>
